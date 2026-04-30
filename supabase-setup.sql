@@ -106,7 +106,37 @@ INSERT INTO public.bundles (network, network_key, capacity, description, cost_pr
 ('AirtelTigo', 'airteltigo', '5 GB', 'Sika Kokoo 5GB', 8, 12, true),
 ('AirtelTigo', 'airteltigo', '10 GB', 'No Expiry 10GB', 25, 40, true);
 
--- 8. Create get_customers_summary RPC
+-- 8. Create settings table
+CREATE TABLE IF NOT EXISTS public.settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Settings are readable by everyone." ON public.settings FOR SELECT USING (true);
+
+CREATE POLICY "Admins can manage settings"
+ON public.settings
+FOR ALL
+USING (
+  EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE profiles.id = auth.uid()
+    AND profiles.role = 'admin'
+  )
+);
+
+-- 9. Insert default settings
+INSERT INTO public.settings (key, value)
+VALUES (
+    'general',
+    '{"app_name": "Datapapa", "currency": "GHS", "support_email": "support@datapapa.com", "maintenance_mode": false, "sms_enabled": true, "sms_sender_id": "Datapapa", "sms_template_success": "Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}."}'::jsonb
+)
+ON CONFLICT (key) DO NOTHING;
+
+-- 10. Create get_customers_summary RPC
 CREATE OR REPLACE FUNCTION public.get_customers_summary()
 RETURNS TABLE (
     recipient_phone TEXT,

@@ -5,18 +5,20 @@ import React, { useEffect } from "react";
 import BuyDataForm from "../components/BuyDataForm";
 import { supabase } from "../lib/supabase";
 
-export default function Home() {
-  useEffect(() => {
-    async function testConnection() {
-      const { data, error } = await supabase
-        .from('test_table')
-        .select('*');
-      
-      console.log('TEST TABLE DATA:', data);
-      console.log('TEST TABLE ERROR:', error);
-    }
-    testConnection();
-  }, []);
+interface HomeProps {
+  settings: {
+    app_name: string;
+    currency: string;
+    support_email: string;
+    maintenance_mode: boolean;
+    sms_enabled: boolean;
+    sms_sender_id: string;
+    sms_template_success: string;
+  } | null;
+}
+
+export default function Home({ settings }: HomeProps) {
+  const appName = settings?.app_name || "Datapapa";
 
   const scrollToForm = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -74,7 +76,7 @@ export default function Home() {
       {/* Unified Buy Data Process Section */}
       <section className="py-20 bg-slate-50 border-t border-slate-100 relative -mt-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <BuyDataForm />
+          <BuyDataForm settings={settings} />
         </div>
       </section>
 
@@ -180,11 +182,11 @@ export default function Home() {
             <div className="bg-indigo-600 text-white p-1 rounded-lg">
               <Smartphone size={16} />
             </div>
-            <span className="font-bold text-lg tracking-tight text-white">Datapapa</span>
+            <span className="font-bold text-lg tracking-tight text-white">{appName}</span>
           </div>
           
           <div className="text-slate-500 text-sm">
-            © {new Date().getFullYear()} Datapapa. All rights reserved.
+            © {new Date().getFullYear()} {appName}. All rights reserved.
           </div>
 
           <div className="flex items-center gap-6">

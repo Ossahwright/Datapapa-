@@ -17,14 +17,15 @@ import {
   ChevronRight,
   ShieldCheck,
   PanelLeftClose,
-  PanelLeft
+  PanelLeft,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'transactions' | 'bundles' | 'customers'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'transactions' | 'bundles' | 'customers' | 'settings'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -53,6 +54,22 @@ export default function AdminDashboard() {
   const [customerToDelete, setCustomerToDelete] = useState<any>(null);
   const [viewingCustomerTransactions, setViewingCustomerTransactions] = useState<any>(null);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
+  
+  // App Settings State
+  const [appSettings, setAppSettings] = useState({
+    app_name: 'Datapapa',
+    currency: 'GHS',
+    support_email: 'support@datapapa.com',
+    maintenance_mode: false,
+    sms_enabled: true,
+    sms_sender_id: 'Datapapa',
+    sms_template_success: 'Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}.'
+  });
+  const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSendingTestSMS, setIsSendingTestSMS] = useState(false);
+  const [testSMSResult, setTestSMSResult] = useState<{success: boolean, message: string} | null>(null);
+  const [testPhone, setTestPhone] = useState('');
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
 
@@ -157,8 +174,96 @@ export default function AdminDashboard() {
       fetchBundles();
     } else if (currentView === 'customers') {
       fetchCustomers();
+    } else if (currentView === 'settings') {
+      fetchSettings();
     }
   }, [currentView, searchQuery, currentPage]);
+
+  const fetchSettings = async () => {
+    setIsLoadingSettings(true);
+    try {
+      const { data, error } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'general')
+        .single();
+      
+      if (error) throw error;
+      if (data) {
+        setAppSettings(prev => ({ ...prev, ...data.value }));
+      }
+    } catch (err) {
+      console.error("Fetch settings error:", err);
+    } finally {
+      setIsLoadingSettings(false);
+    }
+  };
+
+  const handleUpdateSettings = async (e: FormEvent) => {
+    e.preventDefault();
+    setIsSavingSettings(true);
+    try {
+      const { error } = await supabase
+        .from('settings')
+        .upsert({ key: 'general', value: appSettings });
+      
+      if (error) throw error;
+      alert("Settings updated successfully!");
+    } catch (err: any) {
+      alert(`Failed to save settings: ${err.message}`);
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleSendTestSMS = async () => {
+    if (!testPhone) {
+      setTestSMSResult({ success: false, message: "Please enter a phone number" });
+      return;
+    }
+
+    // Format phone number for Arkesel (expects 233...)
+    let formattedPhone = testPhone.trim().replace(/\D/g, '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = `233${formattedPhone.slice(1)}`;
+    } else if (formattedPhone.length === 9 && (formattedPhone.startsWith('2') || formattedPhone.startsWith('5'))) {
+      formattedPhone = `233${formattedPhone}`;
+    }
+
+    setIsSendingTestSMS(true);
+    setTestSMSResult(null);
+    try {
+      const response = await fetch('/api/send-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipients: [formattedPhone],
+          message: `Test SMS from ${appSettings.app_name}. If you see this, Arkesel integration is working!`,
+          sender: appSettings.sms_sender_id
+        })
+      });
+
+      const contentType = response.headers.get("content-type");
+      let result;
+      
+      if (contentType && contentType.includes("application/json")) {
+        result = await response.json();
+      } else {
+        const text = await response.text();
+        throw new Error(`Server returned non-JSON response: ${text.slice(0, 100)}`);
+      }
+
+      if (result.success) {
+        setTestSMSResult({ success: true, message: "Test SMS sent successfully!" });
+      } else {
+        setTestSMSResult({ success: false, message: result.error || "Failed to send test SMS" });
+      }
+    } catch (err: any) {
+      setTestSMSResult({ success: false, message: `Error: ${err.message}` });
+    } finally {
+      setIsSendingTestSMS(false);
+    }
+  };
 
   const fetchCustomers = async () => {
     setIsLoadingCustomers(true);
@@ -417,6 +522,31 @@ export default function AdminDashboard() {
     }
   };
 
+  const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [txToDelete, setTxToDelete] = useState<any>(null);
+  const [isDeletingTx, setIsDeletingTx] = useState(false);
+
+  const handleDeleteTransaction = async (txId: string) => {
+    if (isDeletingTx) return;
+    setIsDeletingTx(true);
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('id', txId);
+
+      if (error) throw error;
+      
+      setTransactions(prev => prev.filter(t => t.id !== txId));
+      setTxToDelete(null);
+      fetchDashboardStats();
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`);
+    } finally {
+      setIsDeletingTx(false);
+    }
+  };
+
   const fetchTransactions = useCallback(async () => {
     setIsLoadingTransactions(true);
     try {
@@ -613,9 +743,26 @@ export default function AdminDashboard() {
                 )}
               </button>
             ))}
-            <button className={`w-full flex items-center px-3 py-2.5 text-slate-300 hover:bg-slate-800 hover:text-white rounded-lg font-medium transition-all group ${!isSidebarOpen ? 'justify-center' : ''}`}>
-              <Settings className={`h-5 w-5 shrink-0 ${isSidebarOpen ? 'mr-3' : ''} text-slate-400 group-hover:text-white transition-colors`} />
+            <button 
+              onClick={() => {
+                setCurrentView('settings');
+                setIsMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center px-3 py-2.5 rounded-lg font-medium transition-all group relative ${
+                currentView === 'settings' 
+                  ? 'bg-indigo-600/10 text-indigo-400' 
+                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+              }`}
+              title={!isSidebarOpen ? 'Settings' : ''}
+            >
+              <Settings className={`h-5 w-5 shrink-0 ${isSidebarOpen ? 'mr-3' : 'mx-auto'} ${currentView === 'settings' ? '' : 'text-slate-400 group-hover:text-white'}`} />
               {isSidebarOpen && <span>Settings</span>}
+              {currentView === 'settings' && (
+                <motion.div 
+                  layoutId="sidebar-active"
+                  className="absolute left-0 w-1 h-6 bg-indigo-500 rounded-r-full"
+                />
+              )}
             </button>
           </nav>
         </div>
@@ -729,6 +876,7 @@ export default function AdminDashboard() {
                       <th className="px-6 py-4 text-right">Amount</th>
                       <th className="px-6 py-4 text-center">VTU Status</th>
                       <th className="px-6 py-4 text-center">Status</th>
+                      <th className="px-6 py-4 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -810,6 +958,24 @@ export default function AdminDashboard() {
                             }`}>
                               {tx.status || 'N/A'}
                             </span>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button 
+                                onClick={() => setSelectedTransaction(tx)}
+                                className="p-2 text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                title="View Details"
+                              >
+                                <Search size={16} />
+                              </button>
+                              <button 
+                                onClick={() => setTxToDelete(tx)}
+                                className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete Transaction"
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -953,7 +1119,7 @@ export default function AdminDashboard() {
                               {isEditing ? (
                                 <input 
                                   type="text" 
-                                  value={editingBundle.capacity}
+                                  value={editingBundle.capacity || ''}
                                   onChange={(e) => setEditingBundle({ ...editingBundle, capacity: e.target.value })}
                                   className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
                                 />
@@ -968,7 +1134,7 @@ export default function AdminDashboard() {
                                   <input 
                                     type="number" 
                                     step="0.01"
-                                    value={editingBundle.cost_price}
+                                    value={editingBundle.cost_price || ''}
                                     onChange={(e) => setEditingBundle({ ...editingBundle, cost_price: e.target.value })}
                                     className="pl-5 pr-2 py-1 w-24 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-slate-400 text-sm italic text-slate-500"
                                   />
@@ -984,7 +1150,7 @@ export default function AdminDashboard() {
                                   <input 
                                     type="number" 
                                     step="0.01"
-                                    value={editingBundle.selling_price}
+                                    value={editingBundle.selling_price || ''}
                                     onChange={(e) => setEditingBundle({ ...editingBundle, selling_price: e.target.value })}
                                     className="pl-5 pr-2 py-1 w-24 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm font-bold text-indigo-700"
                                   />
@@ -1216,6 +1382,199 @@ export default function AdminDashboard() {
             </div>
           </motion.div>
         )}
+
+        {currentView === 'settings' && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+            <header className="mb-8">
+              <h1 className="text-2xl font-bold text-slate-900">General Settings</h1>
+              <p className="text-slate-500 mt-1">Configure global application variables and maintenance status.</p>
+            </header>
+
+            <div className="max-w-2xl bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <form onSubmit={handleUpdateSettings}>
+                <div className="p-8 space-y-8">
+                  {/* Maintenance Mode Section */}
+                  <div className={`p-6 rounded-2xl border-2 transition-all ${
+                    appSettings.maintenance_mode 
+                      ? 'bg-amber-50 border-amber-200' 
+                      : 'bg-indigo-50/30 border-indigo-100'
+                  }`}>
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Activity className={appSettings.maintenance_mode ? 'text-amber-600' : 'text-indigo-600'} size={20} />
+                          <h3 className="font-bold text-slate-900">Maintenance Mode</h3>
+                        </div>
+                        <p className="text-sm text-slate-500 leading-relaxed max-w-md">
+                          When active, all non-admin users will be blocked from accessing the site and shown a maintenance screen.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAppSettings({...appSettings, maintenance_mode: !appSettings.maintenance_mode})}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
+                          appSettings.maintenance_mode ? 'bg-amber-600' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            appSettings.maintenance_mode ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* General Config */}
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Application Name</label>
+                        <input 
+                          type="text" 
+                          value={appSettings.app_name || ''}
+                          onChange={(e) => setAppSettings({...appSettings, app_name: e.target.value})}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Platform Currency</label>
+                        <input 
+                          type="text" 
+                          value={appSettings.currency || ''}
+                          onChange={(e) => setAppSettings({...appSettings, currency: e.target.value})}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                          placeholder="e.g. GHS"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Support Email Address</label>
+                      <input 
+                        type="email" 
+                        value={appSettings.support_email || ''}
+                        onChange={(e) => setAppSettings({...appSettings, support_email: e.target.value})}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                        required
+                      />
+                      <p className="text-[10px] text-slate-400 mt-2 italic">This email will be displayed on the maintenance screen and in help sections.</p>
+                    </div>
+                  </div>
+
+                  {/* SMS Notifications Section */}
+                  <div className="pt-8 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="text-indigo-600" size={20} />
+                        <h3 className="font-bold text-slate-900">SMS Notifications (Arkesel)</h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAppSettings({...appSettings, sms_enabled: !appSettings.sms_enabled})}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
+                          appSettings.sms_enabled ? 'bg-indigo-600' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${appSettings.sms_enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    {appSettings.sms_enabled && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }} 
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="space-y-6"
+                      >
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="flex-1">
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">SMS Sender ID</label>
+                            <input 
+                              type="text" 
+                              maxLength={11}
+                              value={appSettings.sms_sender_id || ''}
+                              onChange={(e) => setAppSettings({...appSettings, sms_sender_id: e.target.value})}
+                              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                              placeholder="Max 11 chars"
+                            />
+                            <p className="text-[10px] text-slate-400 mt-2">Max 11 alphanumeric characters.</p>
+                          </div>
+                          <div className="flex-1">
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Test Phone Number</label>
+                            <div className="flex gap-2">
+                              <input 
+                                type="text" 
+                                value={testPhone}
+                                onChange={(e) => setTestPhone(e.target.value)}
+                                className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                                placeholder="e.g. 0244000000"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleSendTestSMS}
+                                disabled={isSendingTestSMS}
+                                className="px-6 py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+                              >
+                                {isSendingTestSMS ? <Activity className="animate-spin" size={18} /> : <MessageSquare size={18} />}
+                                Send Test
+                              </button>
+                            </div>
+                            {testSMSResult && (
+                              <p className={`text-[10px] mt-2 font-bold ${testSMSResult.success ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {testSMSResult.message}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Success SMS Template</label>
+                          <textarea 
+                            value={appSettings.sms_template_success || ''}
+                            onChange={(e) => setAppSettings({...appSettings, sms_template_success: e.target.value})}
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium min-h-[100px]"
+                            placeholder="Template for successful purchases"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-2">
+                            Placeholders: <code className="bg-slate-200 px-1 rounded">{'{volume}'}</code>, 
+                            <code className="bg-slate-200 px-1 rounded">{'{network}'}</code>, 
+                            <code className="bg-slate-200 px-1 rounded">{'{app_name}'}</code>, 
+                            <code className="bg-slate-200 px-1 rounded">{'{phone}'}</code>
+                          </p>
+                        </div>
+                        <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 flex gap-3">
+                          <Activity className="text-amber-600 shrink-0" size={18} />
+                          <p className="text-xs text-amber-800 leading-relaxed">
+                            Ensure you have set <strong>ARKESEL_API_KEY</strong> in your environment variables. 
+                            Notifications will be sent on successful data purchases.
+                          </p>
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="px-8 py-5 bg-slate-50 border-t border-slate-100 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSavingSettings || isLoadingSettings}
+                    className="px-8 py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isSavingSettings ? (
+                      <>
+                        <Activity className="animate-spin" size={18} />
+                        Saving...
+                      </>
+                    ) : (
+                      'Save All Changes'
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </motion.div>
+        )}
       </main>
 
       {/* Main Footer or generic content if needed */}
@@ -1416,7 +1775,7 @@ export default function AdminDashboard() {
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Network</label>
                       <select 
-                        value={newBundle.network}
+                        value={newBundle.network || 'MTN'}
                         onChange={(e) => setNewBundle({...newBundle, network: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
@@ -1431,7 +1790,7 @@ export default function AdminDashboard() {
                       <input 
                         type="text" 
                         placeholder="e.g. 1GB, 500MB"
-                        value={newBundle.capacity}
+                        value={newBundle.capacity || ''}
                         onChange={(e) => setNewBundle({...newBundle, capacity: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
@@ -1444,7 +1803,7 @@ export default function AdminDashboard() {
                     <input 
                       type="text" 
                       placeholder="e.g. Regular Daily Plan"
-                      value={newBundle.description}
+                      value={newBundle.description || ''}
                       onChange={(e) => setNewBundle({...newBundle, description: e.target.value})}
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
@@ -1457,7 +1816,7 @@ export default function AdminDashboard() {
                         type="number" 
                         step="0.01"
                         placeholder="0.00"
-                        value={newBundle.selling_price}
+                        value={newBundle.selling_price || ''}
                         onChange={(e) => setNewBundle({...newBundle, selling_price: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
@@ -1469,7 +1828,7 @@ export default function AdminDashboard() {
                         type="number" 
                         step="0.01"
                         placeholder="0.00"
-                        value={newBundle.cost_price}
+                        value={newBundle.cost_price || ''}
                         onChange={(e) => setNewBundle({...newBundle, cost_price: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
@@ -1504,6 +1863,144 @@ export default function AdminDashboard() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Transaction Details Modal */}
+        {selectedTransaction && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedTransaction(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <Activity className="text-indigo-500" size={20} />
+                  Transaction Details
+                </h3>
+                <button 
+                  onClick={() => setSelectedTransaction(null)}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Transaction Reference</label>
+                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100">{selectedTransaction.id}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Network</label>
+                      <div className="flex items-center gap-2">
+                         <span className="font-semibold text-slate-900 capitalize">{selectedTransaction.network}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Recipient</label>
+                      <p className="font-bold text-lg text-slate-900">{selectedTransaction.recipient_phone}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Paystack Receipt</label>
+                      <p className="font-mono text-sm text-slate-900">{selectedTransaction.paystack_receipt || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Date & Time</label>
+                      <p className="font-medium text-slate-900">{new Date(selectedTransaction.created_at).toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Amount</label>
+                      <p className="text-2xl font-black text-indigo-600">₵{Number(selectedTransaction.amount).toFixed(2)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-8 pt-8 border-t border-slate-100 grid grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Payment Status</label>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                      selectedTransaction.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {selectedTransaction.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">VTU Delivery Status</label>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                      selectedTransaction.vtu_status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {selectedTransaction.vtu_status.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                <button
+                  onClick={() => setSelectedTransaction(null)}
+                  className="px-6 py-2 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Delete Transaction Confirmation */}
+        {txToDelete && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setTxToDelete(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 text-center"
+            >
+              <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                <X size={40} />
+              </div>
+              <h3 className="text-2xl font-bold text-slate-900 mb-2">Delete Transaction?</h3>
+              <p className="text-slate-500 mb-8">
+                Are you sure you want to delete this transaction record? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setTxToDelete(null)}
+                  className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 font-bold rounded-2xl hover:bg-slate-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDeleteTransaction(txToDelete.id)}
+                  disabled={isDeletingTx}
+                  className="flex-1 px-6 py-3 bg-red-500 text-white font-bold rounded-2xl hover:bg-red-600 transition-colors disabled:opacity-50"
+                >
+                  {isDeletingTx ? 'Deleting...' : 'Confirm Delete'}
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

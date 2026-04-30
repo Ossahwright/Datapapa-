@@ -27,22 +27,16 @@ async function startServer() {
     }
 
     try {
-      // DatahubGH API call (Common pattern for such services in GH)
-      // This is a placeholder for the actual API call logic
-      // Most of these services use a direct purchase endpoint
-      
-      // NEW DatahubGH platform (app.datahubgh.com)
-      // Standard SME API pattern for Ghana: POST /api/v1/data
-      const response = await axios.post("https://app.datahubgh.com/api/v1/data", {
-        api_key: apiKey,
-        network: networkKey, // YELLO, TELECEL, AT_BIGTIME
+      // DatahubGH API call using the documented endpoint and headers
+      const response = await axios.post("https://app.datahubgh.com/api/external/data-purchase", {
+        networkKey: networkKey, // YELLO, TELECEL, AT_BIGTIME
         recipient: recipient,
-        plan_id: capacity, // Sometimes it's capacity, sometimes it's a specific plan ID. We'll use the capacity value as a guess for the plan
-        volume: capacity,
+        capacity: capacity,
       }, {
         headers: {
           'Accept': 'application/json',
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey
         }
       });
 
@@ -70,6 +64,113 @@ async function startServer() {
       }
 
       return res.status(500).json({ success: false, error: "Failed to connect to data provider" });
+    }
+  });
+
+  // API Route for Sending SMS via Arkesel
+  app.post("/api/send-sms", async (req, res) => {
+    const { recipients, message, sender } = req.body;
+    
+    const arkeselKey = process.env.ARKESEL_API_KEY?.trim();
+    
+    if (!arkeselKey) {
+      console.error("ARKESEL_API_KEY is missing in environment");
+      return res.status(500).json({ success: false, error: "ARKESEL_API_KEY is missing" });
+    }
+
+    try {
+      const recipientList = Array.isArray(recipients) ? recipients.join(',') : recipients;
+      
+      console.log(`Attempting to send SMS to ${recipientList} via Arkesel V1`);
+
+      // Arkesel V1 technically supports GET and POST. 
+      // Some specialized implementations prefer explicit headers.
+      const response = await axios.get("https://sms.arkesel.com/sms/api", {
+        params: {
+          action: 'send-sms',
+          api_key: arkeselKey,
+          to: recipientList,
+          from: sender || "Datapapa",
+          sms: message
+        },
+        headers: {
+          // Some V1 variations look for the key in headers too
+          'api-key': arkeselKey,
+          'Accept': 'application/json'
+        },
+        // Don't throw on non-200, we want to handle the code manually
+        validateStatus: () => true 
+      });
+
+      console.log("Arkesel API Response Status:", response.status);
+      console.log("Arkesel API Full Response Data:", response.data);
+
+      const rawData = response.data;
+      let isSuccess = false;
+      let statusInfo = "";
+
+      // Handle common V1 response patterns
+      if (typeof rawData === 'string') {
+        const cleanedData = rawData.trim();
+        if (cleanedData.includes('1000')) {
+          isSuccess = true;
+          statusInfo = "Success (1000)";
+        } else if (cleanedData.toLowerCase().includes('authentication failed')) {
+          statusInfo = "Authentication failed (Invalid API Key)";
+        } else {
+          statusInfo = cleanedData;
+        }
+      } else if (typeof rawData === 'number') {
+        if (rawData === 1000) {
+          isSuccess = true;
+          statusInfo = "Success (1000)";
+        } else {
+          statusInfo = String(rawData);
+        }
+      } else if (rawData && typeof rawData === 'object') {
+        const status = String(rawData.status || rawData.code || '');
+        if (status === '1000' || status === 'success' || (typeof rawData.data === 'string' && rawData.data.includes('1000'))) {
+          isSuccess = true;
+          statusInfo = "Success (1000)";
+        } else {
+          statusInfo = rawData.message || rawData.data || JSON.stringify(rawData);
+        }
+      }
+
+      // Explicit check for common error codes in V1
+      const errorMap: Record<string, string> = {
+        '101': 'Invalid API Key',
+        '102': 'Authentication Failed',
+        '103': 'Invalid Action',
+        '104': 'Recipient Number Missing',
+        '105': 'Sender ID Missing',
+        '106': 'Message Body Missing',
+        '107': 'Invalid Recipient Number',
+        '108': 'Sender ID not approved',
+        '109': 'Insufficient Balance',
+        '110': 'System Error'
+      };
+
+      if (!isSuccess && errorMap[statusInfo.trim()]) {
+        statusInfo = `${statusInfo.trim()} - ${errorMap[statusInfo.trim()]}`;
+      }
+
+      if (isSuccess) {
+        return res.json({ success: true, data: rawData });
+      } else {
+        console.error("Arkesel reported failure:", { statusInfo, rawData });
+        return res.json({ 
+          success: false, 
+          error: statusInfo.length > 0 ? statusInfo : "Unknown error from Arkesel",
+          raw: rawData
+        });
+      }
+    } catch (error: any) {
+      console.error("Arkesel Integration Fatal Error:", error.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: `Network Error: ${error.message}` 
+      });
     }
   });
 

@@ -2,7 +2,21 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { Wifi } from 'lucide-react';
 
-export default function Navbar() {
+interface NavbarProps {
+  settings: {
+    app_name: string;
+    currency: string;
+    support_email: string;
+    maintenance_mode: boolean;
+    sms_enabled: boolean;
+    sms_sender_id: string;
+    sms_template_success: string;
+  } | null;
+}
+
+export default function Navbar({ settings }: NavbarProps) {
+  const appName = settings?.app_name || "Datapapa";
+
   const scrollToForm = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (window.location.pathname === '/') {
       e.preventDefault();
@@ -19,7 +33,7 @@ export default function Navbar() {
             <div className="bg-indigo-600 text-white p-1.5 rounded-lg group-hover:scale-105 transition-transform">
               <Wifi size={20} />
             </div>
-            <span className="font-bold text-xl tracking-tight text-gray-900">Datapapa</span>
+            <span className="font-bold text-xl tracking-tight text-gray-900">{appName}</span>
           </Link>
           
           <div className="flex items-center gap-4">

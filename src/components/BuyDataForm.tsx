@@ -10,7 +10,19 @@ const NETWORKS = [
   { id: 'airteltigo', name: 'AirtelTigo', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
 ];
 
-export default function BuyDataForm() {
+interface BuyDataFormProps {
+  settings: {
+    app_name: string;
+    currency: string;
+    support_email: string;
+    maintenance_mode: boolean;
+    sms_enabled: boolean;
+    sms_sender_id: string;
+    sms_template_success: string;
+  } | null;
+}
+
+export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [network, setNetwork] = useState('');
   const [bundle, setBundle] = useState('');
   const [phone, setPhone] = useState('');
@@ -18,11 +30,16 @@ export default function BuyDataForm() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [transactionId, setTransactionId] = useState('');
+  const [payerPhone, setPayerPhone] = useState('');
   const [dbBundles, setDbBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
 
   const [supabaseReady] = useState(isSupabaseConfigured);
+  
+  const appName = settings?.app_name || "Datapapa";
+  const currency = settings?.currency || "GHS";
+  const supportEmail = settings?.support_email || "support@datapapa.com";
 
   const fetchBundles = async () => {
     if (supabaseReady) {
@@ -113,9 +130,13 @@ export default function BuyDataForm() {
     setError('');
 
     initializePayment({
-      onSuccess: async (reference: any) => {
+      onSuccess: async (paystackResponse: any) => {
         setIsLoading(true);
         try {
+          const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
+          setPayerPhone(currentPayerPhone);
+          console.log("Paystack Payer Phone:", currentPayerPhone);
+
           // 1. Call DatahubGH via our backend
           let vtuStatus = 'pending';
           let networkKey = '';
@@ -167,8 +188,9 @@ export default function BuyDataForm() {
                   amount: selectedBundleObj?.price,
                   recipient_phone: phone,
                   capacity: selectedBundleObj?.volume || selectedBundleObj?.capacity,
-                  paystack_receipt: reference.reference,
-                  status: vtuStatus === 'success' ? 'success' : 'pending_vtu_retry', // Or whatever makes sense
+                  paystack_receipt: paystackResponse.reference,
+                  payee_phone: currentPayerPhone,
+                  status: vtuStatus === 'success' ? 'success' : 'failed',
                   vtu_status: vtuStatus 
                 })
                 .select()
@@ -176,32 +198,86 @@ export default function BuyDataForm() {
                 
               if (dbError) {
                  console.warn("Supabase insert failed.", dbError);
-                 setTransactionId(reference.reference);
+                 setTransactionId(paystackResponse.reference);
               } else {
                  setTransactionId(data.id);
               }
             } catch (e) {
               console.warn("Supabase insert crashed.", e);
-              setTransactionId(reference.reference);
+              setTransactionId(paystackResponse.reference);
             }
           } else {
-             setTransactionId(reference.reference);
+             setTransactionId(paystackResponse.reference);
           }
 
           setSuccess(true);
 
-          // Auto-send WhatsApp notification
+          // SMS Notification Logic (Arkesel)
+          if (settings?.sms_enabled && vtuStatus === 'success') {
+            try {
+              console.log("Triggering SMS notification...");
+              // Replace placeholders in template
+              let smsMessage = settings.sms_template_success || "You have received {volume} data on {network}.";
+              smsMessage = smsMessage
+                .replace(/{volume}/g, selectedBundleObj?.volume || '')
+                .replace(/{network}/g, network.toUpperCase())
+                .replace(/{app_name}/g, appName)
+                .replace(/{phone}/g, phone);
+
+              // Format phone number for Arkesel (expects 233...)
+              let formattedPhone = phone.trim().replace(/\D/g, '');
+              if (formattedPhone.startsWith('0')) {
+                formattedPhone = `233${formattedPhone.slice(1)}`;
+              } else if (formattedPhone.length === 9 && (formattedPhone.startsWith('2') || formattedPhone.startsWith('5'))) {
+                formattedPhone = `233${formattedPhone}`;
+              }
+              
+              console.log(`Sending SMS to ${formattedPhone}`);
+
+              fetch('/api/send-sms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  recipients: [formattedPhone],
+                  message: smsMessage,
+                  sender: settings.sms_sender_id
+                })
+              })
+              .then(res => res.json())
+              .then(data => console.log("SMS API response:", data))
+              .catch(e => console.error("SMS notification background error:", e));
+            } catch (e) {
+              console.error("SMS notification setup error:", e);
+            }
+          }
+
+          // WhatsApp Notification Logic
           const selectedNetworkName = NETWORKS.find(n => n.id === network)?.name || network;
-          const message = `*New Data Purchase Notification*\n\n` +
-            `*Network:* ${selectedNetworkName}\n` +
-            `*Bundle:* ${selectedBundleObj?.volume} - ${selectedBundleObj?.name}\n` +
-            `*Recipient:* ${phone}\n` +
-            `*Amount Paid:* GHS ${selectedBundleObj?.price.toFixed(2)}\n` +
-            `*Reference:* ${reference.reference}\n` +
-            `*VTU Status:* ${vtuStatus.toUpperCase()}\n\n` +
-            `Generated by Datapapa`;
           
-          const whatsappUrl = `https://wa.me/233244014207?text=${encodeURIComponent(message)}`;
+          let whatsappMessage = '';
+          if (vtuStatus === 'failed') {
+            whatsappMessage = `*🚨 VTU FAILURE ALERT 🚨*\n\n` +
+              `*ATTENTION ADMIN:* A transaction succeeded on Paystack but VTU failed. Please manually credit the customer.\n\n` +
+              `*--- Transaction Details ---*\n` +
+              `*Network:* ${selectedNetworkName}\n` +
+              `*Bundle:* ${selectedBundleObj?.volume}\n` +
+              `*Recipient:* ${phone}\n` +
+              `*Payer Phone:* ${currentPayerPhone}\n` +
+              `*Amount Paid:* GHS ${selectedBundleObj?.price.toFixed(2)}\n` +
+              `*Reference:* ${paystackResponse.reference}\n` +
+              `*Status:* VTU FAILED (Manual action required)`;
+          } else {
+            whatsappMessage = `*✅ Data Purchase Successful*\n\n` +
+              `*Network:* ${selectedNetworkName}\n` +
+              `*Bundle:* ${selectedBundleObj?.volume}\n` +
+              `*Recipient:* ${phone}\n` +
+              `*Payer Phone:* ${currentPayerPhone}\n` +
+              `*Amount Paid:* GHS ${selectedBundleObj?.price.toFixed(2)}\n` +
+              `*Reference:* ${paystackResponse.reference}\n\n` +
+              `Generated by Datapapa`;
+          }
+          
+          const whatsappUrl = `https://wa.me/233244014207?text=${encodeURIComponent(whatsappMessage)}`;
           window.open(whatsappUrl, '_blank');
         } catch (err: any) {
           setError(err.message || 'Payment processing failed. Please contact support.');
@@ -239,6 +315,10 @@ export default function BuyDataForm() {
           <div className="flex justify-between mb-3 text-sm">
              <span className="text-slate-500">Amount Paid</span>
              <span className="font-bold text-slate-900">₵{selectedBundleObj?.price.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between mb-3 text-sm">
+             <span className="text-slate-500">Payer Number</span>
+             <span className="font-medium text-slate-900">{payerPhone}</span>
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-slate-500">Status</span>
