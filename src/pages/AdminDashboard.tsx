@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -40,6 +40,19 @@ export default function AdminDashboard() {
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
   const [editingBundle, setEditingBundle] = useState<any>(null);
+  const [bundleToDelete, setBundleToDelete] = useState<any>(null);
+  const [isAddingBundle, setIsAddingBundle] = useState(false);
+  const [newBundle, setNewBundle] = useState({
+    network: 'MTN',
+    capacity: '',
+    description: '',
+    selling_price: '',
+    cost_price: '',
+    is_active: true
+  });
+  const [customerToDelete, setCustomerToDelete] = useState<any>(null);
+  const [viewingCustomerTransactions, setViewingCustomerTransactions] = useState<any>(null);
+  const [isActionProcessing, setIsActionProcessing] = useState(false);
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
 
@@ -47,11 +60,26 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        navigate('/admin/auth');
+        setIsLoading(false);
+        return;
+      }
+
+      // FETCH ROLE FROM PROFILES TABLE (correct way)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (!profile || profile.role !== 'admin') {
+        console.log("Not an admin, redirecting...");
         navigate('/admin/auth');
       } else {
-        setUser(session.user);
+        setUser({ ...user, role: profile.role });
         fetchDashboardStats();
       }
       setIsLoading(false);
@@ -59,11 +87,23 @@ export default function AdminDashboard() {
 
     checkUser();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT' || !session) {
         navigate('/admin/auth');
-      } else {
-        setUser(session.user);
+      } else if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        // Re-verify on sign in events
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
+        
+        if (profile?.role === 'admin') {
+          setUser({ ...session.user, role: profile.role });
+        } else {
+          await supabase.auth.signOut();
+          navigate('/admin/auth');
+        }
       }
     });
 
@@ -122,14 +162,50 @@ export default function AdminDashboard() {
 
   const fetchCustomers = async () => {
     setIsLoadingCustomers(true);
-    const { data, error } = await supabase.rpc("get_customers_summary");
+    try {
+      // Fetch all profiles first
+      const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error("Customer fetch error:", error);
-    } else {
-      setCustomers(data || []);
+      if (profilesError) throw profilesError;
+
+      // Also get transaction summaries to merge
+      const { data: summariesData, error: summariesError } = await supabase.rpc("get_customers_summary");
+
+      if (summariesError) {
+        console.warn("Summary RPC error (ignoring for fallback):", summariesError);
+      }
+
+      // Merge profiles with their transaction summaries if they exist
+      const mergedCustomers = (profilesData || []).map(profile => {
+        // Try to find summary by user_id if the RPC supports it, 
+        // or by matching email/phone if applicable.
+        // For now, we'll just show the profile and if they have transactions, 
+        // the RPC summary usually identifies them by recipient_phone which isn't in profiles.
+        // So we'll try to match user_id if we update the RPC, 
+        // or just show the profile with 0 stats for now.
+        
+        const summary = (summariesData || []).find((s: any) => s.user_id === profile.id);
+        
+        return {
+          id: profile.id,
+          email: profile.email,
+          recipient_phone: summary?.recipient_phone || 'No phone recorded',
+          total_spent: summary?.total_spent || 0,
+          transaction_count: summary?.transaction_count || 0,
+          role: profile.role,
+          created_at: profile.created_at
+        };
+      });
+
+      setCustomers(mergedCustomers);
+    } catch (err) {
+      console.error("Customer fetch error:", err);
+    } finally {
+      setIsLoadingCustomers(false);
     }
-    setIsLoadingCustomers(false);
   };
 
   const fetchCustomerTransactions = async (phone: string) => {
@@ -164,7 +240,6 @@ export default function AdminDashboard() {
       if (error) {
         console.error("FETCH ERROR:", error);
       } else if (data) {
-        console.log("BUNDLES:", data);
         setBundles(data);
       }
     } catch (err) {
@@ -175,52 +250,171 @@ export default function AdminDashboard() {
   }, []);
 
   const handleUpdateBundle = async (bundleId: string, updates: any) => {
-    console.log("UPDATING:", bundleId, updates);
+    if (isActionProcessing) return;
+    
+    // Check for duplicate capacity if capacity is being updated
+    if (updates.capacity) {
+      const targetBundle = bundles.find(b => b.id === bundleId);
+      const networkToCheck = updates.network || targetBundle?.network;
+      const capacityToCheck = updates.capacity;
+      
+      const isDuplicate = bundles.some(b => 
+        b.id !== bundleId && 
+        b.network?.toLowerCase() === networkToCheck?.toLowerCase() && 
+        b.capacity?.toLowerCase() === capacityToCheck?.toLowerCase()
+      );
+
+      if (isDuplicate) {
+        alert(`A bundle with capacity "${capacityToCheck}" already exists for ${networkToCheck}.`);
+        return;
+      }
+    }
+
+    // Save previous state for rollback
+    const previousBundles = [...bundles];
+    
+    // Optimistic Update
+    setBundles(current => current.map(b => b.id === bundleId ? { ...b, ...updates } : b));
+    setIsActionProcessing(true);
+
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('bundles')
         .update(updates)
-        .eq('id', bundleId)
-        .select();
+        .eq('id', bundleId);
 
-      if (error) {
-        console.error("UPDATE ERROR:", error);
-        throw new Error(error.message);
-      }
+      if (error) throw error;
       
-      console.log("UPDATE SUCCESS:", data);
       setEditingBundle(null);
-      await fetchBundles();
     } catch (err: any) {
-      console.error("Error updating bundle:", err);
-      alert(`Failed to update bundle: ${err.message || 'Unknown error'}. Check if RLS policies for update are enabled in Supabase.`);
+      console.error("Supabase Update Error:", err);
+      // Rollback on error
+      setBundles(previousBundles);
+      alert(`Update failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsActionProcessing(false);
     }
   };
 
   const handleDeleteBundle = async (bundleId: string) => {
-    console.log("DELETE:", bundleId);
-    if (!window.confirm("Delete this bundle?")) return;
+    if (isActionProcessing) return;
+
+    // Save previous state
+    const previousBundles = [...bundles];
     
+    // Optimistic Update
+    setBundles(current => current.filter(b => b.id !== bundleId));
+    setIsActionProcessing(true);
+
     try {
       const { error } = await supabase
         .from('bundles')
         .delete()
         .eq('id', bundleId);
 
-      if (error) {
-        console.error("DELETE ERROR:", error);
-        throw new Error(error.message);
-      }
+      if (error) throw error;
       
-      await fetchBundles();
+      setBundleToDelete(null);
     } catch (err: any) {
-      console.error("Error deleting bundle:", err);
-      alert(`Failed to delete bundle: ${err.message || 'Unknown error'}. Check if RLS policies for delete are enabled in Supabase.`);
+      console.error("Supabase Delete Error:", err);
+      // Rollback on error
+      setBundles(previousBundles);
+      alert(`Deletion failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsActionProcessing(false);
     }
   };
 
   const toggleBundleActive = async (bundleId: string, currentStatus: boolean) => {
     await handleUpdateBundle(bundleId, { is_active: !currentStatus });
+  };
+
+  const handleCreateBundle = async (e: FormEvent) => {
+    e.preventDefault();
+    if (isActionProcessing) return;
+
+    // Check for duplicate capacity
+    const isDuplicate = bundles.some(b => 
+      b.network?.toLowerCase() === newBundle.network.toLowerCase() && 
+      b.capacity?.toLowerCase() === newBundle.capacity.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      alert(`A bundle with capacity "${newBundle.capacity}" already exists for ${newBundle.network}.`);
+      return;
+    }
+
+    setIsActionProcessing(true);
+    try {
+      const networkKey = newBundle.network.toLowerCase().replace('airteltigo', 'airteltigo').replace('at', 'airteltigo');
+      
+      const { data, error } = await supabase
+        .from('bundles')
+        .insert([{
+          ...newBundle,
+          network_key: networkKey,
+          selling_price: parseFloat(newBundle.selling_price) || 0,
+          cost_price: parseFloat(newBundle.cost_price || '0') || 0
+        }])
+        .select();
+
+      if (error) throw error;
+
+      setIsAddingBundle(false);
+      setNewBundle({
+        network: 'MTN',
+        capacity: '',
+        description: '',
+        selling_price: '',
+        cost_price: '',
+        is_active: true
+      });
+      await fetchBundles();
+    } catch (err: any) {
+      console.error("Supabase Create Error:", err);
+      alert(`Creation failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsActionProcessing(false);
+    }
+  };
+
+  const handleDeleteCustomer = async (customerId: string) => {
+    if (isActionProcessing) return;
+    
+    const previousCustomers = [...customers];
+    setCustomers(current => current.filter(c => c.id !== customerId));
+    setIsActionProcessing(true);
+
+    try {
+      // First delete associated transactions (if for some reason database isn't set to cascade)
+      // Actually, standard RLS might prevent this unless we are admin. 
+      // Assuming 'admin' can delete from profiles/transactions.
+      
+      const { error: txError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('user_id', customerId);
+        
+      if (txError) {
+        console.warn("Transaction deletion warning (continuing):", txError);
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', customerId);
+
+      if (error) throw error;
+      
+      setCustomerToDelete(null);
+      fetchDashboardStats(); // Refresh user count
+    } catch (err: any) {
+      console.error("Supabase Customer Delete Error:", err);
+      setCustomers(previousCustomers);
+      alert(`Failed to delete customer: ${err.message}`);
+    } finally {
+      setIsActionProcessing(false);
+    }
   };
 
   const fetchTransactions = useCallback(async () => {
@@ -332,6 +526,8 @@ export default function AdminDashboard() {
       </div>
     );
   }
+
+  if (user?.role !== 'admin') return null;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
@@ -652,12 +848,40 @@ export default function AdminDashboard() {
 
         {currentView === 'bundles' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-            <header className="mb-8 flex justify-between items-end">
+            <header className="mb-8 flex justify-between items-center">
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Bundles Management</h1>
                 <p className="text-slate-500 mt-1">Manage network data bundles, pricing, and availability.</p>
               </div>
+              <button 
+                onClick={() => setIsAddingBundle(true)}
+                className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-semibold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center gap-2"
+              >
+                <div className="bg-white/20 p-1 rounded-lg">
+                  <Database size={16} />
+                </div>
+                New Bundle
+              </button>
             </header>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              {[
+                { name: 'MTN', logo: 'https://i.postimg.cc/BvS8nyGS/download.jpg', color: 'border-yellow-100', bg: 'bg-yellow-50' },
+                { name: 'Telecel', logo: 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg', color: 'border-red-100', bg: 'bg-red-50' },
+                { name: 'AirtelTigo', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg', color: 'border-blue-100', bg: 'bg-blue-50' }
+              ].map((net) => {
+                const count = bundles.filter(b => b.network?.toLowerCase() === net.name.toLowerCase() || (net.name === 'AirtelTigo' && b.network?.toLowerCase() === 'at')).length;
+                return (
+                  <div key={net.name} className={`flex items-center p-4 rounded-2xl border ${net.color} ${net.bg} shadow-sm`}>
+                    <img src={net.logo} alt={net.name} className="w-12 h-12 rounded-xl object-cover shadow-sm mr-4" />
+                    <div>
+                      <h4 className="font-bold text-slate-900">{net.name}</h4>
+                      <p className="text-sm text-slate-500">{count} Active Bundles</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="overflow-x-auto">
@@ -667,9 +891,9 @@ export default function AdminDashboard() {
                       <th className="px-6 py-4">Network</th>
                       <th className="px-6 py-4">Description</th>
                       <th className="px-6 py-4">Capacity</th>
-                      <th className="px-6 py-4">Cost Price (₵)</th>
-                      <th className="px-6 py-4">Selling Price (₵)</th>
-                      <th className="px-6 py-4 text-center">Status</th>
+                      <th className="px-6 py-4 text-slate-400 font-medium">Cost Price (₵)</th>
+                      <th className="px-6 py-4 text-indigo-700">Selling Price (₵)</th>
+                      <th className="px-6 py-4">Status</th>
                       <th className="px-6 py-4 text-center">Actions</th>
                     </tr>
                   </thead>
@@ -696,18 +920,17 @@ export default function AdminDashboard() {
                             <td className="px-6 py-4 font-medium text-slate-900">
                               <div className="flex items-center gap-3">
                                 {bundle.network?.toLowerCase() === 'mtn' && (
-                                  <img src="https://i.postimg.cc/5NPHHMBJ/MTN-LOGO-1.png" alt="MTN" className="w-8 h-8 rounded-full object-cover" />
+                                  <img src="https://i.postimg.cc/BvS8nyGS/download.jpg" alt="MTN" className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm" />
                                 )}
                                 {bundle.network?.toLowerCase() === 'telecel' && (
-                                  <img src="https://i.postimg.cc/SRgWNYSf/TELECEL-LOGO-1.jpg" alt="Telecel" className="w-8 h-8 rounded-full object-cover" />
+                                  <img src="https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg" alt="Telecel" className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm" />
                                 )}
                                 {(bundle.network?.toLowerCase() === 'airteltigo' || bundle.network?.toLowerCase() === 'at') && (
-                                  <img src="https://i.postimg.cc/0yXPdkQf/AIRTELTIGO-LOGO-1.jpg" alt="AirtelTigo" className="w-8 h-8 rounded-full object-cover" />
+                                  <img src="https://i.postimg.cc/sfqT8kkW/images.jpg" alt="AirtelTigo" className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm" />
                                 )}
-                                <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium uppercase tracking-wider ${
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                                   bundle.network?.toLowerCase() === 'mtn' ? 'bg-yellow-100 text-yellow-800' :
                                   bundle.network?.toLowerCase() === 'telecel' ? 'bg-red-100 text-red-800' :
-                                  bundle.network?.toLowerCase() === 'airteltigo' || bundle.network?.toLowerCase() === 'at' ? 'bg-blue-100 text-blue-800' :
                                   'bg-slate-100 text-slate-800'
                                 }`}>
                                   {bundle.network}
@@ -720,8 +943,7 @@ export default function AdminDashboard() {
                                   type="text" 
                                   value={editingBundle.description || ''}
                                   onChange={(e) => setEditingBundle({ ...editingBundle, description: e.target.value })}
-                                  className="w-full min-w-[150px] px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
-                                  placeholder="Description..."
+                                  className="w-full px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
                                 />
                               ) : (
                                 bundle.description || '-'
@@ -736,71 +958,74 @@ export default function AdminDashboard() {
                                   className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
                                 />
                               ) : (
-                                <span className="text-slate-900">{bundle.capacity}</span>
+                                <span className="text-slate-900 font-medium">{bundle.capacity}</span>
                               )}
                             </td>
-                            <td className="px-6 py-4 font-semibold text-slate-900">
+                            <td className="px-6 py-4">
                               {isEditing ? (
-                                <div className="flex items-center">
-                                  <span className="mr-1">₵</span>
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1.5 text-slate-400 text-xs">₵</span>
                                   <input 
                                     type="number" 
                                     step="0.01"
-                                    value={editingBundle.cost_price || ''}
-                                    onChange={(e) => setEditingBundle({ ...editingBundle, cost_price: parseFloat(e.target.value) || 0 })}
-                                    className="w-20 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
+                                    value={editingBundle.cost_price}
+                                    onChange={(e) => setEditingBundle({ ...editingBundle, cost_price: e.target.value })}
+                                    className="pl-5 pr-2 py-1 w-24 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-slate-400 text-sm italic text-slate-500"
                                   />
                                 </div>
                               ) : (
-                                bundle.cost_price != null ? `₵${Number(bundle.cost_price).toFixed(2)}` : '-'
+                                <span className="text-slate-500 italic">₵{Number(bundle.cost_price || 0).toFixed(2)}</span>
                               )}
                             </td>
-                            <td className="px-6 py-4 font-semibold text-slate-900">
+                            <td className="px-6 py-4">
                               {isEditing ? (
-                                <div className="flex items-center">
-                                  <span className="mr-1">₵</span>
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1.5 text-slate-400 text-xs">₵</span>
                                   <input 
                                     type="number" 
                                     step="0.01"
                                     value={editingBundle.selling_price}
-                                    onChange={(e) => setEditingBundle({ ...editingBundle, selling_price: parseFloat(e.target.value) || 0 })}
-                                    className="w-20 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
+                                    onChange={(e) => setEditingBundle({ ...editingBundle, selling_price: e.target.value })}
+                                    className="pl-5 pr-2 py-1 w-24 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm font-bold text-indigo-700"
                                   />
                                 </div>
                               ) : (
-                                `₵${Number(bundle.selling_price).toFixed(2)}`
+                                <span className="font-bold text-indigo-700 text-lg">₵{Number(bundle.selling_price).toFixed(2)}</span>
                               )}
                             </td>
-                            <td className="px-6 py-4 text-center">
+                            <td className="px-6 py-4">
                               <button
                                 onClick={() => toggleBundleActive(bundle.id, bundle.is_active)}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                                disabled={isActionProcessing}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                                   bundle.is_active ? 'bg-green-500' : 'bg-slate-300'
-                                }`}
-                                role="switch"
-                                aria-checked={bundle.is_active}
+                                } ${isActionProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
                               >
                                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                                   bundle.is_active ? 'translate-x-6' : 'translate-x-1'
                                 }`} />
                               </button>
-                              <span className="ml-2 text-xs font-medium text-slate-500">
-                                {bundle.is_active ? 'Active' : 'Inactive'}
-                              </span>
                             </td>
                             <td className="px-6 py-4 text-center">
                               <div className="flex items-center justify-center gap-2">
                                 {isEditing ? (
                                   <>
                                     <button 
-                                      onClick={() => handleUpdateBundle(bundle.id, { description: editingBundle.description, capacity: editingBundle.capacity, cost_price: editingBundle.cost_price, selling_price: editingBundle.selling_price })}
-                                      className="text-xs font-medium px-3 py-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md transition-colors"
+                                      onClick={() => handleUpdateBundle(bundle.id, { 
+                                        description: editingBundle.description, 
+                                        capacity: editingBundle.capacity,
+                                        selling_price: parseFloat(editingBundle.selling_price) || 0,
+                                        cost_price: parseFloat(editingBundle.cost_price || '0') || 0
+                                      })}
+                                      disabled={isActionProcessing}
+                                      className="text-xs font-medium px-3 py-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md transition-colors disabled:opacity-50"
                                     >
-                                      Save
+                                      {isActionProcessing ? '...' : 'Save'}
                                     </button>
                                     <button 
                                       onClick={() => setEditingBundle(null)}
-                                      className="text-xs font-medium px-3 py-1 border border-slate-200 text-slate-600 hover:bg-slate-50 opacity-80 hover:opacity-100 rounded-md transition-colors"
+                                      disabled={isActionProcessing}
+                                      className="text-xs font-medium px-3 py-1 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md transition-colors disabled:opacity-50"
                                     >
                                       Cancel
                                     </button>
@@ -809,13 +1034,15 @@ export default function AdminDashboard() {
                                   <>
                                     <button 
                                       onClick={() => setEditingBundle({ ...bundle })}
-                                      className="text-indigo-600 hover:text-indigo-800 font-medium text-xs px-2 py-1"
+                                      disabled={isActionProcessing}
+                                      className="text-indigo-600 hover:text-indigo-800 font-medium text-xs px-2 py-1 disabled:opacity-50"
                                     >
                                       Edit
                                     </button>
                                     <button 
-                                        onClick={() => handleDeleteBundle(bundle.id)}
-                                      className="text-red-500 hover:text-red-700 font-medium text-xs px-2 py-1"
+                                      onClick={() => setBundleToDelete(bundle)}
+                                      disabled={isActionProcessing}
+                                      className="text-red-500 hover:text-red-700 font-medium text-xs px-2 py-1 disabled:opacity-50"
                                     >
                                       Delete
                                     </button>
@@ -874,21 +1101,61 @@ export default function AdminDashboard() {
                   ) : (
                     <ul className="divide-y divide-slate-100">
                       {customers
-                        .filter(c => c.recipient_phone?.includes(customerSearchQuery))
-                        .map(customer => (
-                        <li key={customer.recipient_phone}>
-                          <button
-                            onClick={() => setSelectedCustomerPhone(customer.recipient_phone)}
-                            className={`w-full text-left px-6 py-4 hover:bg-slate-50 transition-colors ${selectedCustomerPhone === customer.recipient_phone ? 'bg-indigo-50/50' : ''}`}
-                          >
-                            <div className="font-semibold text-slate-900">{customer.recipient_phone || 'Unknown'}</div>
-                            <div className="flex justify-between items-center mt-1">
-                              <div className="text-xs text-slate-500">{customer.transaction_count} transaction{customer.transaction_count > 1 ? 's' : ''}</div>
-                              <div className="text-sm font-medium text-indigo-700">₵{Number(customer.total_spent).toFixed(2)}</div>
-                            </div>
-                          </button>
-                        </li>
-                      ))}
+                        .filter(c => 
+                          (c.recipient_phone && c.recipient_phone.includes(customerSearchQuery)) || 
+                          (c.email && c.email.toLowerCase().includes(customerSearchQuery.toLowerCase()))
+                        )
+                        .map(customer => {
+                          const isActive = selectedCustomerPhone === customer.recipient_phone;
+                          return (
+                            <li key={customer.id}>
+                              <div
+                                className={`w-full text-left px-6 py-4 hover:bg-slate-50 transition-colors ${isActive ? 'bg-indigo-50/50' : ''}`}
+                              >
+                                <div className="flex justify-between items-start">
+                                  <div className="flex-1 min-w-0" onClick={() => setSelectedCustomerPhone(customer.recipient_phone === 'No phone recorded' ? 'NONE' : customer.recipient_phone)}>
+                                    <div className="font-semibold text-slate-900 truncate hover:text-indigo-600 transition-colors cursor-pointer">{customer.email}</div>
+                                    <div className="text-xs text-slate-500 mb-1 flex items-center gap-1">
+                                      <CreditCard size={10} />
+                                      {customer.recipient_phone}
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <div className="text-xs text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 italic">
+                                        {customer.transaction_count} purchases
+                                      </div>
+                                      <div className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">₵{Number(customer.total_spent).toFixed(2)}</div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 ml-4">
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedCustomerPhone(customer.recipient_phone === 'No phone recorded' ? 'NONE' : customer.recipient_phone);
+                                        setViewingCustomerTransactions(customer);
+                                      }}
+                                      title="View Detailed Transactions"
+                                      className="p-1.5 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg transition-all border border-indigo-100"
+                                    >
+                                      <Search size={14} />
+                                    </button>
+                                    {customer.id !== user?.id && (
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setCustomerToDelete(customer);
+                                        }}
+                                        title="Delete Customer Account"
+                                        className="p-1.5 text-red-500 hover:bg-red-500 hover:text-white rounded-lg transition-all border border-red-100"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
                     </ul>
                   )}
                 </div>
@@ -906,6 +1173,12 @@ export default function AdminDashboard() {
                     <div className="h-full flex flex-col items-center justify-center text-slate-500">
                       <CreditCard className="h-12 w-12 text-slate-200 mb-4" />
                       <p>Select a customer from the list to view their transactions.</p>
+                    </div>
+                  ) : selectedCustomerPhone === 'NONE' ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center">
+                      <Activity className="h-12 w-12 text-slate-200 mb-4" />
+                      <h4 className="font-semibold text-slate-700">No Transaction History</h4>
+                      <p className="max-w-xs mt-2">This user is registered but hasn't placed any data orders yet.</p>
                     </div>
                   ) : customerTransactions.length === 0 ? (
                      <div className="h-full flex flex-col items-center justify-center text-slate-500">
@@ -944,6 +1217,297 @@ export default function AdminDashboard() {
           </motion.div>
         )}
       </main>
+
+      {/* Main Footer or generic content if needed */}
+      <AnimatePresence>
+        {bundleToDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setBundleToDelete(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+            >
+              <div className="p-6">
+                <div className="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-4">
+                  <Database size={24} />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">Delete Data Bundle?</h3>
+                <p className="text-slate-600 mb-6 font-medium">
+                  Are you sure you want to delete <span className="font-semibold">{bundleToDelete.network} {bundleToDelete.capacity}</span>? This action cannot be undone.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleDeleteBundle(bundleToDelete.id)}
+                    disabled={isActionProcessing}
+                    className="flex-1 px-4 py-2.5 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50"
+                  >
+                    {isActionProcessing ? 'Deleting...' : 'Yes, Delete'}
+                  </button>
+                  <button
+                    onClick={() => setBundleToDelete(null)}
+                    disabled={isActionProcessing}
+                    className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-600 font-semibold rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {customerToDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCustomerToDelete(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+            >
+              <div className="p-6">
+                <div className="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-4">
+                  <Users size={24} />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">Delete Customer?</h3>
+                <p className="text-slate-600 mb-6 font-medium">
+                  Are you sure you want to delete <span className="font-semibold">{customerToDelete.email}</span>? This will also remove their transaction history.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleDeleteCustomer(customerToDelete.id)}
+                    disabled={isActionProcessing}
+                    className="flex-1 px-4 py-2.5 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50"
+                  >
+                    {isActionProcessing ? 'Deleting...' : 'Delete Customer'}
+                  </button>
+                  <button
+                    onClick={() => setCustomerToDelete(null)}
+                    className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-600 font-semibold rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {viewingCustomerTransactions && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setViewingCustomerTransactions(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[80vh]"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Transaction Details</h3>
+                  <p className="text-xs text-slate-500">{viewingCustomerTransactions.email}</p>
+                </div>
+                <button 
+                  onClick={() => setViewingCustomerTransactions(null)}
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6">
+                {selectedCustomerPhone === 'NONE' ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-slate-500 text-center">
+                    <Activity className="h-12 w-12 text-slate-200 mb-4" />
+                    <h4 className="font-semibold text-slate-700">No History</h4>
+                    <p className="max-w-xs mt-2">This user has not placed any orders yet.</p>
+                  </div>
+                ) : customerTransactions.length === 0 ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-slate-500">
+                    <Activity className="animate-spin text-indigo-500 h-8 w-8 mb-4" />
+                    <p>Fetching transactions...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {customerTransactions.map(tx => (
+                      <div key={tx.id} className="border border-slate-100 rounded-xl p-4 hover:shadow-sm transition-all bg-slate-50/50">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="font-semibold text-slate-900">{tx.network} - {tx.capacity}</div>
+                            <div className="text-xs text-slate-500">{new Date(tx.created_at).toLocaleString()}</div>
+                          </div>
+                          <div className="font-bold text-indigo-600">₵{Number(tx.amount).toFixed(2)}</div>
+                        </div>
+                        <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200/50">
+                          <div className="text-xs font-mono text-slate-400">Ref: {tx.paystack_receipt || tx.id.substring(0, 8)}</div>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              tx.status === 'success' || tx.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              tx.status === 'failed' ? 'bg-red-100 text-red-700' :
+                              tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-slate-100 text-slate-700'
+                            }`}>
+                              {tx.status || 'N/A'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+                <button 
+                  onClick={() => setViewingCustomerTransactions(null)}
+                  className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isAddingBundle && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAddingBundle(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+            >
+              <form onSubmit={handleCreateBundle}>
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-slate-900">Add New Data Bundle</h3>
+                  <button 
+                    type="button"
+                    onClick={() => setIsAddingBundle(false)}
+                    className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Network</label>
+                      <select 
+                        value={newBundle.network}
+                        onChange={(e) => setNewBundle({...newBundle, network: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      >
+                        <option value="MTN">MTN</option>
+                        <option value="Telecel">Telecel</option>
+                        <option value="AirtelTigo">AirtelTigo</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Capacity</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 1GB, 500MB"
+                        value={newBundle.capacity}
+                        onChange={(e) => setNewBundle({...newBundle, capacity: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Regular Daily Plan"
+                      value={newBundle.description}
+                      onChange={(e) => setNewBundle({...newBundle, description: e.target.value})}
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Selling Price (₵)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        placeholder="0.00"
+                        value={newBundle.selling_price}
+                        onChange={(e) => setNewBundle({...newBundle, selling_price: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₵)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        placeholder="0.00"
+                        value={newBundle.cost_price}
+                        onChange={(e) => setNewBundle({...newBundle, cost_price: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <input 
+                      type="checkbox" 
+                      id="is_active"
+                      checked={newBundle.is_active}
+                      onChange={(e) => setNewBundle({...newBundle, is_active: e.target.checked})}
+                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                    />
+                    <label htmlFor="is_active" className="text-sm font-medium text-slate-700">Activate bundle immediately</label>
+                  </div>
+                </div>
+                <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setIsAddingBundle(false)}
+                    className="flex-1 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 font-semibold rounded-xl hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isActionProcessing}
+                    className="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
+                  >
+                    {isActionProcessing ? 'Creating...' : 'Create Bundle'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

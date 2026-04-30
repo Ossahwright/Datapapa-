@@ -16,22 +16,24 @@ export default function AdminAuth() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check if already logged in
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Check if already logged in on initial load
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        navigate('/admin');
-      }
-    });
+        // If session exists, try to verify role quickly
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
-        navigate('/admin');
+        if (profile?.role === 'admin') {
+          navigate('/admin');
+        }
       }
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
     };
+    
+    checkSession();
   }, [navigate]);
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -48,6 +50,7 @@ export default function AdminAuth() {
           options: {
             data: {
               full_name: fullName,
+              role: 'admin' // Attempt to set role in metadata as fallback
             }
           }
         });
@@ -65,14 +68,41 @@ export default function AdminAuth() {
           setSuccessMsg('Registration successful! Logging you in...');
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
+
         if (error) throw error;
+
+        const user = data.user;
+        if (!user) throw new Error("No user returned");
+
+        // 🔥 FETCH ROLE FROM PROFILES TABLE (correct way)
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+
+        if (profileError) {
+          console.error("Profile fetch error:", profileError);
+          // If profile doesn't exist, they might not be an admin
+          await supabase.auth.signOut();
+          throw new Error("Access denied. Admin profile not found.");
+        }
+
+        if (profile?.role !== 'admin') {
+          await supabase.auth.signOut();
+          throw new Error("Access denied. Administrator privileges required.");
+        }
+
+        // ✅ Success
+        navigate('/admin');
       }
     } catch (err: any) {
       setError(err.message || 'An error occurred during authentication.');
+      console.error("Auth error:", err);
     } finally {
       setIsLoading(false);
     }
