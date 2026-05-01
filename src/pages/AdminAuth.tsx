@@ -101,7 +101,13 @@ export default function AdminAuth() {
         navigate('/admin');
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred during authentication.');
+      let errorMessage = err.message || 'An error occurred during authentication.';
+      
+      if (errorMessage === 'Invalid login credentials') {
+        errorMessage = 'Invalid login credentials. This usually means your email/password is incorrect, or you need to confirm your email address. If you just registered, check your inbox for a confirmation link (or disable "Confirm Email" in your Supabase project settings -> Authentication -> Providers -> Email).';
+      }
+
+      setError(errorMessage);
       console.error("Auth error:", err);
     } finally {
       setIsLoading(false);

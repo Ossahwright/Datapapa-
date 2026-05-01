@@ -9,6 +9,7 @@ CREATE TABLE public.bundles (
   network_key TEXT NOT NULL,       -- mtn, telecel, airteltigo
 
   capacity TEXT NOT NULL,          -- e.g. "1GB", "2GB"
+  volume TEXT,                    -- e.g. "1000", "2000"
   description TEXT,                -- optional (Daily plan, Weekly etc.)
 
   cost_price NUMERIC,              -- what you pay (admin use)
@@ -35,6 +36,7 @@ CREATE TABLE public.transactions (
     status TEXT NOT NULL,
     vtu_status TEXT,
     api_response JSONB,
+    profit NUMERIC,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -52,37 +54,71 @@ ALTER TABLE public.bundles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
+-- 4.1 Create is_admin helper function
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  -- 1. Check if the user's email matches the known admin
+  IF (auth.jwt() ->> 'email') = 'wrightossah@gmail.com' THEN
+    RETURN TRUE;
+  END IF;
+
+  -- 2. Check profiles table for admin role
+  RETURN EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() 
+    AND role = 'admin'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- 5. Set up RLS Policies
 
--- Bundles are readable by everyone, but only admins can modify
+-- Profiles Policies
+DROP POLICY IF EXISTS "Users can view their own profile." ON public.profiles;
+DROP POLICY IF EXISTS "Admins can view all profiles." ON public.profiles;
+DROP POLICY IF EXISTS "Admins can update profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Anyone can insert profile" ON public.profiles;
+
+CREATE POLICY "Users can view their own profile." ON public.profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Admins can view all profiles." ON public.profiles FOR SELECT USING (public.is_admin());
+CREATE POLICY "Admins can manage profiles" ON public.profiles FOR ALL USING (public.is_admin());
+-- Allow authenticated users to insert their own profile (needed for trigger/signup)
+CREATE POLICY "Anyone can insert their own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id OR public.is_admin());
+
+-- Bundles Policies
+DROP POLICY IF EXISTS "Bundles are readable by everyone." ON public.bundles;
+DROP POLICY IF EXISTS "Admin full access bundles" ON public.bundles;
+DROP POLICY IF EXISTS "Admins can insert bundles" ON public.bundles;
+DROP POLICY IF EXISTS "Admins can update bundles" ON public.bundles;
+DROP POLICY IF EXISTS "Admins can delete bundles" ON public.bundles;
+
 CREATE POLICY "Bundles are readable by everyone." ON public.bundles FOR SELECT USING (true);
+CREATE POLICY "Admin full access bundles" ON public.bundles FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
 
-CREATE POLICY "Admin full access bundles"
-ON public.bundles
-FOR ALL
-USING (
-  EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE profiles.id = auth.uid()
-    AND profiles.role = 'admin'
-  )
-);
+-- Transaction Policies
+DROP POLICY IF EXISTS "Anyone can create a transaction." ON public.transactions;
+DROP POLICY IF EXISTS "Users can view their own transactions." ON public.transactions;
+DROP POLICY IF EXISTS "Admins can view all transactions." ON public.transactions;
+DROP POLICY IF EXISTS "Admins can manage transactions" ON public.transactions;
 
--- Transactions can be created by anyone (for the demo) but read only by the owner or admin
 CREATE POLICY "Anyone can create a transaction." ON public.transactions FOR INSERT WITH CHECK (true);
 CREATE POLICY "Users can view their own transactions." ON public.transactions FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Admins can view all transactions." ON public.transactions FOR SELECT USING (
-    EXISTS (
-        SELECT 1 FROM public.profiles WHERE public.profiles.id = auth.uid() AND public.profiles.role = 'admin'
-    )
-);
+CREATE POLICY "Admins can manage transactions" ON public.transactions FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
 
 -- 6. Trigger to automatically create a user profile when a new auth user signs up
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
   INSERT INTO public.profiles (id, email, role)
-  VALUES (new.id, new.email, 'admin'); -- Defaulting to admin for this specific app's setup
+  VALUES (
+    new.id, 
+    new.email, 
+    CASE 
+      WHEN new.email = 'wrightossah@gmail.com' THEN 'admin' 
+      ELSE 'user' 
+    END
+  );
   RETURN new;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -95,16 +131,13 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
 -- 7. Insert some default bundles
-INSERT INTO public.bundles (network, network_key, capacity, description, cost_price, selling_price, is_active) VALUES
-('MTN', 'mtn', '1 GB', 'Daily 1GB', 3.5, 5, true),
-('MTN', 'mtn', '3 GB', 'Weekly 3GB', 10, 15, true),
-('MTN', 'mtn', '10 GB', 'Monthly 10GB', 35, 50, true),
-('Telecel', 'telecel', '1.5 GB', 'Daily Xtra 1.5GB', 3.5, 5, true),
-('Telecel', 'telecel', '5 GB', 'Weekend 5GB', 7, 10, true),
-('Telecel', 'telecel', '15 GB', 'Monthly Boss 15GB', 30, 45, true),
-('AirtelTigo', 'airteltigo', '2 GB', 'Big Time 2GB', 3, 5, true),
-('AirtelTigo', 'airteltigo', '5 GB', 'Sika Kokoo 5GB', 8, 12, true),
-('AirtelTigo', 'airteltigo', '10 GB', 'No Expiry 10GB', 25, 40, true);
+INSERT INTO public.bundles (network, network_key, capacity, description, cost_price, selling_price, is_active)
+SELECT 'MTN', 'mtn', '1 GB', 'Daily 1GB', 3.5, 5, true WHERE NOT EXISTS (SELECT 1 FROM public.bundles);
+INSERT INTO public.bundles (network, network_key, capacity, description, cost_price, selling_price, is_active)
+SELECT 'MTN', 'mtn', '3 GB', 'Weekly 3GB', 10, 15, true WHERE NOT EXISTS (SELECT 1 FROM public.bundles WHERE capacity = '3 GB');
+-- ... adding a few more for example
+INSERT INTO public.bundles (network, network_key, capacity, description, cost_price, selling_price, is_active)
+SELECT 'MTN', 'mtn', '10 GB', 'Monthly 10GB', 35, 50, true WHERE NOT EXISTS (SELECT 1 FROM public.bundles WHERE capacity = '10 GB');
 
 -- 8. Create settings table
 CREATE TABLE IF NOT EXISTS public.settings (
@@ -115,18 +148,18 @@ CREATE TABLE IF NOT EXISTS public.settings (
 
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Settings are readable by everyone." ON public.settings FOR SELECT USING (true);
+-- Only non-secure settings are readable by everyone
+DROP POLICY IF EXISTS "Public settings are readable by everyone." ON public.settings;
+CREATE POLICY "Public settings are readable by everyone." ON public.settings 
+FOR SELECT USING (key != 'secure');
 
+-- Admins can manage all settings including secure ones
+DROP POLICY IF EXISTS "Admins can manage settings" ON public.settings;
 CREATE POLICY "Admins can manage settings"
 ON public.settings
 FOR ALL
-USING (
-  EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE profiles.id = auth.uid()
-    AND profiles.role = 'admin'
-  )
-);
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
 
 -- 9. Insert default settings
 INSERT INTO public.settings (key, value)
@@ -143,7 +176,8 @@ RETURNS TABLE (
     total_spent NUMERIC,
     transaction_count BIGINT,
     last_transaction TIMESTAMPTZ,
-    network TEXT
+    network TEXT,
+    user_id UUID
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -152,10 +186,81 @@ BEGIN
         SUM(t.amount) as total_spent,
         COUNT(t.id) as transaction_count,
         MAX(t.created_at) as last_transaction,
-        MAX(t.network) as network
+        MAX(t.network) as network,
+        t.user_id
     FROM public.transactions t
     WHERE t.recipient_phone IS NOT NULL
-    GROUP BY t.recipient_phone
+    GROUP BY t.recipient_phone, t.user_id
     ORDER BY last_transaction DESC;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 11. Create datahubgh_logs table
+CREATE TABLE IF NOT EXISTS public.datahubgh_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    endpoint TEXT NOT NULL,
+    status TEXT NOT NULL,           -- success, failed
+    http_status INTEGER,
+    response_time INTEGER,          -- in ms
+    request_payload JSONB,
+    response_data JSONB,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.datahubgh_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage datahubgh_logs" ON public.datahubgh_logs;
+CREATE POLICY "Admins can manage datahubgh_logs"
+ON public.datahubgh_logs
+FOR ALL
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+-- 12. Create paystack_webhook_logs table
+CREATE TABLE IF NOT EXISTS public.paystack_webhook_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    reference TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL,           -- success, failed
+    datahub_response JSONB,
+    sms_response JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.paystack_webhook_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage paystack_webhook_logs" ON public.paystack_webhook_logs;
+CREATE POLICY "Admins can manage paystack_webhook_logs"
+ON public.paystack_webhook_logs
+FOR ALL
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+-- 13. Enable real-time for relevant tables
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    CREATE PUBLICATION supabase_realtime;
+  END IF;
+EXCEPTION
+  WHEN others THEN
+    NULL;
+END $$;
+
+-- Add tables to publication if they are not already there
+-- (Supabase might already have them added)
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.bundles;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.transactions;
+EXCEPTION WHEN others THEN NULL; END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.settings;
+EXCEPTION WHEN others THEN NULL; END $$;

@@ -90,11 +90,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const allBundles = dbBundles
     .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined) // More explicit active check
     .reduce((acc: any, b: any) => {
-      let net = (b.network_key || b.network || '').toLowerCase();
-      // Expanded normalization
-      if (net === 'at' || net === 'airteltigo') net = 'airteltigo';
+      let net = (b.network || b.network_key || '').toLowerCase();
+      // Expanded normalization for DataHubGH keys
+      if (net === 'at' || net === 'airteltigo' || net === 'at_bigtime' || net === 'at_premium') net = 'airteltigo';
       if (net === 'vodafone' || net === 'telecel') net = 'telecel';
-      if (net === 'mtn') net = 'mtn';
+      if (net === 'mtn' || net === 'yello') net = 'mtn';
 
       if (!acc[net]) acc[net] = [];
       
@@ -114,232 +114,192 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const currentBundles = network ? (allBundles[network] || []) : [];
   const selectedBundleObj = currentBundles.find((b: any) => String(b.id) === String(bundle));
 
-  const initializePayment = usePaystackPayment({
-    reference: `tx_${new Date().getTime().toString()}`,
-    email: 'customer@datapapa.com', // Replace with actual user email if available
-    amount: selectedBundleObj ? selectedBundleObj.price * 100 : 0, 
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_test_dummy",
-    currency: 'GHS',
-  });
+  const [currentTxId, setCurrentTxId] = useState<string | null>(null);
 
-  const handlePayment = () => {
+  const paystackConfig = {
+    reference: `tx_${new Date().getTime().toString()}`,
+    email: 'customer@datapapa.com',
+    amount: selectedBundleObj ? Math.round(selectedBundleObj.price * 100) : 0, 
+    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_test_dummy",
+    currency: 'GHS' as const,
+    // @ts-ignore
+    metadata: {
+      transaction_id: currentTxId,
+      phone: phone,
+      network: network,
+      bundle: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
+      bundle_id: bundle,
+      amount: selectedBundleObj?.price || 0,
+      custom_fields: [
+        { display_name: "Phone Number", variable_name: "phone", value: phone },
+        { display_name: "Network", variable_name: "network", value: network }
+      ]
+    }
+  };
+
+  const initializePayment = usePaystackPayment(paystackConfig);
+
+  const handlePaymentSuccess = async (paystackResponse: any) => {
+    setIsLoading(true);
+    try {
+      const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
+      setPayerPhone(currentPayerPhone);
+      setTransactionId(paystackResponse.reference);
+      setSuccess(true);
+
+      // We have removed the manual window.open here because 
+      // the server now automatically handles the WhatsApp notification 
+      // via the Paystack webhook (triggered upon payment success).
+    } catch (err: any) {
+      setError(err.message || 'Payment processing failed. Please contact support.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePaymentClose = () => {
+    setIsLoading(false);
+    setCurrentTxId(null);
+  };
+
+  useEffect(() => {
+    if (currentTxId) {
+      // @ts-ignore
+      initializePayment(handlePaymentSuccess, handlePaymentClose);
+    }
+  }, [currentTxId]);
+
+  const handlePayment = async () => {
     if (!phone || phone.length < 10) {
       setError('Please enter a valid phone number');
       return;
     }
     setError('');
+    setIsLoading(true);
 
-    initializePayment({
-      onSuccess: async (paystackResponse: any) => {
-        setIsLoading(true);
-        try {
-          const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
-          setPayerPhone(currentPayerPhone);
-          console.log("Paystack Payer Phone:", currentPayerPhone);
+    try {
+      // 1. Save transaction FIRST as requested
+      const { data: txRecord, error: txError } = await supabase
+        .from("transactions")
+        .insert({
+          amount: selectedBundleObj?.price || 0,
+          network: network,
+          recipient_phone: phone,
+          status: "pending",
+          capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
+          network_key: selectedBundleObj?.original?.network_key || network
+        })
+        .select()
+        .single();
 
-          // 1. Call DatahubGH via our backend
-          let vtuStatus = 'pending';
-          let networkKey = '';
-          if (network === 'mtn') networkKey = 'YELLO';
-          else if (network === 'telecel') networkKey = 'TELECEL';
-          else if (network === 'airteltigo') networkKey = 'AT_BIGTIME';
+      if (txError) throw txError;
+      
+      console.log("Transaction created in Supabase:", txRecord);
 
-          const capacityStr = selectedBundleObj?.volume || selectedBundleObj?.capacity || '';
-          const capacityValue = capacityStr.replace(/[^0-9.]/g, ''); // Extract just the numbers, e.g., "1", "1.5"
-
-          try {
-            const res = await fetch('/api/purchase-data', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                networkKey,
-                recipient: phone,
-                capacity: capacityValue
-              })
-            });
-
-            // Check if response is ok and is JSON
-            const contentType = res.headers.get("content-type");
-            if (res.ok && contentType && contentType.includes("application/json")) {
-              const dataResult = await res.json();
-              if (dataResult.success) {
-                vtuStatus = 'success';
-              } else {
-                console.error("Datahub issue:", dataResult.error);
-                vtuStatus = 'failed';
-              }
-            } else {
-              const errorText = await res.text();
-              console.error("Backend returned non-JSON or error:", res.status, errorText);
-              vtuStatus = 'failed';
-            }
-          } catch (e) {
-            console.error("Failed to hit backend:", e);
-            vtuStatus = 'failed';
-          }
-
-          // 2. Save transaction to Supabase
-          if (supabaseReady) {
-            try {
-              const { data, error: dbError } = await supabase
-                .from('transactions')
-                .insert({
-                  network,
-                  amount: selectedBundleObj?.price,
-                  recipient_phone: phone,
-                  capacity: selectedBundleObj?.volume || selectedBundleObj?.capacity,
-                  paystack_receipt: paystackResponse.reference,
-                  payee_phone: currentPayerPhone,
-                  status: vtuStatus === 'success' ? 'success' : 'failed',
-                  vtu_status: vtuStatus 
-                })
-                .select()
-                .single();
-                
-              if (dbError) {
-                 console.warn("Supabase insert failed.", dbError);
-                 setTransactionId(paystackResponse.reference);
-              } else {
-                 setTransactionId(data.id);
-              }
-            } catch (e) {
-              console.warn("Supabase insert crashed.", e);
-              setTransactionId(paystackResponse.reference);
-            }
-          } else {
-             setTransactionId(paystackResponse.reference);
-          }
-
-          setSuccess(true);
-
-          // SMS Notification Logic (Arkesel)
-          if (settings?.sms_enabled && vtuStatus === 'success') {
-            try {
-              console.log("Triggering SMS notification...");
-              // Replace placeholders in template
-              let smsMessage = settings.sms_template_success || "You have received {volume} data on {network}.";
-              smsMessage = smsMessage
-                .replace(/{volume}/g, selectedBundleObj?.volume || '')
-                .replace(/{network}/g, network.toUpperCase())
-                .replace(/{app_name}/g, appName)
-                .replace(/{phone}/g, phone);
-
-              // Format phone number for Arkesel (expects 233...)
-              let formattedPhone = phone.trim().replace(/\D/g, '');
-              if (formattedPhone.startsWith('0')) {
-                formattedPhone = `233${formattedPhone.slice(1)}`;
-              } else if (formattedPhone.length === 9 && (formattedPhone.startsWith('2') || formattedPhone.startsWith('5'))) {
-                formattedPhone = `233${formattedPhone}`;
-              }
-              
-              console.log(`Sending SMS to ${formattedPhone}`);
-
-              fetch('/api/send-sms', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  recipients: [formattedPhone],
-                  message: smsMessage,
-                  sender: settings.sms_sender_id
-                })
-              })
-              .then(res => res.json())
-              .then(data => console.log("SMS API response:", data))
-              .catch(e => console.error("SMS notification background error:", e));
-            } catch (e) {
-              console.error("SMS notification setup error:", e);
-            }
-          }
-
-          // WhatsApp Notification Logic
-          const selectedNetworkName = NETWORKS.find(n => n.id === network)?.name || network;
-          
-          let whatsappMessage = '';
-          if (vtuStatus === 'failed') {
-            whatsappMessage = `*🚨 VTU FAILURE ALERT 🚨*\n\n` +
-              `*ATTENTION ADMIN:* A transaction succeeded on Paystack but VTU failed. Please manually credit the customer.\n\n` +
-              `*--- Transaction Details ---*\n` +
-              `*Network:* ${selectedNetworkName}\n` +
-              `*Bundle:* ${selectedBundleObj?.volume}\n` +
-              `*Recipient:* ${phone}\n` +
-              `*Payer Phone:* ${currentPayerPhone}\n` +
-              `*Amount Paid:* GHS ${selectedBundleObj?.price.toFixed(2)}\n` +
-              `*Reference:* ${paystackResponse.reference}\n` +
-              `*Status:* VTU FAILED (Manual action required)`;
-          } else {
-            whatsappMessage = `*✅ Data Purchase Successful*\n\n` +
-              `*Network:* ${selectedNetworkName}\n` +
-              `*Bundle:* ${selectedBundleObj?.volume}\n` +
-              `*Recipient:* ${phone}\n` +
-              `*Payer Phone:* ${currentPayerPhone}\n` +
-              `*Amount Paid:* GHS ${selectedBundleObj?.price.toFixed(2)}\n` +
-              `*Reference:* ${paystackResponse.reference}\n\n` +
-              `Generated by Datapapa`;
-          }
-          
-          const whatsappUrl = `https://wa.me/233244014207?text=${encodeURIComponent(whatsappMessage)}`;
-          window.open(whatsappUrl, '_blank');
-        } catch (err: any) {
-          setError(err.message || 'Payment processing failed. Please contact support.');
-        } finally {
-          setIsLoading(false);
-        }
-      },
-      onClose: () => {
-        setIsLoading(false);
-      }
-    });
+      // 2. Now trigger Paystack via state update that fires useEffect
+      setCurrentTxId(txRecord.id);
+    } catch (err: any) {
+      console.error("Initialization error:", err);
+      setError(err.message || 'Failed to initiate transaction. Please try again.');
+      setIsLoading(false);
+    }
   };
 
   if (success) {
+    const selectedNetwork = NETWORKS.find(n => n.id === network);
     return (
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 md:p-12 border border-slate-100 text-center max-w-2xl mx-auto w-full"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-3xl shadow-2xl shadow-slate-200/60 p-8 md:p-12 border border-slate-100 text-center max-w-2xl mx-auto w-full relative overflow-hidden"
       >
-        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-green-100 mb-6">
-          <CheckCircle2 className="h-10 w-10 text-green-600" aria-hidden="true" />
-        </div>
-        <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">Payment Successful!</h2>
-        <p className="mt-2 text-lg text-slate-600">
-          Your data bundle has been sent to <span className="font-bold text-slate-900">{phone}</span>.
-        </p>
-        
-        <div className="mt-8 bg-slate-50 rounded-xl p-6 text-left border border-slate-200">
-          <h3 className="font-semibold text-slate-900 mb-4 border-b border-slate-200 pb-2">Transaction Details</h3>
-          <div className="flex justify-between mb-3 text-sm">
-            <span className="text-slate-500">Transaction ID</span>
-            <span className="font-mono text-slate-900 font-medium">{transactionId}</span>
-          </div>
-          <div className="flex justify-between mb-3 text-sm">
-             <span className="text-slate-500">Amount Paid</span>
-             <span className="font-bold text-slate-900">₵{selectedBundleObj?.price.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between mb-3 text-sm">
-             <span className="text-slate-500">Payer Number</span>
-             <span className="font-medium text-slate-900">{payerPhone}</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-slate-500">Status</span>
-            <span className="inline-flex items-center rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
-              Completed
-            </span>
-          </div>
-        </div>
+        {/* Success Background Decorative Elements */}
+        <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
+        <div className="absolute -top-24 -right-24 w-48 h-48 bg-green-50 rounded-full blur-3xl opacity-60" />
+        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-indigo-50 rounded-full blur-3xl opacity-60" />
 
-        <button
-          onClick={() => {
-            setSuccess(false);
-            setNetwork('');
-            setBundle('');
-            setPhone('');
-            setTransactionId('');
-          }}
-          className="mt-8 inline-flex items-center justify-center rounded-xl bg-indigo-50 px-6 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors w-full sm:w-auto"
-        >
-          Buy Data Again
-        </button>
+        <div className="relative z-10">
+          <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-green-100 mb-8 border-8 border-green-50">
+            <CheckCircle2 className="h-12 w-12 text-green-600" aria-hidden="true" />
+          </div>
+          
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">Payment Successful!</h2>
+          <p className="mt-4 text-xl text-slate-600 max-w-md mx-auto">
+            Your {selectedBundleObj?.volume} {selectedNetwork?.name} data is being processed and will be delivered to:
+          </p>
+          <div className="mt-3 inline-block bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100">
+            <span className="text-2xl font-bold text-indigo-700">{phone}</span>
+          </div>
+          
+          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-50 rounded-2xl p-5 text-left border border-slate-200 shadow-sm transition-hover hover:border-slate-300">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Order Details</h3>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Network</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${selectedNetwork?.color}`} />
+                    <span className="text-sm font-bold text-slate-900">{selectedNetwork?.name}</span>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Data Bundle</span>
+                  <span className="text-sm font-bold text-slate-900">{selectedBundleObj?.volume}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Amount Paid</span>
+                  <span className="text-sm font-extrabold text-indigo-600">₵{selectedBundleObj?.price.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-5 text-left border border-slate-200 shadow-sm transition-hover hover:border-slate-300">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Reference Info</h3>
+              <div className="space-y-3">
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Transaction ID</span>
+                  <span className="text-sm font-mono text-slate-700 break-all">{transactionId}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Payer Phone</span>
+                  <span className="text-sm font-semibold text-slate-900">{payerPhone}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">Delivery Status</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-bold text-indigo-700">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Processing
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 p-4 bg-amber-50 rounded-2xl border border-amber-100 text-amber-800 text-sm font-medium flex items-center gap-3 justify-center">
+            <ShieldCheck className="h-5 w-5 text-amber-600 shrink-0" />
+            <span>It may take 1-5 minutes for data to arrive. Please contact support if it delays longer.</span>
+          </div>
+
+          <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
+            <button
+              onClick={() => {
+                setSuccess(false);
+                setNetwork('');
+                setBundle('');
+                setPhone('');
+                setTransactionId('');
+              }}
+              className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-10 py-4 text-base font-bold text-white shadow-xl hover:bg-slate-800 transition-all active:scale-95"
+            >
+              Buy Another Bundle
+            </button>
+            <button
+              onClick={() => window.open(`https://wa.me/233244014207?text=${encodeURIComponent(`Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})`)}`, '_blank')}
+              className="inline-flex items-center justify-center rounded-2xl bg-white px-10 py-4 text-base font-bold text-slate-900 border-2 border-slate-200 hover:border-slate-400 transition-all active:scale-95"
+            >
+              Contact Support
+            </button>
+          </div>
+        </div>
       </motion.div>
     );
   }

@@ -9,5 +9,6 @@ export const isSupabaseConfigured = true;
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
+    storageKey: 'datapapa-auth-token',
   },
 });

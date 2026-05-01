@@ -18,7 +18,13 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeft,
-  MessageSquare
+  MessageSquare,
+  Wallet,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  History,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -40,12 +46,27 @@ export default function AdminDashboard() {
   const [totalTransactions, setTotalTransactions] = useState(0);
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
+  const [lastBundlesSync, setLastBundlesSync] = useState<string>(new Date().toLocaleTimeString());
   const [editingBundle, setEditingBundle] = useState<any>(null);
+  const [selectedBundle, setSelectedBundle] = useState<any>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({
+    network: '',
+    network_key: '',
+    capacity: '',
+    volume: '',
+    description: '',
+    selling_price: '',
+    cost_price: '',
+    is_active: true
+  });
   const [bundleToDelete, setBundleToDelete] = useState<any>(null);
   const [isAddingBundle, setIsAddingBundle] = useState(false);
   const [newBundle, setNewBundle] = useState({
     network: 'MTN',
+    network_key: 'YELLO',
     capacity: '',
+    volume: '',
     description: '',
     selling_price: '',
     cost_price: '',
@@ -65,67 +86,89 @@ export default function AdminDashboard() {
     sms_sender_id: 'Datapapa',
     sms_template_success: 'Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}.'
   });
+  const [secureSettings, setSecureSettings] = useState({
+    datahub_api_key: ''
+  });
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSendingTestSMS, setIsSendingTestSMS] = useState(false);
   const [testSMSResult, setTestSMSResult] = useState<{success: boolean, message: string} | null>(null);
   const [testPhone, setTestPhone] = useState('');
+  const [serverStatus, setServerStatus] = useState<'checking' | 'up' | 'down'>('checking');
+  
+  // DataHub Integration State
+  const [dataHubSettings, setDataHubSettings] = useState({
+    base_url: 'https://app.datahubgh.com/api/external',
+    api_key: '',
+    status: 'inactive'
+  });
+  const [dataHubBalance, setDataHubBalance] = useState<number | null>(null);
+  const [dataHubPing, setDataHubPing] = useState<number | null>(null);
+  const [isRefreshingDataHub, setIsRefreshingDataHub] = useState(false);
+  const [isTestingDataHub, setIsTestingDataHub] = useState(false);
+  const [dataHubLogs, setDataHubLogs] = useState<any[]>([]);
+  const [isFetchingLogs, setIsFetchingLogs] = useState(false);
+
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const checkServer = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) setServerStatus('up');
+        else setServerStatus('down');
+      } catch (e) {
+        setServerStatus('down');
+      }
+    };
+    checkServer();
+  }, []);
 
   const [dashboardStats, setDashboardStats] = useState({ sales: 0, transactions: 0, users: 0 });
 
   useEffect(() => {
+    let isMounted = true;
+    
     const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        navigate('/admin/auth');
-        setIsLoading(false);
-        return;
-      }
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!session || !session.user) {
+          if (isMounted) {
+            navigate('/admin/auth');
+            setIsLoading(false);
+          }
+          return;
+        }
 
-      // FETCH ROLE FROM PROFILES TABLE (correct way)
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      if (!profile || profile.role !== 'admin') {
-        console.log("Not an admin, redirecting...");
-        navigate('/admin/auth');
-      } else {
-        setUser({ ...user, role: profile.role });
-        fetchDashboardStats();
-      }
-      setIsLoading(false);
-    };
-
-    checkUser();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        navigate('/admin/auth');
-      } else if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-        // Re-verify on sign in events
         const { data: profile } = await supabase
           .from('profiles')
           .select('role')
           .eq('id', session.user.id)
           .single();
-        
-        if (profile?.role === 'admin') {
-          setUser({ ...session.user, role: profile.role });
+
+        if (!profile || profile.role !== 'admin') {
+          if (isMounted) {
+            navigate('/admin/auth');
+          }
         } else {
-          await supabase.auth.signOut();
-          navigate('/admin/auth');
+          if (isMounted) {
+            setUser({ ...session.user, role: profile.role });
+            fetchDashboardStats();
+          }
         }
+      } catch (err) {
+        console.error("Auth check failed", err);
+      } finally {
+        if (isMounted) setIsLoading(false);
       }
-    });
+    };
+
+    checkUser();
 
     return () => {
-      authListener.subscription.unsubscribe();
+      isMounted = false;
     };
   }, [navigate]);
 
@@ -170,8 +213,6 @@ export default function AdminDashboard() {
         fetchTransactions();
       }, 300);
       return () => clearTimeout(delayDebounceFn);
-    } else if (currentView === 'bundles') {
-      fetchBundles();
     } else if (currentView === 'customers') {
       fetchCustomers();
     } else if (currentView === 'settings') {
@@ -182,15 +223,44 @@ export default function AdminDashboard() {
   const fetchSettings = async () => {
     setIsLoadingSettings(true);
     try {
-      const { data, error } = await supabase
+      // Fetch general settings
+      const { data: generalData, error: generalError } = await supabase
         .from('settings')
         .select('value')
         .eq('key', 'general')
-        .single();
+        .maybeSingle();
       
-      if (error) throw error;
-      if (data) {
-        setAppSettings(prev => ({ ...prev, ...data.value }));
+      if (!generalError && generalData) {
+        setAppSettings(prev => ({ ...prev, ...generalData.value }));
+      } else if (generalError) {
+        console.error("General settings fetch error:", generalError);
+      }
+
+      // Fetch secure settings
+      const { data: secureData, error: secureError } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'secure')
+        .maybeSingle();
+      
+      if (!secureError && secureData) {
+        setSecureSettings(prev => ({ ...prev, ...secureData.value }));
+      } else if (secureError) {
+        console.error("Secure settings fetch error:", secureError);
+      }
+
+      // Fetch DataHub settings
+      const { data: dhData, error: dhError } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'datahubgh')
+        .maybeSingle();
+      
+      if (!dhError && dhData) {
+        setDataHubSettings(prev => ({ ...prev, ...dhData.value }));
+        // Trigger initial refresh
+        refreshDataHubStatus(dhData.value);
+        fetchDataHubLogs();
       }
     } catch (err) {
       console.error("Fetch settings error:", err);
@@ -203,14 +273,50 @@ export default function AdminDashboard() {
     e.preventDefault();
     setIsSavingSettings(true);
     try {
-      const { error } = await supabase
-        .from('settings')
-        .upsert({ key: 'general', value: appSettings });
+      console.log("Saving settings...", { appSettings, secureSettings });
       
-      if (error) throw error;
+      // Save general settings
+      const { error: generalError } = await supabase
+        .from('settings')
+        .upsert({ key: 'general', value: appSettings, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      
+      if (generalError) {
+        console.error("General save error:", generalError);
+        const errorMsg = generalError.message;
+        if (errorMsg.includes('row-level security')) {
+          throw new Error("Access Denied: You don't have permission to update settings. Please ensure your account has the 'admin' role in Supabase and that you've applied the latest SQL schema from supabase-setup.sql.");
+        }
+        throw new Error(`General settings: ${errorMsg}`);
+      }
+
+      // Save secure settings
+      const { error: secureError } = await supabase
+        .from('settings')
+        .upsert({ key: 'secure', value: secureSettings, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      
+      if (secureError) {
+        console.error("Secure save error:", secureError);
+        throw new Error(`Secure settings: ${secureError.message}`);
+      }
+
+      // Save DataHub settings
+      const { error: dhError } = await supabase
+        .from('settings')
+        .upsert({ key: 'datahubgh', value: dataHubSettings, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      
+      if (dhError) {
+        console.error("DataHub save error:", dhError);
+        throw new Error(`DataHub settings: ${dhError.message}`);
+      }
+
       alert("Settings updated successfully!");
     } catch (err: any) {
-      alert(`Failed to save settings: ${err.message}`);
+      console.error("Full save error:", err);
+      let errMsg = err.message || String(err);
+      if (errMsg.includes('Failed to fetch')) {
+        errMsg = "Network error: Failed to reach server. The server might be offline or restarting. Please try again in a few seconds.";
+      }
+      alert(`Failed to save settings: ${errMsg}`);
     } finally {
       setIsSavingSettings(false);
     }
@@ -233,33 +339,31 @@ export default function AdminDashboard() {
     setIsSendingTestSMS(true);
     setTestSMSResult(null);
     try {
-      const response = await fetch('/api/send-sms', {
+      console.log("Sending test SMS via /api/arkesel/send-sms to:", formattedPhone);
+      const response = await fetch('/api/arkesel/send-sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipients: [formattedPhone],
-          message: `Test SMS from ${appSettings.app_name}. If you see this, Arkesel integration is working!`,
+          to: formattedPhone,
+          message: `Test SMS from ${appSettings.app_name}. If you see this, your Arkesel integration is working!`,
           sender: appSettings.sms_sender_id
         })
       });
 
-      const contentType = response.headers.get("content-type");
-      let result;
-      
-      if (contentType && contentType.includes("application/json")) {
-        result = await response.json();
-      } else {
-        const text = await response.text();
-        throw new Error(`Server returned non-JSON response: ${text.slice(0, 100)}`);
-      }
+      const result = await response.json();
 
       if (result.success) {
         setTestSMSResult({ success: true, message: "Test SMS sent successfully!" });
       } else {
-        setTestSMSResult({ success: false, message: result.error || "Failed to send test SMS" });
+        setTestSMSResult({ success: false, message: result.message || "Failed to send test SMS" });
       }
     } catch (err: any) {
-      setTestSMSResult({ success: false, message: `Error: ${err.message}` });
+      console.error("Test SMS Error:", err);
+      let errMsg = err.message || String(err);
+      if (errMsg.includes('Failed to fetch')) {
+        errMsg = "Network error: The backend may be offline or restarting. Please try again.";
+      }
+      setTestSMSResult({ success: false, message: `Network/API Error: ${errMsg}` });
     } finally {
       setIsSendingTestSMS(false);
     }
@@ -336,32 +440,89 @@ export default function AdminDashboard() {
 
   const fetchBundles = useCallback(async () => {
     setIsLoadingBundles(true);
-    try {
-      const { data, error } = await supabase
-        .from('bundles')
-        .select('*')
-        .order('created_at', { ascending: false });
+    const { data, error } = await supabase
+      .from("bundles")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      if (error) {
-        console.error("FETCH ERROR:", error);
-      } else if (data) {
-        setBundles(data);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
+    if (error) {
+      console.error("❌ FETCH ERROR:", error);
       setIsLoadingBundles(false);
+      return;
     }
+
+    setBundles(data || []);
+    setLastBundlesSync(new Date().toLocaleTimeString());
+    setIsLoadingBundles(false);
   }, []);
 
-  const handleUpdateBundle = async (bundleId: string, updates: any) => {
-    if (isActionProcessing) return;
+  useEffect(() => {
+    fetchBundles();
+
+    const channel = supabase
+      .channel("bundles-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bundles" },
+        (payload) => {
+          console.log("🔄 REALTIME UPDATE:", payload);
+          fetchBundles();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const handleEditClick = (bundle: any) => {
+    setSelectedBundle(bundle);
+
+    setForm({
+      network: bundle.network || "",
+      network_key: bundle.network_key || "",
+      capacity: bundle.capacity || "",
+      volume: bundle.volume || "",
+      description: bundle.description || "",
+      cost_price: bundle.cost_price || "",
+      selling_price: bundle.selling_price || "",
+      is_active: bundle.is_active ?? true
+    });
+
+    setShowModal(true);
+  };
+
+  const handleUpdateBundle = async (bundleIdParam?: string, updatesParam?: any) => {
+    const bundleId = bundleIdParam || selectedBundle?.id;
+    const updates = updatesParam || {
+      network: form.network,
+      network_key: form.network_key,
+      capacity: form.capacity,
+      volume: form.volume,
+      cost_price: form.cost_price === '' ? 0 : Number(form.cost_price),
+      selling_price: form.selling_price === '' ? 0 : Number(form.selling_price),
+      description: form.description,
+      is_active: form.is_active
+    };
+
+    if (!bundleId) {
+      console.error("❌ No bundle selected");
+      return;
+    }
+
+    if (isNaN(updates.cost_price) || isNaN(updates.selling_price)) {
+      alert("Please enter valid numbers for cost and selling prices.");
+      return;
+    }
     
+    if (isActionProcessing) return;
+
     // Check for duplicate capacity if capacity is being updated
     if (updates.capacity) {
       const targetBundle = bundles.find(b => b.id === bundleId);
-      const networkToCheck = updates.network || targetBundle?.network;
-      const capacityToCheck = updates.capacity;
+      const networkToCheck = (updates.network || targetBundle?.network) as string;
+      const capacityToCheck = updates.capacity as string;
       
       const isDuplicate = bundles.some(b => 
         b.id !== bundleId && 
@@ -375,26 +536,51 @@ export default function AdminDashboard() {
       }
     }
 
-    // Save previous state for rollback
-    const previousBundles = [...bundles];
-    
-    // Optimistic Update
-    setBundles(current => current.map(b => b.id === bundleId ? { ...b, ...updates } : b));
-    setIsActionProcessing(true);
-
     try {
-      const { error } = await supabase
-        .from('bundles')
-        .update(updates)
-        .eq('id', bundleId);
+      setIsActionProcessing(true);
+      console.log("📤 Updating bundle:", bundleId);
 
-      if (error) throw error;
+      const { data, error } = await supabase
+        .from('bundles')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', bundleId)
+        .select();
+
+      if (error) {
+        console.error("❌ UPDATE ERROR:", error);
+        alert(error.message);
+        return;
+      }
+
+      console.log("✅ UPDATED DATA:", data);
+
+      // ✅ Instant UI update
+      if (data && data.length > 0) {
+        setBundles((prev) =>
+          prev.map((b) =>
+            b.id === bundleId ? { ...b, ...data[0] } : b
+          )
+        );
+      }
+
+      // 🔁 Backup sync
+      await fetchBundles();
+
+      // ✅ Close editing states
+      if (editingBundle?.id === bundleId) {
+        setEditingBundle(null);
+      }
       
-      setEditingBundle(null);
+      if (selectedBundle?.id === bundleId) {
+        setShowModal(false);
+        setSelectedBundle(null);
+      }
+
     } catch (err: any) {
-      console.error("Supabase Update Error:", err);
-      // Rollback on error
-      setBundles(previousBundles);
+      console.error("🔥 UPDATE ERROR:", err);
       alert(`Update failed: ${err.message || 'Unknown error'}`);
     } finally {
       setIsActionProcessing(false);
@@ -402,28 +588,35 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteBundle = async (bundleId: string) => {
+    if (!bundleId) return;
     if (isActionProcessing) return;
 
-    // Save previous state
-    const previousBundles = [...bundles];
-    
-    // Optimistic Update
-    setBundles(current => current.filter(b => b.id !== bundleId));
-    setIsActionProcessing(true);
-
     try {
+      setIsActionProcessing(true);
+      console.log("🗑️ Deleting bundle:", bundleId);
+
       const { error } = await supabase
         .from('bundles')
         .delete()
         .eq('id', bundleId);
 
-      if (error) throw error;
+      if (error) {
+        console.error("❌ DELETE ERROR:", error);
+        alert(error.message);
+        return;
+      }
+
+      console.log("✅ DELETED SUCCESSFULLY");
+
+      // ✅ Instant UI update
+      setBundles(current => current.filter(b => b.id !== bundleId));
+      
+      // 🔁 Backup sync
+      await fetchBundles();
       
       setBundleToDelete(null);
     } catch (err: any) {
-      console.error("Supabase Delete Error:", err);
-      // Rollback on error
-      setBundles(previousBundles);
+      console.error("🔥 DELETE ERROR:", err);
       alert(`Deletion failed: ${err.message || 'Unknown error'}`);
     } finally {
       setIsActionProcessing(false);
@@ -434,8 +627,8 @@ export default function AdminDashboard() {
     await handleUpdateBundle(bundleId, { is_active: !currentStatus });
   };
 
-  const handleCreateBundle = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleCreateBundle = async (e?: FormEvent) => {
+    if (e) e.preventDefault();
     if (isActionProcessing) return;
 
     // Check for duplicate capacity
@@ -449,34 +642,58 @@ export default function AdminDashboard() {
       return;
     }
 
-    setIsActionProcessing(true);
     try {
-      const networkKey = newBundle.network.toLowerCase().replace('airteltigo', 'airteltigo').replace('at', 'airteltigo');
-      
-      const { data, error } = await supabase
-        .from('bundles')
-        .insert([{
-          ...newBundle,
-          network_key: networkKey,
-          selling_price: parseFloat(newBundle.selling_price) || 0,
-          cost_price: parseFloat(newBundle.cost_price || '0') || 0
-        }])
-        .select();
+      setIsActionProcessing(true);
 
-      if (error) throw error;
+      const costPriceVal = newBundle.cost_price === '' ? 0 : Number(newBundle.cost_price);
+      const sellingPriceVal = newBundle.selling_price === '' ? 0 : Number(newBundle.selling_price);
 
+      if (isNaN(costPriceVal) || isNaN(sellingPriceVal)) {
+        alert("Please enter valid numbers for cost and selling prices.");
+        setIsActionProcessing(false);
+        return;
+      }
+
+      const { error } = await supabase.from("bundles").insert({
+        network: newBundle.network,
+        network_key: newBundle.network_key,
+        capacity: newBundle.capacity,
+        volume: newBundle.volume,
+        cost_price: costPriceVal,
+        selling_price: sellingPriceVal,
+        description: newBundle.description,
+        is_active: true
+      });
+
+      if (error) {
+        console.error("❌ INSERT ERROR:", error);
+        alert(error.message);
+        return;
+      }
+
+      console.log("✅ Bundle created successfully");
+      alert(`Successfully created ${newBundle.network} ${newBundle.capacity} bundle.`);
+
+      // 🔁 Refresh bundles list
+      await fetchBundles();
+
+      // ❌ Close modal
       setIsAddingBundle(false);
+
+      // 🔄 Reset form
       setNewBundle({
         network: 'MTN',
+        network_key: 'YELLO',
         capacity: '',
+        volume: '',
         description: '',
         selling_price: '',
         cost_price: '',
         is_active: true
       });
-      await fetchBundles();
+
     } catch (err: any) {
-      console.error("Supabase Create Error:", err);
+      console.error("🔥 CREATE ERROR:", err);
       alert(`Creation failed: ${err.message || 'Unknown error'}`);
     } finally {
       setIsActionProcessing(false);
@@ -544,6 +761,79 @@ export default function AdminDashboard() {
       alert(`Delete failed: ${err.message}`);
     } finally {
       setIsDeletingTx(false);
+    }
+  };
+
+  const fetchDataHubLogs = async () => {
+    setIsFetchingLogs(true);
+    try {
+      const { data, error } = await supabase
+        .from('datahubgh_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      
+      if (!error && data) {
+        setDataHubLogs(data);
+      }
+    } catch (err) {
+      console.error("Logs fetch error:", err);
+    } finally {
+      setIsFetchingLogs(false);
+    }
+  };
+
+  const refreshDataHubStatus = async (existingSettings?: any) => {
+    const settings = existingSettings || dataHubSettings;
+    if (!settings.api_key) {
+      setDataHubSettings(prev => ({ ...prev, status: 'inactive' }));
+      return;
+    }
+
+    setIsRefreshingDataHub(true);
+    try {
+      // 1. Get Balance
+      const balanceResp = await fetch('/api/datahubgh/balance');
+      if (balanceResp.ok) {
+        const bResult = await balanceResp.json();
+        setDataHubBalance(bResult.balance);
+      }
+
+      // 2. Get Ping/Status
+      const pingResp = await fetch('/api/datahubgh/ping');
+      if (pingResp.ok) {
+        const pResult = await pingResp.json();
+        setDataHubPing(pResult.responseTime);
+        setDataHubSettings(prev => ({ ...prev, status: pResult.status }));
+      } else {
+        setDataHubSettings(prev => ({ ...prev, status: 'offline' }));
+      }
+    } catch (err) {
+      console.error("Refresh error:", err);
+      setDataHubSettings(prev => ({ ...prev, status: 'offline' }));
+    } finally {
+      setIsRefreshingDataHub(false);
+      fetchDataHubLogs();
+    }
+  };
+
+  const handleTestDataHub = async () => {
+    setIsTestingDataHub(true);
+    try {
+      const resp = await fetch('/api/datahubgh/test', {
+        method: 'POST'
+      });
+      const result = await resp.json();
+      alert(result.message || (result.success ? "Test success" : "Test failed"));
+    } catch (err: any) {
+      let errMsg = err.message || String(err);
+      if (errMsg.includes('Failed to fetch')) {
+        errMsg = "Network error: The backend may be offline or restarting. Please try again.";
+      }
+      alert(`Test command failed: ${errMsg}`);
+    } finally {
+      setIsTestingDataHub(false);
+      refreshDataHubStatus();
     }
   };
 
@@ -1017,17 +1307,34 @@ export default function AdminDashboard() {
             <header className="mb-8 flex justify-between items-center">
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Bundles Management</h1>
-                <p className="text-slate-500 mt-1">Manage network data bundles, pricing, and availability.</p>
-              </div>
-              <button 
-                onClick={() => setIsAddingBundle(true)}
-                className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-semibold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center gap-2"
-              >
-                <div className="bg-white/20 p-1 rounded-lg">
-                  <Database size={16} />
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-slate-500">Manage network data bundles, pricing, and availability.</p>
+                  <span className="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded border border-slate-200 uppercase tracking-widest font-bold">
+                    Real-time Active
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Last sync: {lastBundlesSync}
+                  </span>
                 </div>
-                New Bundle
-              </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => fetchBundles()}
+                  className="p-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2"
+                  title="Refresh Bundles"
+                >
+                  <RefreshCw size={20} className={isLoadingBundles ? 'animate-spin' : ''} />
+                </button>
+                <button 
+                  onClick={() => setIsAddingBundle(true)}
+                  className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-semibold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center gap-2"
+                >
+                  <div className="bg-white/20 p-1 rounded-lg">
+                    <Database size={16} />
+                  </div>
+                  New Bundle
+                </button>
+              </div>
             </header>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -1055,8 +1362,10 @@ export default function AdminDashboard() {
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
                       <th className="px-6 py-4">Network</th>
+                      <th className="px-6 py-4">DataHub Key</th>
                       <th className="px-6 py-4">Description</th>
                       <th className="px-6 py-4">Capacity</th>
+                      <th className="px-6 py-4">Volume</th>
                       <th className="px-6 py-4 text-slate-400 font-medium">Cost Price (₵)</th>
                       <th className="px-6 py-4 text-indigo-700">Selling Price (₵)</th>
                       <th className="px-6 py-4">Status</th>
@@ -1066,14 +1375,14 @@ export default function AdminDashboard() {
                   <tbody className="divide-y divide-slate-100">
                     {isLoadingBundles ? (
                       <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={8} className="px-6 py-12 text-center text-slate-500">
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
                           <p>Loading bundles...</p>
                         </td>
                       </tr>
                     ) : bundles.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={8} className="px-6 py-12 text-center text-slate-500">
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
                           <p>No bundles found.</p>
                         </td>
@@ -1103,6 +1412,22 @@ export default function AdminDashboard() {
                                 </span>
                               </div>
                             </td>
+                            <td className="px-6 py-4 text-slate-600 font-mono text-xs">
+                              {isEditing ? (
+                                <select 
+                                  value={editingBundle.network_key || ''}
+                                  onChange={(e) => setEditingBundle({ ...editingBundle, network_key: e.target.value })}
+                                  className="w-full px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-[10px]"
+                                >
+                                  <option value="YELLO">YELLO</option>
+                                  <option value="TELECEL">TELECEL</option>
+                                  <option value="AT_PREMIUM">AT_PREMIUM</option>
+                                  <option value="AT_BIGTIME">AT_BIGTIME</option>
+                                </select>
+                              ) : (
+                                <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{bundle.network_key}</span>
+                              )}
+                            </td>
                             <td className="px-6 py-4 text-slate-600">
                               {isEditing ? (
                                 <input 
@@ -1125,6 +1450,18 @@ export default function AdminDashboard() {
                                 />
                               ) : (
                                 <span className="text-slate-900 font-medium">{bundle.capacity}</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4">
+                              {isEditing ? (
+                                <input 
+                                  type="text" 
+                                  value={editingBundle.volume || ''}
+                                  onChange={(e) => setEditingBundle({ ...editingBundle, volume: e.target.value })}
+                                  className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
+                                />
+                              ) : (
+                                <span className="text-slate-600 italic text-xs">{bundle.volume || '-'}</span>
                               )}
                             </td>
                             <td className="px-6 py-4">
@@ -1180,6 +1517,8 @@ export default function AdminDashboard() {
                                       onClick={() => handleUpdateBundle(bundle.id, { 
                                         description: editingBundle.description, 
                                         capacity: editingBundle.capacity,
+                                        volume: editingBundle.volume,
+                                        network_key: editingBundle.network_key,
                                         selling_price: parseFloat(editingBundle.selling_price) || 0,
                                         cost_price: parseFloat(editingBundle.cost_price || '0') || 0
                                       })}
@@ -1199,7 +1538,7 @@ export default function AdminDashboard() {
                                 ) : (
                                   <>
                                     <button 
-                                      onClick={() => setEditingBundle({ ...bundle })}
+                                      onClick={() => handleEditClick(bundle)}
                                       disabled={isActionProcessing}
                                       className="text-indigo-600 hover:text-indigo-800 font-medium text-xs px-2 py-1 disabled:opacity-50"
                                     >
@@ -1514,13 +1853,16 @@ export default function AdminDashboard() {
                               <button
                                 type="button"
                                 onClick={handleSendTestSMS}
-                                disabled={isSendingTestSMS}
-                                className="px-6 py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+                                disabled={isSendingTestSMS || serverStatus === 'down'}
+                                className="px-6 py-3 bg-indigo-50 text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition-all flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
                               >
                                 {isSendingTestSMS ? <Activity className="animate-spin" size={18} /> : <MessageSquare size={18} />}
                                 Send Test
                               </button>
                             </div>
+                            {serverStatus === 'down' && (
+                              <p className="text-[10px] text-rose-600 mt-1 font-bold">Backend server seems offline. Verify it's running.</p>
+                            )}
                             {testSMSResult && (
                               <p className={`text-[10px] mt-2 font-bold ${testSMSResult.success ? 'text-emerald-600' : 'text-rose-600'}`}>
                                 {testSMSResult.message}
@@ -1553,6 +1895,136 @@ export default function AdminDashboard() {
                       </motion.div>
                     )}
                   </div>
+
+                  {/* DataHub Integration Section */}
+                  <div className="pt-8 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-2">
+                        <Database className="text-indigo-600" size={20} />
+                        <h3 className="font-bold text-slate-900">DataHubGH Integration</h3>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          dataHubSettings.status === 'online' ? 'bg-emerald-100 text-emerald-700' :
+                          dataHubSettings.status === 'degraded' ? 'bg-amber-100 text-amber-700' :
+                          dataHubSettings.status === 'offline' ? 'bg-rose-100 text-rose-700' :
+                          'bg-slate-100 text-slate-500'
+                        }`}>
+                          <Activity size={10} className={`mr-1 ${dataHubSettings.status === 'online' ? 'animate-pulse' : ''}`} />
+                          {dataHubSettings.status || 'inactive'}
+                        </span>
+                        {dataHubPing !== null && (
+                          <span className="text-[10px] font-mono text-slate-400">{dataHubPing}ms</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">API Base URL</label>
+                        <input 
+                          type="text" 
+                          value={dataHubSettings.base_url || ''}
+                          onChange={(e) => setDataHubSettings({...dataHubSettings, base_url: e.target.value})}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                          placeholder="https://..."
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">API Key (sk_...)</label>
+                        <div className="relative">
+                          <input 
+                            type="password" 
+                            value={dataHubSettings.api_key || ''}
+                            onChange={(e) => setDataHubSettings({...dataHubSettings, api_key: e.target.value})}
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                            placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxx"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Balance Cards & Actions */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+                       <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 relative overflow-hidden group">
+                        <Wallet className="absolute -right-2 -bottom-2 text-indigo-200/50 group-hover:scale-110 transition-transform" size={64} />
+                        <div className="relative z-10">
+                          <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">Wallet Balance</p>
+                          <p className="text-xl font-black text-indigo-900">
+                            {dataHubBalance !== null ? `GHS ${dataHubBalance.toFixed(2)}` : '₵ --.--'}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="sm:col-span-2 grid grid-cols-2 gap-4">
+                        <button
+                          type="button"
+                          onClick={() => refreshDataHubStatus()}
+                          disabled={isRefreshingDataHub}
+                          className="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-indigo-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
+                        >
+                          <RefreshCw className={`mb-2 text-slate-400 group-hover:text-indigo-600 ${isRefreshingDataHub ? 'animate-spin' : ''}`} size={20} />
+                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Sync Status</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          onClick={handleTestDataHub}
+                          disabled={isTestingDataHub || !dataHubSettings.api_key}
+                          className="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-emerald-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="mb-2 text-slate-400 group-hover:text-emerald-600" size={20} />
+                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Test Connection</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* API Logs */}
+                    <div className="bg-slate-900 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <History className="text-slate-400" size={16} />
+                          <h4 className="text-xs font-bold text-slate-200 uppercase tracking-widest">Recent Activity</h4>
+                        </div>
+                        <button onClick={fetchDataHubLogs} className="text-slate-500 hover:text-white transition-colors">
+                          <RefreshCw size={14} className={isFetchingLogs ? 'animate-spin' : ''} />
+                        </button>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        {dataHubLogs.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic py-4 text-center">No recent activity detected.</p>
+                        ) : (
+                          dataHubLogs.map((log) => (
+                            <div key={log.id} className="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-1.5 h-1.5 rounded-full ${log.status === 'success' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'}`} />
+                                <div>
+                                   <p className="text-[10px] font-mono text-slate-200 capitalize">{log.endpoint.replace('-', ' ')}</p>
+                                   <p className="text-[9px] text-slate-500">{new Date(log.created_at).toLocaleString()}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className={`text-[10px] font-bold ${log.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {log.status.toUpperCase()}
+                                </p>
+                                {log.response_time && <p className="text-[9px] text-slate-600">{log.response_time}ms</p>}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-start gap-3 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                      <ShieldCheck className="text-indigo-600 shrink-0" size={18} />
+                      <p className="text-xs text-indigo-800 leading-relaxed font-medium">
+                        Datapapa uses <strong>DataHubGH</strong> for automated data processing. 
+                        Credentials are stored securely and never exposed to the client-side.
+                      </p>
+                    </div>
+                  </div>
+
                 </div>
 
                 <div className="px-8 py-5 bg-slate-50 border-t border-slate-100 flex justify-end">
@@ -1592,9 +2064,9 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
             >
-              <div className="p-6">
+              <div className="p-8 overflow-y-auto">
                 <div className="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-4">
                   <Database size={24} />
                 </div>
@@ -1636,9 +2108,9 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
             >
-              <div className="p-6">
+              <div className="p-8 overflow-y-auto">
                 <div className="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-4">
                   <Users size={24} />
                 </div>
@@ -1679,11 +2151,11 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[80vh]"
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
             >
-              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Transaction Details</h3>
+                  <h3 className="text-lg font-bold text-slate-900">Transaction History</h3>
                   <p className="text-xs text-slate-500">{viewingCustomerTransactions.email}</p>
                 </div>
                 <button 
@@ -1757,10 +2229,10 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100"
+              className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
             >
-              <form onSubmit={handleCreateBundle}>
-                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+              <form onSubmit={handleCreateBundle} className="flex flex-col h-full overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                   <h3 className="text-lg font-bold text-slate-900">Add New Data Bundle</h3>
                   <button 
                     type="button"
@@ -1770,13 +2242,19 @@ export default function AdminDashboard() {
                     <X size={20} />
                   </button>
                 </div>
-                <div className="p-6 space-y-4">
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Network</label>
                       <select 
                         value={newBundle.network || 'MTN'}
-                        onChange={(e) => setNewBundle({...newBundle, network: e.target.value})}
+                        onChange={(e) => {
+                          const net = e.target.value;
+                          let key = 'YELLO' as 'YELLO' | 'TELECEL' | 'AT_PREMIUM' | 'AT_BIGTIME';
+                          if (net === 'Telecel') key = 'TELECEL';
+                          if (net === 'AirtelTigo') key = 'AT_BIGTIME';
+                          setNewBundle({...newBundle, network: net, network_key: key});
+                        }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       >
@@ -1786,6 +2264,23 @@ export default function AdminDashboard() {
                       </select>
                     </div>
                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">DataHub Key</label>
+                      <select 
+                        value={newBundle.network_key || 'YELLO'}
+                        onChange={(e) => setNewBundle({...newBundle, network_key: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      >
+                        <option value="YELLO">YELLO (MTN)</option>
+                        <option value="TELECEL">TELECEL (Telecel)</option>
+                        <option value="AT_PREMIUM">AT_PREMIUM (iShare)</option>
+                        <option value="AT_BIGTIME">AT_BIGTIME (Bigtime)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Capacity</label>
                       <input 
                         type="text" 
@@ -1794,6 +2289,16 @@ export default function AdminDashboard() {
                         onChange={(e) => setNewBundle({...newBundle, capacity: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Volume (API Data)</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 1000, 2000"
+                        value={newBundle.volume || ''}
+                        onChange={(e) => setNewBundle({...newBundle, volume: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                   </div>
@@ -1811,6 +2316,18 @@ export default function AdminDashboard() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₵)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        placeholder="0.00"
+                        value={newBundle.cost_price || ''}
+                        onChange={(e) => setNewBundle({...newBundle, cost_price: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Selling Price (₵)</label>
                       <input 
                         type="number" 
@@ -1820,17 +2337,6 @@ export default function AdminDashboard() {
                         onChange={(e) => setNewBundle({...newBundle, selling_price: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₵)</label>
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        placeholder="0.00"
-                        value={newBundle.cost_price || ''}
-                        onChange={(e) => setNewBundle({...newBundle, cost_price: e.target.value})}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                   </div>
@@ -1855,11 +2361,158 @@ export default function AdminDashboard() {
                     Cancel
                   </button>
                   <button 
-                    type="submit"
+                    type="button"
+                    onClick={handleCreateBundle}
                     disabled={isActionProcessing}
                     className="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
                   >
                     {isActionProcessing ? 'Creating...' : 'Create Bundle'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {showModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowModal(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col max-h-[90vh]"
+            >
+              <form onSubmit={(e) => { e.preventDefault(); handleUpdateBundle(); }} className="flex flex-col h-full overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
+                  <h3 className="text-lg font-bold text-slate-900">Edit Data Bundle</h3>
+                  <button 
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Network</label>
+                      <select 
+                        value={form.network || 'MTN'}
+                        onChange={(e) => {
+                          const net = e.target.value;
+                          let key = 'YELLO' as any;
+                          if (net === 'Telecel') key = 'TELECEL';
+                          if (net === 'AirtelTigo') key = 'AT_BIGTIME';
+                          setForm({...form, network: net, network_key: key});
+                        }}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      >
+                        <option value="MTN">MTN</option>
+                        <option value="Telecel">Telecel</option>
+                        <option value="AirtelTigo">AirtelTigo</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">DataHub Key</label>
+                      <select 
+                        value={form.network_key || 'YELLO'}
+                        onChange={(e) => setForm({...form, network_key: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      >
+                        <option value="YELLO">YELLO (MTN)</option>
+                        <option value="TELECEL">TELECEL (Telecel)</option>
+                        <option value="AT_PREMIUM">AT_PREMIUM (iShare)</option>
+                        <option value="AT_BIGTIME">AT_BIGTIME (Bigtime)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Capacity</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 1GB, 500MB"
+                        value={form.capacity || ''}
+                        onChange={(e) => setForm({...form, capacity: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Volume (API Data)</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 1000, 2000"
+                        value={form.volume || ''}
+                        onChange={(e) => setForm({...form, volume: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Regular Daily Plan"
+                      value={form.description || ''}
+                      onChange={(e) => setForm({...form, description: e.target.value})}
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Cost Price (₵)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        placeholder="0.00"
+                        value={form.cost_price || ''}
+                        onChange={(e) => setForm({...form, cost_price: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Selling Price (₵)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        placeholder="0.00"
+                        value={form.selling_price || ''}
+                        onChange={(e) => setForm({...form, selling_price: e.target.value})}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 font-semibold rounded-xl hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isActionProcessing}
+                    className="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
+                  >
+                    {isActionProcessing ? 'Updating...' : 'Save Changes'}
                   </button>
                 </div>
               </form>
@@ -1881,9 +2534,9 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden"
+              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
             >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
                 <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                   <Activity className="text-indigo-500" size={20} />
                   Transaction Details
@@ -1896,7 +2549,7 @@ export default function AdminDashboard() {
                 </button>
               </div>
 
-              <div className="p-8">
+              <div className="p-8 overflow-y-auto flex-1">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <div>
@@ -1977,29 +2630,31 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 text-center"
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 text-center overflow-y-auto max-h-[90vh] flex flex-col"
             >
-              <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
-                <X size={40} />
-              </div>
-              <h3 className="text-2xl font-bold text-slate-900 mb-2">Delete Transaction?</h3>
-              <p className="text-slate-500 mb-8">
-                Are you sure you want to delete this transaction record? This action cannot be undone.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setTxToDelete(null)}
-                  className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 font-bold rounded-2xl hover:bg-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleDeleteTransaction(txToDelete.id)}
-                  disabled={isDeletingTx}
-                  className="flex-1 px-6 py-3 bg-red-500 text-white font-bold rounded-2xl hover:bg-red-600 transition-colors disabled:opacity-50"
-                >
-                  {isDeletingTx ? 'Deleting...' : 'Confirm Delete'}
-                </button>
+              <div className="overflow-y-auto flex-1">
+                <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <X size={40} />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900 mb-2">Delete Transaction?</h3>
+                <p className="text-slate-500 mb-8">
+                  Are you sure you want to delete this transaction record? This action cannot be undone.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setTxToDelete(null)}
+                    className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 font-bold rounded-2xl hover:bg-slate-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDeleteTransaction(txToDelete.id)}
+                    disabled={isDeletingTx}
+                    className="flex-1 px-6 py-3 bg-red-500 text-white font-bold rounded-2xl hover:bg-red-600 transition-colors disabled:opacity-50"
+                  >
+                    {isDeletingTx ? 'Deleting...' : 'Confirm Delete'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
