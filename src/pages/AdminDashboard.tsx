@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { 
   LogOut, 
   LayoutDashboard, 
@@ -109,14 +110,43 @@ export default function AdminDashboard() {
   const [dataHubLogs, setDataHubLogs] = useState<any[]>([]);
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
 
+  // Arkesel Integration State
+  const [arkesel, setArkesel] = useState<any>(null);
+  const [isRefreshingArkesel, setIsRefreshingArkesel] = useState(false);
+
+  const fetchArkeselStatus = () => {
+    setIsRefreshingArkesel(true);
+    axios.get("/api/arkesel/status")
+      .then((res) => {
+        setArkesel(res.data);
+      })
+      .catch((err) => {
+        setArkesel({ 
+          status: "offline", 
+          balance: 0, 
+          last_checked: new Date().toISOString(),
+          error: err.message || "Failed to connect to backend"
+        });
+      })
+      .finally(() => {
+        setIsRefreshingArkesel(false);
+      });
+  };
+
+  useEffect(() => {
+    fetchArkeselStatus();
+    const interval = setInterval(fetchArkeselStatus, 30000); // every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
+
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
 
   useEffect(() => {
     const checkServer = async () => {
       try {
-        const res = await fetch('/api/health');
-        if (res.ok) setServerStatus('up');
+        const res = await axios.get('/api/health');
+        if (res.status === 200) setServerStatus('up');
         else setServerStatus('down');
       } catch (e) {
         setServerStatus('down');
@@ -340,17 +370,13 @@ export default function AdminDashboard() {
     setTestSMSResult(null);
     try {
       console.log("Sending test SMS via /api/arkesel/send-sms to:", formattedPhone);
-      const response = await fetch('/api/arkesel/send-sms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: formattedPhone,
-          message: `Test SMS from ${appSettings.app_name}. If you see this, your Arkesel integration is working!`,
-          sender: appSettings.sms_sender_id
-        })
+      const response = await axios.post('/api/arkesel/send-sms', {
+        to: formattedPhone,
+        message: `Test SMS from ${appSettings.app_name}. If you see this, your Arkesel integration is working!`,
+        sender: appSettings.sms_sender_id
       });
 
-      const result = await response.json();
+      const result = response.data;
 
       if (result.success) {
         setTestSMSResult({ success: true, message: "Test SMS sent successfully!" });
@@ -360,7 +386,7 @@ export default function AdminDashboard() {
     } catch (err: any) {
       console.error("Test SMS Error:", err);
       let errMsg = err.message || String(err);
-      if (errMsg.includes('Failed to fetch')) {
+      if (err.code === 'ERR_NETWORK') {
         errMsg = "Network error: The backend may be offline or restarting. Please try again.";
       }
       setTestSMSResult({ success: false, message: `Network/API Error: ${errMsg}` });
@@ -793,16 +819,15 @@ export default function AdminDashboard() {
     setIsRefreshingDataHub(true);
     try {
       // 1. Get Balance
-      const balanceResp = await fetch('/api/datahubgh/balance');
-      if (balanceResp.ok) {
-        const bResult = await balanceResp.json();
-        setDataHubBalance(bResult.balance);
+      const balanceResp = await axios.get('/api/datahubgh/balance');
+      if (balanceResp.status === 200) {
+        setDataHubBalance(balanceResp.data.balance);
       }
 
       // 2. Get Ping/Status
-      const pingResp = await fetch('/api/datahubgh/ping');
-      if (pingResp.ok) {
-        const pResult = await pingResp.json();
+      const pingResp = await axios.get('/api/datahubgh/ping');
+      if (pingResp.status === 200) {
+        const pResult = pingResp.data;
         setDataHubPing(pResult.responseTime);
         setDataHubSettings(prev => ({ ...prev, status: pResult.status }));
       } else {
@@ -820,14 +845,12 @@ export default function AdminDashboard() {
   const handleTestDataHub = async () => {
     setIsTestingDataHub(true);
     try {
-      const resp = await fetch('/api/datahubgh/test', {
-        method: 'POST'
-      });
-      const result = await resp.json();
+      const resp = await axios.post('/api/datahubgh/test');
+      const result = resp.data;
       alert(result.message || (result.success ? "Test success" : "Test failed"));
     } catch (err: any) {
       let errMsg = err.message || String(err);
-      if (errMsg.includes('Failed to fetch')) {
+      if (err.code === 'ERR_NETWORK') {
         errMsg = "Network error: The backend may be offline or restarting. Please try again.";
       }
       alert(`Test command failed: ${errMsg}`);
@@ -1097,7 +1120,7 @@ export default function AdminDashboard() {
               <p className="text-slate-500 mt-1">Welcome {user?.user_metadata?.full_name || 'Admin'}. Here's what's happening today.</p>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                  <div className="text-slate-500 font-medium text-sm mb-2">Total Sales</div>
                  <div className="text-3xl font-bold text-slate-900">₵{dashboardStats.sales.toFixed(2)}</div>
@@ -1112,6 +1135,42 @@ export default function AdminDashboard() {
                  <div className="text-slate-500 font-medium text-sm mb-2">Active Users</div>
                  <div className="text-3xl font-bold text-slate-900">{dashboardStats.users}</div>
                  <div className="text-xs text-slate-400 mt-2 font-medium">Registered</div>
+               </div>
+               {/* Arkesel Status Card */}
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="text-slate-500 font-medium text-sm">Arkesel SMS</div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={fetchArkeselStatus} 
+                        disabled={isRefreshingArkesel}
+                        className={`p-1 rounded-md hover:bg-slate-50 text-slate-400 transition-all ${isRefreshingArkesel ? 'animate-spin' : ''}`}
+                      >
+                        <RefreshCw size={14} />
+                      </button>
+                      <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                        arkesel?.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                      }`}>
+                        <Activity size={10} className={arkesel?.status === 'online' ? 'animate-pulse' : ''} />
+                        {arkesel?.status || 'checking'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-3xl font-bold text-slate-900">
+                    {arkesel?.balance !== undefined ? `₵${Number(arkesel.balance).toFixed(2)}` : '₵ --.--'}
+                  </div>
+                  <div className="flex flex-col gap-1 mt-2">
+                    <div className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                      <Clock size={10} />
+                      {arkesel?.last_checked ? `Checked: ${new Date(arkesel.last_checked).toLocaleTimeString()}` : 'Initializing...'}
+                    </div>
+                    {arkesel?.error && (
+                      <div className="text-[10px] text-rose-500 font-medium truncate max-w-[150px]" title={arkesel.error}>
+                        Err: {arkesel.error}
+                      </div>
+                    )}
+                  </div>
+                  <MessageSquare className="absolute -right-2 -bottom-2 text-slate-100/50 group-hover:scale-110 transition-transform" size={48} />
                </div>
             </div>
 
@@ -1870,6 +1929,65 @@ export default function AdminDashboard() {
                             )}
                           </div>
                         </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className={`p-4 rounded-2xl border transition-all ${arkesel?.status === 'online' ? 'bg-indigo-50 border-indigo-100' : 'bg-rose-50 border-rose-100'}`}>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${arkesel?.status === 'online' ? 'text-indigo-400' : 'text-rose-400'}`}>SMS Balance</p>
+                                <div className="flex items-baseline gap-1">
+                                  <p className={`text-xl font-black ${arkesel?.status === 'online' ? 'text-indigo-900' : 'text-rose-900'}`}>
+                                    {arkesel?.balance !== undefined ? Number(arkesel.balance).toLocaleString() : '--'}
+                                  </p>
+                                  {arkesel?.status === 'online' && <span className="text-[10px] font-bold text-indigo-400">CREDITS</span>}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={fetchArkeselStatus}
+                                disabled={isRefreshingArkesel}
+                                className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${arkesel?.status === 'online' ? 'text-indigo-600 hover:bg-indigo-100' : 'text-rose-600 hover:bg-rose-100'}`}
+                                title="Refresh Balance"
+                              >
+                                <RefreshCw size={18} className={isRefreshingArkesel ? 'animate-spin' : ''} />
+                              </button>
+                            </div>
+                          </div>
+                          
+                          <div className={`p-4 rounded-2xl border transition-all ${arkesel?.status === 'online' ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${arkesel?.status === 'online' ? 'text-emerald-400' : 'text-rose-400'}`}>API Status</p>
+                                <div className="flex items-center gap-1.5">
+                                  <div className={`w-2 h-2 rounded-full ${arkesel?.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                                  <p className={`text-sm font-bold capitalize ${arkesel?.status === 'online' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                    {arkesel?.status || 'checking...'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className={`text-[10px] font-mono ${arkesel?.status === 'online' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {arkesel?.last_checked ? new Date(arkesel.last_checked).toLocaleTimeString() : ''}
+                                </p>
+                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Last Checked</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {arkesel?.error && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-start gap-2"
+                          >
+                            <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={14} />
+                            <div className="flex-1">
+                              <p className="text-[10px] font-bold text-rose-800">API Error Detected</p>
+                              <p className="text-[10px] text-rose-600 font-mono mt-0.5 leading-tight">{arkesel.error}</p>
+                            </div>
+                          </motion.div>
+                        )}
+
                         <div>
                           <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Success SMS Template</label>
                           <textarea 

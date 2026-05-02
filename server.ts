@@ -16,11 +16,13 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SU
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function getDataHubConfig() {
-  // 1. Try environment variable first (Highest Priority for dev/local)
-  const envKey = process.env.DATAHUB_API_KEY || "sk_bb283e645e4ab8c83edef7e4bb5f618fe7c68f24f467c5b8";
+  // 1. Priority 1: Environment Variable (most reliable for recent setup)
+  const envKey = process.env.DATAHUB_API_KEY;
   const envUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api/external";
 
-  // 2. Try Supabase settings 'datahubgh' (New standard)
+  console.log(`[DataHub Config] Checking sources. Env key present: ${!!envKey}`);
+
+  // 2. Try Supabase settings 'datahubgh' (Standard config)
   try {
     const { data: dhData } = await supabase
       .from('settings')
@@ -28,19 +30,15 @@ async function getDataHubConfig() {
       .eq('key', 'datahubgh')
       .maybeSingle();
     
-    if (dhData?.value) {
-      let keyToUse = dhData.value.api_key;
-      // if invalid key in db, use env key
-      if (!keyToUse || keyToUse.includes('728c45980e07ab502295e74917077992f89ef82e790c828c')) {
-         keyToUse = envKey;
-      }
+    if (dhData?.value?.api_key) {
+      console.log("[DataHub Config] Found config in settings table");
       return {
-        apiKey: keyToUse,
+        apiKey: dhData.value.api_key,
         baseUrl: dhData.value.base_url || envUrl
       };
     }
 
-    // 3. Fallback to 'secure' key (legacy logic)
+    // 3. Fallback to 'secure' legacy key if present
     const { data: secureData } = await supabase
       .from('settings')
       .select('value')
@@ -48,21 +46,23 @@ async function getDataHubConfig() {
       .maybeSingle();
     
     if (secureData?.value?.datahub_api_key) {
-      let keyToUse = secureData.value.datahub_api_key;
-      if (!keyToUse || keyToUse.includes('728c45980e07ab502295e74917077992f89ef82e790c828c')) {
-         keyToUse = envKey;
-      }
+      console.log("[DataHub Config] Found config in legacy 'secure' setting");
       return {
-        apiKey: keyToUse,
+        apiKey: secureData.value.datahub_api_key,
         baseUrl: envUrl
       };
     }
   } catch (err) {
-    console.error("[Server] Error fetching config:", err);
+    console.error("[DataHub Config] Error reading from Supabase:", err);
+  }
+
+  // Final fallback to Env Key or a default (removed stale hardcoded key)
+  if (!envKey) {
+    console.warn("[DataHub Config] WARNING: No API key found in Env or Supabase!");
   }
 
   return { 
-    apiKey: envKey, 
+    apiKey: envKey || "", 
     baseUrl: envUrl 
   }; 
 }
@@ -103,7 +103,7 @@ async function startServer() {
         profit = Number(bundle.price) - Number(bundle.cost);
       }
 
-      const result = await processDataPurchase({ 
+      const result = await purchaseData({ 
         networkKey, 
         recipient, 
         capacity, 
@@ -163,161 +163,147 @@ function buildSuccessSMS({
 
 /**
  * Maps input network keys to the specific identifiers required by DataHubGH
- * Diligently implemented by Lead Engineer
+ * Strictly following lead engineer's mapping
  */
 function mapNetwork(network: string): string {
   if (!network) return '';
-  const net = network.toLowerCase();
-  
-  if (net === "mtn") return "YELLO";
-  if (net === 'telecel' || net === 'vodafone' ) return 'TELECEL';
-  if (net === 'airteltigo' || net === 'at' || net === 'airtel') return 'AIRTELTIGO';
-  
-  return network.toUpperCase();
+  const net = network.toLowerCase().trim();
+  const networkMap: any = {
+    mtn: "YELLO",
+    telecel: "TELECEL",
+    airteltigo: "AT",
+  };
+  return networkMap[net] || network.toUpperCase();
 }
 
-  async function processDataPurchase({ networkKey, recipient, capacity, paystack_ref, profit, bundle }: any) {
-    const normalizedKey = mapNetwork(networkKey);
-    const { apiKey, baseUrl } = await getDataHubConfig();
-    
-    if (!apiKey) {
-      return { success: false, error: "DataHub API key not configured" };
-    }
+/**
+ * Strips 'GB' from capacity strings as required by DataHubGH
+ */
+function mapCapacity(capacity: string): string {
+  if (!capacity) return "";
+  return capacity.toUpperCase().replace("GB", "").trim();
+}
 
-    const startTime = Date.now();
-    const endpoint = baseUrl.replace(/\/$/, '') + '/data-purchase';
-    
-    // Format recipient (DataHub expects 0XXXXXXXXX)
-    let formattedRecipient = recipient.trim().replace(/\D/g, '');
-    if (formattedRecipient.startsWith('233') && formattedRecipient.length > 10) {
-      formattedRecipient = `0${formattedRecipient.slice(3)}`;
-    } else if (!formattedRecipient.startsWith('0') && formattedRecipient.length === 9) {
-      formattedRecipient = `0${formattedRecipient}`;
-    }
+async function purchaseData(transaction: any) {
+  console.log("🚀 DATAHUB FUNCTION TRIGGERED");
 
-    // Capacity should be the identifier (e.g. "1" for 1GB if that's the ID, or "1GB")
-    // DataHub curl example shows "capacity": "1"
-    const finalCapacity = bundle?.datahub_id || capacity;
-    
-    // Log for debugging
-    console.log("[DataHub API] Endpoint:", endpoint);
-    console.log("[DataHub API] Payload:", { networkKey: normalizedKey, recipient: formattedRecipient, capacity: finalCapacity });
-
-    // Log the intent as requested by lead engineer
-    console.log("Sending VTU request", { 
-      network: normalizedKey, 
-      phone: formattedRecipient, 
-      bundle: finalCapacity 
-    });
-
-    try {
-      const response = await axios.post(endpoint, {
-        networkKey: normalizedKey,
-        recipient: formattedRecipient,
-        capacity: finalCapacity,
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': apiKey
-        },
-        timeout: 30000,
-        validateStatus: () => true 
-      });
-
-      const duration = Date.now() - startTime;
-      const result = response.data;
-      
-      console.log("VTU response", result);
-
-      const isAccepted = response.status === 200 && (result.status === 'PROCESSING' || result.status === 'SUCCESSFUL' || result.success);
-
-      // Log the individual API call
-      try {
-        await supabase.from("datahubgh_logs").insert({
-          endpoint: "purchase-data",
-          status: isAccepted ? "success" : "failed",
-          request_payload: { 
-            networkKey: normalizedKey, 
-            recipient: formattedRecipient, 
-            capacity: finalCapacity 
-          },
-          response_data: result,
-          http_status: response.status,
-          response_time: duration
-        });
-      } catch (logErr) {
-        console.error("[Server] Logging error:", logErr);
-      }
-
-      // 2. IMPORTANT: Update Transaction in Supabase
-      if (paystack_ref) {
-        const updatePayload: any = {
-          status: isAccepted ? 'success' : 'failed',
-          vtu_status: isAccepted ? 'success' : 'failed',
-          api_response: result,
-          updated_at: new Date().toISOString()
-        };
-
-        if (profit !== undefined) {
-          // Check if profit column exists or just wrap in try/catch to avoid breaking success flow
-          try {
-             const { error: pErr } = await supabase
-              .from('transactions')
-              .update({ profit: profit })
-              .eq('paystack_receipt', paystack_ref);
-             if (pErr) console.warn("[Supabase] Profit update failed (column might be missing):", pErr.message);
-          } catch (e) {
-             console.warn("[Supabase] Profit update exception:", e);
-          }
-        }
-        
-        const { error: updateErr } = await supabase
-          .from('transactions')
-          .update({
-            status: isAccepted ? 'success' : 'failed',
-            vtu_status: isAccepted ? 'success' : 'failed',
-            api_response: result,
-            updated_at: new Date().toISOString()
-          })
-          .eq('paystack_receipt', paystack_ref);
-          
-        if (updateErr) console.error("[Supabase] Transaction update error:", updateErr.message);
-      }
-
-      if (isAccepted) {
-        return { 
-          success: true, 
-          status: result.status === 'SUCCESSFUL' || result.success === true ? 'success' : 'processing',
-          data: result 
-        };
-      }
-      
-      return { 
-        success: false, 
-        status: 'failed',
-        error: result.message || result.error || "Purchase rejected by DataHub",
-        data: result
-      };
-
-    } catch (error: any) {
-      const duration = Date.now() - startTime;
-      try {
-        await supabase.from('datahubgh_logs').insert({
-          endpoint: 'data-purchase',
-          status: 'failed',
-          http_status: 0,
-          response_time: duration,
-          request_payload: { networkKey, recipient, capacity },
-          error_message: error.message
-        });
-      } catch (logErr) {
-        console.error("[Server] Logging error:", logErr);
-      }
-      return { success: false, error: error.message };
-    }
+  // Format recipient for DataHub (0XXXXXXXXX)
+  let recipient = transaction.recipient_phone;
+  if (recipient && recipient.startsWith('233') && recipient.length > 10) {
+    recipient = '0' + recipient.slice(3);
+  } else if (recipient && !recipient.startsWith('0') && recipient.length === 9) {
+    recipient = '0' + recipient;
   }
 
-  // NEW: DataHub Management Routes
+  // Fallbacks for missing keys
+  const networkKey = transaction.datahub_network_key || transaction.network_key || transaction.network;
+  const capacity = transaction.datahub_capacity || transaction.capacity || "";
+  const finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : capacity;
+
+  const payload = {
+    networkKey: networkKey,
+    recipient: recipient,
+    capacity: finalCapacity,
+  };
+
+  console.log("📤 PAYLOAD:", payload);
+
+  try {
+    const { apiKey } = await getDataHubConfig();
+    const activeKey = apiKey || process.env.DATAHUB_API_KEY;
+    
+    if (!activeKey) {
+      console.error("❌ NO DATAHUB API KEY FOUND. Please set it in Admin Dashboard or Environment.");
+      return;
+    }
+
+    const response = await axios.post(
+      "https://app.datahubgh.com/api/external/data-purchase",
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": activeKey,
+          "User-Agent": "Datapapa-VTU-NodeJS/1.0"
+        },
+        timeout: 30000
+      }
+    );
+
+    const result = response.data;
+    console.log("📥 DATAHUB RESPONSE:", result);
+
+    // Update status based on response
+    // DataHub returns status: SUCCESSFUL, PROCESSING, or FAILED
+    const isActuallySuccess = result.success === true || result.status === 'SUCCESSFUL' || result.status === 'PROCESSING';
+    const vtuStatus = isActuallySuccess ? (result.status === 'SUCCESSFUL' ? 'delivered' : 'processing') : 'failed';
+
+    await supabase
+      .from("transactions")
+      .update({
+        vtu_status: vtuStatus,
+        api_response: result,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", transaction.id);
+
+    console.log(`✅ TRANSACTION ${transaction.id} UPDATED TO: ${vtuStatus}`);
+    
+    return { success: isActuallySuccess, ...result };
+
+  } catch (err: any) {
+    console.error("❌ DATAHUB CALL FAILED:", err.message);
+    if (err.response) {
+      console.error("📥 ERROR DATA:", JSON.stringify(err.response.data));
+    }
+    
+    // Mark as failed in DB if network error
+    if (transaction.id) {
+      await supabase
+        .from("transactions")
+        .update({
+          vtu_status: 'failed',
+          api_response: { error: err.message, details: err.response?.data },
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transaction.id);
+    }
+    
+    return { success: false, error: err.message };
+  }
+}
+
+  // Trigger VTU Manually or as Fallback
+  app.post("/api/trigger-vtu", async (req, res) => {
+    const { transactionId } = req.body;
+    console.log("🚀 [Server] Manual VTU Trigger requested for:", transactionId);
+    
+    if (!transactionId) {
+      return res.status(400).json({ success: false, error: "Missing transaction ID" });
+    }
+
+    try {
+      const { data: transaction, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (fetchErr || !transaction) {
+        console.error("❌ [Server] Transaction not found for manual trigger:", transactionId);
+        return res.status(404).json({ success: false, error: "Transaction not found" });
+      }
+
+      console.log("🚀 [Server] Calling purchaseData for:", transactionId);
+      const vtuResult = await purchaseData(transaction);
+
+      return res.json(vtuResult);
+    } catch (err: any) {
+      console.error("❌ [Server] Manual VTU Trigger Error:", err.message);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post("/api/datahubgh/test", async (req, res) => {
     const { apiKey, baseUrl } = await getDataHubConfig();
     if (!apiKey) return res.json({ success: false, message: "API key missing" });
@@ -377,133 +363,115 @@ function mapNetwork(network: string): string {
   });
 
   // Paystack Webhook Implementation
-  app.post("/api/paystack/webhook", async (req, res) => {
-    console.log("Webhook received");
-    const secret = process.env.PAYSTACK_SECRET_KEY;
-    const bodyString = JSON.stringify(req.body);
-    const hash = crypto
-      .createHmac('sha512', secret || '')
-      .update(bodyString)
-      .digest('hex');
-
-    const signature = req.headers['x-paystack-signature'];
-
-    if (!secret || hash !== signature) {
-      console.error("[Paystack Webhook] Invalid signature or secret missing");
-      return res.status(401).send('Invalid signature');
-    }
-
-    const event = req.body;
-    
-    // Process successful charges
-    if (event.event === 'charge.success') {
-      const { data } = event;
-      const reference = data.reference;
+  app.post("/api/paystack-webhook", express.json(), async (req, res) => {
+    try {
+      console.log("🔥 WEBHOOK RECEIVED");
+      const signature = req.headers['x-paystack-signature'];
+      const secret = process.env.PAYSTACK_SECRET_KEY;
       
-      // Info from metadata
-      const transactionId = data.metadata?.transaction_id;
-      const phone = data.metadata?.phone || data.customer?.phone;
-      const network = data.metadata?.network; 
-      const capacity = data.metadata?.capacity || data.metadata?.bundle; 
-      const bundleId = data.metadata?.bundle_id;
-      const amount = data.amount / 100;
-      const adminPhone = "233244014207";
-
-      console.log(`[Paystack Webhook] SUCCESS detected for ${reference}. Transaction ID: ${transactionId}`);
-
-      try {
-        // 1. Update Transaction record
-        if (transactionId) {
-          await supabase
-            .from('transactions')
-            .update({
-              paystack_receipt: reference,
-              status: 'success',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', transactionId);
-        } else {
-          // Fallback: If no transaction_id, create or update by reference
-          const { data: existingTx } = await supabase.from('transactions').select('id').eq('paystack_receipt', reference).maybeSingle();
-          if (!existingTx) {
-            await supabase.from('transactions').insert({
-              paystack_receipt: reference,
-              amount: amount,
-              recipient_phone: phone,
-              network: network,
-              capacity: capacity,
-              status: 'success',
-              vtu_status: 'pending'
-            });
-          }
-        }
-
-        // 2. Send admin SMS
-        await sendSMS(
-          adminPhone,
-          `NEW ORDER:
-Network: ${network}
-Bundle: ${capacity}
-Phone: ${phone}
-Amount: GHS ${amount}`
-        );
-
-        // Fetch bundle info for profit calculation
-        let bundleInfo = null;
-        let calculatedProfit = 0;
-        if (bundleId) {
-          const { data: bData } = await supabase.from('bundles').select('*').eq('id', bundleId).maybeSingle();
-          if (bData) {
-            bundleInfo = bData;
-            if (bData.selling_price !== undefined && bData.cost_price !== undefined) {
-              calculatedProfit = Number(bData.selling_price) - Number(bData.cost_price);
-            }
-          }
-        }
-
-      // 3. Call DataHubGH (Inside processDataPurchase: 4. Updates vtu_status)
-        const networkKey = mapNetwork(network);
-        const vtuResult = await processDataPurchase({
-          networkKey,
-          recipient: phone,
-          capacity: capacity,
-          paystack_ref: reference,
-          profit: calculatedProfit,
-          bundle: bundleInfo
-        });
-
-        // Fetch settings for SMS template
-        const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'sms_settings').maybeSingle();
-        const smsTemplate = settingsData?.value?.sms_template_success;
-
-        // 5. Send user SMS
-        if (vtuResult.status === "success") {
-          const message = buildSuccessSMS({
-            volume: capacity,
-            network: network,
-            phone: phone,
-            transactionId: transactionId || reference,
-            template: smsTemplate
-          });
-          await sendSMS(phone, message);
-        } else if (vtuResult.success) {
-          // If just accepted but not immediately successful (PROCESSING)
-          await sendSMS(
-            phone,
-            `Your ${capacity} ${network} data purchase of GHS ${amount} is being processed.`
-          );
-        } else {
-          console.warn("[Webhook] Purchase rejected by API:", vtuResult.error);
-        }
-
-      } catch (err) {
-        console.error("CRITICAL FLOW ERROR:", err);
-        // Fallback notification to admin
-        await sendSMS(adminPhone, `CRITICAL FLOW ERROR for Ref ${reference}: ${err instanceof Error ? err.message : String(err)}`);
+      console.log("🔥 [Paystack Webhook] Received hit at", new Date().toISOString());
+      
+      if (!signature) {
+        console.error("❌ [Paystack Webhook] Missing signature header");
+        return res.status(400).send('No signature');
       }
-    }
 
-    res.sendStatus(200);
+      const bodyString = JSON.stringify(req.body);
+      const hash = crypto
+        .createHmac('sha512', secret || '')
+        .update(bodyString)
+        .digest('hex');
+
+      if (!secret) {
+        console.warn("⚠️ [Paystack Webhook] Warning: PAYSTACK_SECRET_KEY not set in env!");
+      }
+
+      if (hash !== signature) {
+        console.error("[Paystack Webhook] Signature mismatch!");
+        return res.status(401).send('Invalid signature');
+      }
+
+      const event = req.body;
+      console.log(`📢 [Paystack Webhook] Event: ${event.event} | Ref: ${event.data?.reference}`);
+
+      if (event.event !== "charge.success") {
+        console.log(`ℹ️ [Paystack Webhook] Ignoring non-success event: ${event.event}`);
+        return res.status(200).send("ignored");
+      }
+
+      console.log("✅ PAYMENT CONFIRMED");
+
+      // 1. Extract Transaction ID from metadata
+      const metadata = event.data.metadata;
+      let transactionId = metadata?.transaction_id;
+
+      // 🛠 Handle stringified metadata (VERY IMPORTANT)
+      if (typeof metadata === "string") {
+        try {
+          const parsed = JSON.parse(metadata);
+          transactionId = parsed.transaction_id;
+        } catch (e) {
+          console.error("❌ [Paystack Webhook] Metadata parsing failed");
+        }
+      }
+
+      // Also check custom fields as a second fallback (standard Paystack practice)
+      if (!transactionId && metadata?.custom_fields) {
+        transactionId = metadata.custom_fields.find((f: any) => f.variable_name === 'transaction_id')?.value;
+      }
+
+      console.log("📌 TRANSACTION ID:", transactionId);
+
+      if (!transactionId) {
+        // Fallback: search by reference if ID is missing in metadata
+        console.log("🔍 [Paystack Webhook] Searching for transaction by reference fallback:", event.data.reference);
+        const { data: txByRef } = await supabase
+          .from("transactions")
+          .select("id")
+          .eq("paystack_receipt", event.data.reference)
+          .maybeSingle();
+        
+        transactionId = txByRef?.id;
+        
+        if (!transactionId) {
+          console.error("❌ [Paystack Webhook] No transaction ID found in metadata or reference search");
+          return res.status(200).send("no transaction id");
+        }
+      }
+
+      // 🔥 FETCH TRANSACTION
+      const { data: transaction, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (fetchErr || !transaction) {
+        console.error("❌ Transaction fetch failed", fetchErr);
+        return res.status(200).send("transaction not found");
+      }
+
+      // 3. Update Transaction Record to Success
+      await supabase
+        .from("transactions")
+        .update({
+          status: "success",
+          paystack_receipt: event.data.reference,
+          webhook_received_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transactionId);
+
+      console.log("🚀 CALLING DATAHUB NOW");
+
+      // 🔥 CALL DATAHUB
+      await purchaseData(transaction);
+
+      return res.status(200).send("ok");
+    } catch (err: any) {
+      console.error("❌ [Paystack Webhook] Global Fatal Error:", err.message);
+      return res.sendStatus(500);
+    }
   });
 
   // DataHub GH Webhook (Order Status Updates)
@@ -692,7 +660,62 @@ Amount: GHS ${amount}`
     }
   });
 
+  async function getArkeselBalance() {
+    try {
+      const apiKey = process.env.ARKESEL_API_KEY;
+      if (!apiKey) throw new Error("API Key missing");
+
+      const response = await axios.get("https://sms.arkesel.com/api/v2/clients/balance-details", {
+        headers: {
+          "api-key": apiKey,
+        },
+        timeout: 10000
+      });
+
+      const resData = response.data;
+      
+      // Robust balance detection for Arkesel V2
+      let balance = 0;
+      
+      // Check top level
+      if (resData.balance !== undefined) balance = Number(resData.balance);
+      else if (resData.main_balance !== undefined) balance = Number(resData.main_balance);
+      else if (resData.user_balance !== undefined) balance = Number(resData.user_balance);
+      else if (resData.sms_balance !== undefined) balance = Number(resData.sms_balance);
+      // Check within 'data' object (Common in V2)
+      else if (resData.data) {
+        const d = resData.data;
+        if (d.balance !== undefined) balance = Number(d.balance);
+        else if (d.main_balance !== undefined) balance = Number(d.main_balance);
+        else if (d.user_balance !== undefined) balance = Number(d.user_balance);
+        else if (d.sms_balance !== undefined) balance = Number(d.sms_balance);
+        else if (d.available_balance !== undefined) balance = Number(d.available_balance);
+      }
+
+      return {
+        status: "online",
+        balance: balance,
+        last_checked: new Date().toISOString(),
+        raw: resData,
+      };
+    } catch (error: any) {
+      console.error("Arkesel error:", error.message);
+
+      return {
+        status: "offline",
+        balance: 0,
+        last_checked: new Date().toISOString(),
+        error: error.message
+      };
+    }
+  }
+
   // Arkesel SMS V2 Implementation
+  app.get("/api/arkesel/status", async (req, res) => {
+    const result = await getArkeselBalance();
+    res.json(result);
+  });
+
   app.get("/api/arkesel/balance", async (req, res) => {
     const apiKey = process.env.ARKESEL_API_KEY;
 
@@ -773,55 +796,49 @@ Amount: GHS ${amount}`
    * Diligently implemented by Lead Engineer
    */
   async function sendSMS(phone: string, message: string) {
-    const apiKey = process.env.ARKESEL_API_KEY;
-    if (!apiKey) {
-      console.warn("[Arkesel] API Key missing. Skipping SMS.");
-      return;
-    }
-
-    const formattedPhone = formatPhone(phone);
-
     try {
-      const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", {
+      console.log("🚀 SMS FUNCTION TRIGGERED");
+      console.log("API KEY:", process.env.ARKESEL_API_KEY);
+
+      const formattedPhone = phone.startsWith("0")
+        ? "233" + phone.slice(1)
+        : phone;
+
+      const payload = {
         sender: "Datapapa",
         message,
         recipients: [formattedPhone],
-      }, {
+      };
+
+      console.log("📤 SMS PAYLOAD:", payload);
+
+      const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
         headers: {
           "Content-Type": "application/json",
-          "api-key": apiKey,
+          "api-key": process.env.ARKESEL_API_KEY!,
         },
-        timeout: 10000,
-        validateStatus: () => true
+        timeout: 15000
       });
 
-      const result = response.data;
-      const isSuccess = response.status === 200 && (result.status === 'success' || result.code === '1000');
-      
-      console.log("SMS RESULT:", result);
+      const data = response.data;
+      console.log("✅ PARSED SMS RESPONSE:", data);
 
-      // Log to Supabase with status
-      await supabase.from("sms_logs").insert({
-        phone: formattedPhone,
-        message,
-        status: isSuccess ? "sent" : "failed",
-        response: result
-      });
-
-      return result;
-    } catch (err) {
-      console.error("SMS FAILED:", err);
-      // Log failure even if request failed
+      // Keep logging to Supabase if possible, but the user requested this specific implementation
+      // I will add the logging back in as a good practice if it doesn't conflict
       try {
         await supabase.from("sms_logs").insert({
           phone: formattedPhone,
           message,
-          status: "failed",
-          response: { error: err instanceof Error ? err.message : String(err) }
+          status: data.status === 'success' ? "sent" : "failed",
+          response: data
         });
       } catch (logErr) {
         console.error("FATAL SMS LOG ERROR:", logErr);
       }
+
+      return data;
+    } catch (err) {
+      console.error("❌ SMS ERROR:", err);
     }
   }
 

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePaystackPayment } from 'react-paystack';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw } from 'lucide-react';
+import axios from 'axios';
 
 const NETWORKS = [
   { id: 'mtn', name: 'MTN', color: 'bg-yellow-500', text: 'text-yellow-950', logo: 'https://i.postimg.cc/BvS8nyGS/download.jpg' },
@@ -34,6 +35,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [dbBundles, setDbBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'success'>('idle');
 
   const [supabaseReady] = useState(isSupabaseConfigured);
   
@@ -116,7 +118,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
 
-  const paystackConfig = {
+  const paystackConfig = useMemo(() => ({
     reference: `tx_${new Date().getTime().toString()}`,
     email: 'customer@datapapa.com',
     amount: selectedBundleObj ? Math.round(selectedBundleObj.price * 100) : 0, 
@@ -127,31 +129,44 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       transaction_id: currentTxId,
       phone: phone,
       network: network,
-      bundle: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
-      bundle_id: bundle,
-      amount: selectedBundleObj?.price || 0,
+      bundle: selectedBundleObj?.volume,
       custom_fields: [
         { display_name: "Phone Number", variable_name: "phone", value: phone },
         { display_name: "Network", variable_name: "network", value: network }
       ]
     }
-  };
+  }), [currentTxId, phone, network, selectedBundleObj]);
 
   const initializePayment = usePaystackPayment(paystackConfig);
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
+    console.log("Payment successful:", paystackResponse.reference);
     setIsLoading(true);
+    setPaymentStatus("success");
+    
     try {
       const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
       setPayerPhone(currentPayerPhone);
       setTransactionId(paystackResponse.reference);
       setSuccess(true);
 
-      // We have removed the manual window.open here because 
-      // the server now automatically handles the WhatsApp notification 
-      // via the Paystack webhook (triggered upon payment success).
+      // Trigger VTU immediately as fallback/direct trigger
+      if (currentTxId) {
+        console.log("🚀 DATAHUB FUNCTION TRIGGERED VIA AXIOS");
+        axios.post("/api/trigger-vtu", { transactionId: currentTxId })
+          .catch(err => console.error("Frontend VTU trigger error:", err));
+      }
+
+      const onSuccess = () => {
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      };
+      
+      onSuccess();
     } catch (err: any) {
       setError(err.message || 'Payment processing failed. Please contact support.');
+      setPaymentStatus("idle");
     } finally {
       setIsLoading(false);
     }
@@ -179,7 +194,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
     try {
       // 1. Save transaction FIRST as requested
-      const { data: txRecord, error: txError } = await supabase
+      const { data, error: txError } = await supabase
         .from("transactions")
         .insert({
           amount: selectedBundleObj?.price || 0,
@@ -187,17 +202,19 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           recipient_phone: phone,
           status: "pending",
           capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
-          network_key: selectedBundleObj?.original?.network_key || network
+          network_key: selectedBundleObj?.original?.network_key || network,
+          datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
+          datahub_capacity: selectedBundleObj?.original?.datahub_capacity || (selectedBundleObj?.volume || selectedBundleObj?.capacity || '').toUpperCase().replace("GB", "").trim()
         })
         .select()
         .single();
 
       if (txError) throw txError;
       
-      console.log("Transaction created in Supabase:", txRecord);
+      console.log("Transaction created in Supabase:", data);
 
       // 2. Now trigger Paystack via state update that fires useEffect
-      setCurrentTxId(txRecord.id);
+      setCurrentTxId(data.id);
     } catch (err: any) {
       console.error("Initialization error:", err);
       setError(err.message || 'Failed to initiate transaction. Please try again.');
@@ -305,7 +322,30 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   }
 
   return (
-    <div id="buy-data" className="w-full max-w-2xl mx-auto scroll-mt-24">
+    <div id="buy-data" className="w-full max-w-2xl mx-auto scroll-mt-24 relative">
+      <AnimatePresence>
+        {paymentStatus === "success" && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full border border-slate-100"
+            >
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-green-100 mb-6">
+                <CheckCircle2 className="h-10 w-10 text-green-600" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900 mb-2">Payment Successful</h2>
+              <p className="text-slate-500 font-medium animate-pulse">Refreshing app...</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-6 sm:p-8 md:p-10 border border-slate-100">
         <div className="text-center mb-10">
           <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
