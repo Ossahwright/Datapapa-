@@ -15,14 +15,22 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqo
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFzeHphcmh4Z2Z3bm9ndnVxb21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMjAyOTcsImV4cCI6MjA5MjU5NjI5N30.ZQZFhxQgzy9JBGUBW9wRfRDs44wcFkmDFu78PUJIags';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Centralized DataHub Config Helper
 async function getDataHubConfig() {
-  // 1. Priority 1: Environment Variable (most reliable for recent setup)
+  // 1. Check for environment variable (most reliable in AI Studio)
   const envKey = process.env.DATAHUB_API_KEY;
   const envUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api/external";
 
   console.log(`[DataHub Config] Checking sources. Env key present: ${!!envKey}`);
 
-  // 2. Try Supabase settings 'datahubgh' (Standard config)
+  if (envKey) {
+    return {
+      apiKey: envKey.trim(),
+      baseUrl: envUrl
+    };
+  }
+
+  // 2. Fallback to Supabase settings if env is not set
   try {
     const { data: dhData } = await supabase
       .from('settings')
@@ -33,7 +41,7 @@ async function getDataHubConfig() {
     if (dhData?.value?.api_key) {
       console.log("[DataHub Config] Found config in settings table");
       return {
-        apiKey: dhData.value.api_key,
+        apiKey: dhData.value.api_key.trim(),
         baseUrl: dhData.value.base_url || envUrl
       };
     }
@@ -48,7 +56,7 @@ async function getDataHubConfig() {
     if (secureData?.value?.datahub_api_key) {
       console.log("[DataHub Config] Found config in legacy 'secure' setting");
       return {
-        apiKey: secureData.value.datahub_api_key,
+        apiKey: secureData.value.datahub_api_key.trim(),
         baseUrl: envUrl
       };
     }
@@ -56,13 +64,8 @@ async function getDataHubConfig() {
     console.error("[DataHub Config] Error reading from Supabase:", err);
   }
 
-  // Final fallback to Env Key or a default (removed stale hardcoded key)
-  if (!envKey) {
-    console.warn("[DataHub Config] WARNING: No API key found in Env or Supabase!");
-  }
-
   return { 
-    apiKey: envKey || "", 
+    apiKey: "", 
     baseUrl: envUrl 
   }; 
 }
@@ -290,7 +293,7 @@ function mapCapacity(capacity: string): string {
 }
 
 async function purchaseData(transaction: any) {
-  console.log("🚀 DATAHUB FUNCTION TRIGGERED");
+  console.log("🚀 [DataHub] Triggering purchase logic for transaction:", transaction.id);
 
   // Format recipient for DataHub (0XXXXXXXXX)
   let recipient = transaction.recipient_phone;
@@ -303,7 +306,7 @@ async function purchaseData(transaction: any) {
   // Fallbacks for missing keys
   const networkKey = transaction.datahub_network_key || transaction.network_key || transaction.network;
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
-  const finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : capacity;
+  const finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
 
   const payload = {
     networkKey: networkKey,
@@ -311,36 +314,37 @@ async function purchaseData(transaction: any) {
     capacity: finalCapacity,
   };
 
-  console.log("📤 PAYLOAD:", payload);
+  console.log("📤 [DataHub] Payload:", payload);
 
   try {
-    const { apiKey } = await getDataHubConfig();
-    const activeKey = apiKey || process.env.DATAHUB_API_KEY;
+    const { apiKey, baseUrl } = await getDataHubConfig();
     
-    if (!activeKey) {
-      console.error("❌ NO DATAHUB API KEY FOUND. Please set it in Admin Dashboard or Environment.");
-      return;
+    if (!apiKey) {
+      console.error("❌ [DataHub] NO API KEY FOUND. Transaction marked as failed.");
+      await supabase.from("transactions").update({ vtu_status: 'failed', status: 'failed', api_response: { error: 'API key missing' } }).eq("id", transaction.id);
+      return { success: false, error: "API key missing" };
     }
 
     const response = await axios.post(
-      "https://app.datahubgh.com/api/external/data-purchase",
+      `${baseUrl}/data-purchase`,
       payload,
       {
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": activeKey,
-          "User-Agent": "Datapapa-VTU-NodeJS/1.0"
+          "X-API-Key": apiKey,
+          "User-Agent": "Datapapa-VTU-NodeJS/1.1"
         },
-        timeout: 30000
+        timeout: 35000,
+        validateStatus: () => true // Handle all status codes manually
       }
     );
 
     const result = response.data;
-    console.log("📥 DATAHUB RESPONSE:", result);
+    console.log(`📥 [DataHub] HTTP ${response.status} Response:`, result);
 
     // Update status based on response
     // DataHub returns status: SUCCESSFUL, PROCESSING, or FAILED
-    const isActuallySuccess = result.success === true || result.status === 'SUCCESSFUL' || result.status === 'PROCESSING';
+    const isActuallySuccess = response.status === 200 && (result.success === true || result.status === 'SUCCESSFUL' || result.status === 'PROCESSING');
     const vtuStatus = isActuallySuccess ? 'success' : 'failed';
 
     await supabase
@@ -353,28 +357,28 @@ async function purchaseData(transaction: any) {
       })
       .eq("id", transaction.id);
 
-    console.log(`✅ TRANSACTION ${transaction.id} UPDATED TO: ${vtuStatus}`);
+    console.log(`✅ [DataHub] Transaction ${transaction.id} result: ${vtuStatus}`);
     
-    return { success: isActuallySuccess, ...result };
+    return { 
+      success: isActuallySuccess, 
+      status: response.status,
+      ...result 
+    };
 
   } catch (err: any) {
-    console.error("❌ DATAHUB CALL FAILED:", err.message);
-    if (err.response) {
-      console.error("📥 ERROR DATA:", JSON.stringify(err.response.data));
-    }
+    console.error("❌ [DataHub] Critical Error:", err.message);
     
-    // Mark as failed in DB if network error
-    if (transaction.id) {
-      await supabase
-        .from("transactions")
-        .update({
-          vtu_status: 'failed',
-          api_response: { error: err.message, details: err.response?.data },
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", transaction.id);
+    // Attempt to log failure in Supabase
+    try {
+      await supabase.from("transactions").update({ 
+        vtu_status: 'failed', 
+        status: 'failed', 
+        api_response: { error: err.message, stack: err.stack } 
+      }).eq("id", transaction.id);
+    } catch (dbErr) {
+      console.error("❌ [DataHub] Failed to update fail status in DB:", dbErr);
     }
-    
+
     return { success: false, error: err.message };
   }
 }
@@ -411,17 +415,16 @@ async function purchaseData(transaction: any) {
   });
 
   app.post("/api/datahubgh/test", async (req, res) => {
-    const { apiKey, baseUrl } = await getDataHubConfig();
+    const { apiKey } = await getDataHubConfig();
     if (!apiKey) return res.json({ success: false, message: "API key missing" });
 
     try {
-      const resp = await axios.get(`${baseUrl}/user`, {
-        headers: { 'X-API-Key': apiKey },
+      const resp = await axios.get("https://app.datahubgh.com/api/external/status", {
         timeout: 10000,
         validateStatus: () => true
       });
       if (resp.status === 200) {
-        return res.json({ success: true, message: "Connected successfully" });
+        return res.json({ success: true, message: "Connected successfully", data: resp.data });
       }
       return res.json({ success: false, message: `Status check failed with ${resp.status}` });
     } catch (err: any) {
@@ -429,27 +432,92 @@ async function purchaseData(transaction: any) {
     }
   });
 
-  app.get("/api/datahubgh/ping", async (req, res) => {
-    const { apiKey, baseUrl } = await getDataHubConfig();
-    if (!apiKey) return res.json({ status: 'inactive' });
+  app.get("/api/check-datahub", async (req, res) => {
+    try {
+      const response = await axios.get("https://app.datahubgh.com/api/external/status", {
+        timeout: 10000,
+        validateStatus: () => true
+      });
 
+      const data = response.data;
+      
+      // ✅ FIXED LOGIC based on user's snippet
+      const isOnline = 
+        response.status === 200 && 
+        (
+          data?.status === "operational" || 
+          data?.status === "ok" || 
+          data?.services?.api === "healthy"
+        );
+
+      console.log("📡 DATAHUB STATUS:", data);
+
+      return res.status(200).json({
+        online: isOnline,
+        data,
+      });
+    } catch (err: any) {
+      console.error("❌ DATAHUB OFFLINE:", err.message);
+
+      return res.status(200).json({
+        online: false,
+        error: err.message,
+      });
+    }
+  });
+
+  app.get("/api/check-sms-balance", async (req, res) => {
+    try {
+      const apiKey = process.env.ARKESEL_API_KEY;
+      if (!apiKey) {
+        return res.json({ balance: 0, error: "API Key missing" });
+      }
+
+      // Updated to requested V1 Balance API
+      const url = `https://sms.arkesel.com/sms/api?action=check-balance&api_key=${apiKey}&response=json`;
+      const response = await axios.get(url, { timeout: 10000 });
+      const data = response.data;
+      
+      // Handle both formats (balance or main_balance)
+      const balance = data?.balance ?? data?.main_balance ?? 0;
+
+      return res.status(200).json({ 
+        balance: Number(balance),
+        raw: data
+      });
+    } catch (e: any) {
+      console.error("[SMS Balance] Error:", e.message);
+      return res.status(200).json({ balance: 0, error: e.message });
+    }
+  });
+
+  app.get("/api/datahubgh/ping", async (req, res) => {
+    const { apiKey } = await getDataHubConfig();
+    
+    // Always check the global status URL first as suggested by user
     const start = Date.now();
     try {
-      const resp = await axios.get(`${baseUrl}/user`, {
-        headers: { 'X-API-Key': apiKey },
+      const resp = await axios.get("https://app.datahubgh.com/api/external/status", {
         timeout: 5000,
         validateStatus: () => true
       });
-      const duration = Date.now() - start;
       
-      let status = 'offline';
-      if (resp.status === 200) {
-        status = duration < 2000 ? 'online' : 'degraded';
-      }
-
-      return res.json({ status, responseTime: duration });
-    } catch (err) {
-      return res.json({ status: 'offline', responseTime: Date.now() - start });
+      const duration = Date.now() - start;
+      const isOnline = resp.status === 200;
+      
+      return res.json({ 
+        status: isOnline ? (duration < 2000 ? 'online' : 'degraded') : 'offline', 
+        responseTime: duration,
+        online: isOnline,
+        data: resp.data
+      });
+    } catch (err: any) {
+      return res.json({ 
+        status: 'offline', 
+        responseTime: Date.now() - start,
+        online: false,
+        error: err.message
+      });
     }
   });
 
@@ -458,22 +526,68 @@ async function purchaseData(transaction: any) {
     if (!apiKey) return res.status(401).json({ error: "API key not set" });
 
     try {
-      // Trying /user as it's a common endpoint for account balance in DataHub Gh
-      const resp = await axios.get(`${baseUrl}/user`, {
-        headers: { 'X-API-Key': apiKey },
-        timeout: 10000
-      });
+      const parentUrl = baseUrl.replace(/\/external$/, "");
+      const baseApiUrl = baseUrl.replace(/\/api\/external$/, "/api");
       
-      // Some versions use 'wallet_balance', others just 'balance'
-      const balance = resp.data.wallet_balance !== undefined ? resp.data.wallet_balance : (resp.data.balance || 0);
-      return res.json({ balance });
+      // Probing common endpoints for DataHub Gh (v1/v2/external)
+      const endpoints = [
+        `${baseUrl}/user`,
+        `${baseUrl}/balance`,
+        `${baseUrl}/wallet`,
+        `${baseUrl}/wallet/balance`,
+        `${baseUrl}/user/profile`,
+        `${parentUrl}/user`,
+        `${parentUrl}/balance`,
+        `${baseUrl}/fetch-user`,
+        `${baseApiUrl}/user`,
+        `${baseApiUrl}/balance`,
+        `${baseApiUrl}/v2/user`,
+        `${baseApiUrl}/v2/balance`,
+        "https://app.datahubgh.com/api/external/user",
+        "https://app.datahubgh.com/api/external/balance"
+      ];
+      let lastError = null;
+
+      for (const url of endpoints) {
+        try {
+          const resp = await axios.get(url, {
+            headers: { 'X-API-Key': apiKey },
+            params: { api_key: apiKey }, // Try as query param too for older versions
+            timeout: 10000,
+            validateStatus: (status) => status < 500
+          });
+          
+          if (resp.status === 200 && resp.data) {
+            console.log(`[DataHub Balance] Found success at ${url}`);
+            let balance = 0;
+            const d = resp.data;
+            
+            // Check multiple common key names
+            if (d.wallet_balance !== undefined) balance = Number(d.wallet_balance);
+            else if (d.balance !== undefined) balance = Number(d.balance);
+            else if (d.user?.wallet_balance !== undefined) balance = Number(d.user.wallet_balance);
+            else if (d.data?.balance !== undefined) balance = Number(d.data.balance);
+            else if (d.details?.wallet_balance !== undefined) balance = Number(d.details.wallet_balance);
+            
+            return res.json({ balance, url }); 
+          } else {
+             console.warn(`[DataHub Balance] Endpoint ${url} returned status ${resp.status}`);
+          }
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[DataHub Balance] Failed at ${url}: ${err.message}`);
+        }
+      }
+      
+      throw lastError || new Error("All candidate endpoints failed with 404/error");
     } catch (err: any) {
       console.error("[DataHub Balance API] Error:", err.message);
-      if (err.response) {
-        console.error("Response data:", typeof err.response.data === 'string' ? err.response.data.slice(0, 500) : JSON.stringify(err.response.data));
-      }
-      // Return 200 with 0 balance instead of 500 to keep UI clean if it's just a config issue
-      return res.status(200).json({ balance: 0, error: err.message });
+      return res.status(200).json({ 
+        balance: 0, 
+        error: err.message, 
+        status: 'offline',
+        details: err.response?.data 
+      });
     }
   });
 
@@ -687,31 +801,21 @@ async function purchaseData(transaction: any) {
       const apiKey = process.env.ARKESEL_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
 
-      const response = await axios.get("https://sms.arkesel.com/api/v2/clients/balance-details", {
-        headers: {
-          "api-key": apiKey,
-        },
-        timeout: 10000
-      });
-
+      // Use the specific URL provided by the user
+      // https://sms.arkesel.com/sms/api?action=check-balance&api_key=YOUR_API_KEY&response=json
+      const url = `https://sms.arkesel.com/sms/api?action=check-balance&api_key=${apiKey}&response=json`;
+      
+      const response = await axios.get(url, { timeout: 10000 });
       const resData = response.data;
       
-      // Robust balance detection for Arkesel V2
+      console.log("[Arkesel V1 Balance Data]:", resData);
+
+      // detect balance from JSON response
       let balance = 0;
-      
-      // Check top level
-      if (resData.balance !== undefined) balance = Number(resData.balance);
-      else if (resData.main_balance !== undefined) balance = Number(resData.main_balance);
-      else if (resData.user_balance !== undefined) balance = Number(resData.user_balance);
-      else if (resData.sms_balance !== undefined) balance = Number(resData.sms_balance);
-      // Check within 'data' object (Common in V2)
-      else if (resData.data) {
-        const d = resData.data;
-        if (d.balance !== undefined) balance = Number(d.balance);
-        else if (d.main_balance !== undefined) balance = Number(d.main_balance);
-        else if (d.user_balance !== undefined) balance = Number(d.user_balance);
-        else if (d.sms_balance !== undefined) balance = Number(d.sms_balance);
-        else if (d.available_balance !== undefined) balance = Number(d.available_balance);
+      if (resData.balance !== undefined) {
+        balance = Number(resData.balance);
+      } else if (resData.main_balance !== undefined) {
+        balance = Number(resData.main_balance);
       }
 
       return {
@@ -721,14 +825,32 @@ async function purchaseData(transaction: any) {
         raw: resData,
       };
     } catch (error: any) {
-      console.error("Arkesel error:", error.message);
-
-      return {
-        status: "offline",
-        balance: 0,
-        last_checked: new Date().toISOString(),
-        error: error.message
-      };
+      console.error("[Arkesel] V1 Status Error:", error.message);
+      
+      // Fallback to V2 if V1 fails just in case
+      try {
+        const apiKey = process.env.ARKESEL_API_KEY;
+        const response = await axios.get("https://sms.arkesel.com/api/v2/clients/balance-details", {
+          headers: { "api-key": apiKey },
+          timeout: 5000
+        });
+        const resData = response.data;
+        const balance = resData.data?.balance ?? resData.balance ?? 0;
+        return {
+          status: "online",
+          balance: Number(balance),
+          last_checked: new Date().toISOString(),
+          raw: resData,
+          note: "via v2 fallback"
+        };
+      } catch (v2Err) {
+        return {
+          status: "offline",
+          balance: 0,
+          last_checked: new Date().toISOString(),
+          error: error.message
+        };
+      }
     }
   }
 
@@ -739,29 +861,17 @@ async function purchaseData(transaction: any) {
   });
 
   app.get("/api/arkesel/balance", async (req, res) => {
-    const apiKey = process.env.ARKESEL_API_KEY;
-
-    if (!apiKey) {
-      return res.status(401).json({ success: false, message: 'Arkesel API key not configured' });
-    }
-
-    try {
-      const response = await axios.get(`https://sms.arkesel.com/api/v2/clients/balance-details`, {
-        headers: { 'api-key': apiKey },
-        timeout: 10000
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: response.data
-      });
-    } catch (error: any) {
-      console.error("[Arkesel Balance] Error:", error.message);
+    const result = await getArkeselBalance();
+    if (result.status === "offline") {
       return res.status(500).json({
         success: false,
-        message: 'Failed to fetch balance: ' + error.message,
+        message: 'Failed to fetch balance: ' + (result.error || "Unknown error"),
       });
     }
+    return res.status(200).json({
+      success: true,
+      data: result.raw
+    });
   });
 
   app.post("/api/arkesel/send-sms", async (req, res) => {
@@ -776,22 +886,37 @@ async function purchaseData(transaction: any) {
     }
 
     try {
-      // Arkesel V2 API docs: https://sms.arkesel.com/api/sms/send
-      const response = await axios.get(`https://sms.arkesel.com/api/sms/send`, {
-        params: {
-          api_key: apiKey,
-          to: to,
-          from: senderId,
-          sms: message
+      console.log(`[Arkesel] Sending test SMS to: ${to}`);
+      
+      // format number → 233XXXXXXXXX
+      let phone = to.trim().replace(/\D/g, '');
+      if (phone.startsWith("0")) {
+        phone = "233" + phone.substring(1);
+      } else if (phone.length === 9) {
+        phone = "233" + phone;
+      }
+
+      const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", {
+        sender: senderId.slice(0, 11),
+        message,
+        recipients: [phone],
+      }, {
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": apiKey,
         },
-        timeout: 10000
+        timeout: 15000
       });
 
       const data = response.data;
+      console.log("[Arkesel] API Response:", data);
 
-      // Arkesel returns status: 'success' for successful delivery in V2
-      if (data.status !== 'success') {
-        console.error("[Arkesel] API Error Response:", data);
+      if (data.status === 'success' || data.code === '1000' || data.code === 1000) {
+        return res.status(200).json({
+          success: true,
+          data,
+        });
+      } else {
         return res.status(400).json({
           success: false,
           message: data.message || 'Failed to send SMS',
@@ -799,16 +924,17 @@ async function purchaseData(transaction: any) {
         });
       }
 
-      return res.status(200).json({
-        success: true,
-        data,
-      });
-
     } catch (error: any) {
       console.error("[Arkesel] Fatal error:", error.message);
+      let errorDetail = error.message;
+      if (error.response) {
+        console.error("[Arkesel] Error Response:", JSON.stringify(error.response.data));
+        errorDetail = error.response.data?.message || JSON.stringify(error.response.data);
+      }
       return res.status(500).json({
         success: false,
-        message: 'Server error: ' + error.message,
+        message: 'Arkesel Error: ' + errorDetail,
+        details: error.response?.data
       });
     }
   });

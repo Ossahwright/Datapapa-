@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import React, { useEffect, useState } from "react";
+import axios from "axios";
 import BuyDataForm from "../components/BuyDataForm";
 import { supabase } from "../lib/supabase";
 
@@ -112,29 +113,21 @@ export default function Home({ settings }: HomeProps) {
 
   const retryVTU = async (transactionId: string) => {
     try {
-      const res = await fetch("/api/retry-vtu", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transactionId }),
-      });
-      const result = await res.json();
-      alert(result.message);
-    } catch (err) {
-      alert("Retry failed");
+      const res = await axios.post("/api/retry-vtu", { transactionId });
+      alert(res.data.message || "Retry executed");
+    } catch (err: any) {
+      console.error("Retry failed:", err);
+      alert("Retry failed: " + (err.response?.data?.message || err.message));
     }
   };
 
   const resendSMS = async (tx: any) => {
     try {
-      const res = await fetch("/api/resend-sms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transactionId: tx.id }),
-      });
-      const result = await res.json();
-      alert(result.message);
-    } catch (err) {
-      alert("SMS resend failed");
+      const res = await axios.post("/api/resend-sms", { transactionId: tx.id });
+      alert(res.data.message || "SMS resent");
+    } catch (err: any) {
+      console.error("SMS resend failed:", err);
+      alert("SMS resend failed: " + (err.response?.data?.message || err.message));
     }
   };
 

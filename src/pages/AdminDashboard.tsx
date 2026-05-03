@@ -110,34 +110,112 @@ export default function AdminDashboard() {
   const [dataHubLogs, setDataHubLogs] = useState<any[]>([]);
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
 
-  // Arkesel Integration State
-  const [arkesel, setArkesel] = useState<any>(null);
-  const [isRefreshingArkesel, setIsRefreshingArkesel] = useState(false);
+  // Health & KPIs State
+  const [health, setHealth] = useState({ datahub: false, smsBalance: 0, smsOnline: false, lastChecked: "" });
+  const [kpi, setKpi] = useState({ total: 0, revenue: 0, success: 0, failed: 0 });
+  const [rows, setRows] = useState<any[]>([]);
 
-  const fetchArkeselStatus = () => {
-    setIsRefreshingArkesel(true);
-    axios.get("/api/arkesel/status")
-      .then((res) => {
-        setArkesel(res.data);
-      })
-      .catch((err) => {
-        setArkesel({ 
-          status: "offline", 
-          balance: 0, 
-          last_checked: new Date().toISOString(),
-          error: err.message || "Failed to connect to backend"
-        });
-      })
-      .finally(() => {
-        setIsRefreshingArkesel(false);
+  const loadHealth = async () => {
+    try {
+      const [dhRes, smsRes] = await Promise.allSettled([
+        axios.get("/api/check-datahub"),
+        axios.get("/api/check-sms-balance")
+      ]);
+      
+      const dh = dhRes.status === 'fulfilled' ? dhRes.value.data : { online: false };
+      const sms = smsRes.status === 'fulfilled' ? smsRes.value.data : { balance: 0 };
+
+      setHealth({ 
+        datahub: dh.online, 
+        smsBalance: sms.balance, 
+        smsOnline: !!(sms && !sms.error),
+        lastChecked: new Date().toISOString()
       });
+    } catch (err) {
+      console.error("Health load error:", err);
+    }
   };
 
+  // Health check effect
   useEffect(() => {
-    fetchArkeselStatus();
-    const interval = setInterval(fetchArkeselStatus, 30000); // every 30 seconds
-    return () => clearInterval(interval);
+    loadHealth();
+    const t = setInterval(loadHealth, 30000); 
+    return () => clearInterval(t);
   }, []);
+
+  // Today metrics effect
+  useEffect(() => {
+    const fetchKPI = async () => {
+      const { data, error } = await supabase.rpc("get_today_kpi");
+      if (!error && data) {
+         // RPC returns an array in some Supabase versions, or a single object if configured
+         const stats = Array.isArray(data) ? data[0] : data;
+         setKpi({
+           total: stats?.total_tx ?? 0,
+           revenue: stats?.revenue ?? 0,
+           success: stats?.success_count ?? 0,
+           failed: stats?.failed_count ?? 0,
+         });
+      } else {
+        // Fallback to manual query if RPC fails
+        const today = new Date();
+        today.setHours(0,0,0,0);
+        
+        const { data: txs } = await supabase
+          .from("transactions")
+          .select("amount, vtu_status")
+          .gte("created_at", today.toISOString());
+          
+        if (txs) {
+          const total = txs.length;
+          const revenue = txs.reduce((sum, tx) => sum + Number(tx.amount), 0);
+          const success = txs.filter(tx => tx.vtu_status === 'success' || tx.vtu_status === 'delivered').length;
+          const failed = txs.filter(tx => tx.vtu_status === 'failed').length;
+          setKpi({ total, revenue, success, failed });
+        }
+      }
+    };
+    fetchKPI();
+    const t = setInterval(fetchKPI, 60000); // refresh KPIs every minute
+    return () => clearInterval(t);
+  }, []);
+
+  // Real-time transactions effect
+  useEffect(() => {
+    // initial load
+    supabase.from("transactions")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50)
+      .then(({ data }) => setRows(data ?? []));
+
+    // realtime
+    const ch = supabase
+      .channel("tx-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "transactions" },
+        (p) => {
+          setRows(prev => {
+            const newDoc = p.new as any;
+            if (!newDoc?.id) return prev;
+            
+            const idx = prev.findIndex(x => x.id === newDoc.id);
+            if (idx === -1) return [newDoc, ...prev].slice(0, 50);
+            const copy = [...prev];
+            copy[idx] = newDoc;
+            return copy;
+          });
+        }
+      ).subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, []);
+
+  const successRate = kpi.total ? ((kpi.success / kpi.total) * 100).toFixed(1) : 0;
+  const isStuck = (t: any) =>
+    t.vtu_status === "processing" &&
+    Date.now() - new Date(t.created_at).getTime() > 5 * 60 * 1000;
 
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
@@ -747,24 +825,13 @@ export default function AdminDashboard() {
   const [isDeletingTx, setIsDeletingTx] = useState(false);
   const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
 
-  const isStuck = (t: any) =>
-    t.vtu_status === "processing" &&
-    Date.now() - new Date(t.created_at).getTime() > 1000000;
-
   const resendSMS = async (tx: any) => {
     try {
-      const res = await fetch("/api/resend-sms", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ transactionId: tx.id }),
-      });
-      const result = await res.json();
-      alert(result.message);
+      const res = await axios.post("/api/resend-sms", { transactionId: tx.id });
+      alert(res.data.message || "SMS Resent");
     } catch (err: any) {
       console.error("Resend SMS failed:", err);
-      alert("Failed to resend SMS: " + (err.message || String(err)));
+      alert("Failed to resend SMS: " + (err.response?.data?.error || err.message || String(err)));
     }
   };
 
@@ -773,20 +840,12 @@ export default function AdminDashboard() {
     setIsRetryingVTU(transactionId);
     
     try {
-      const res = await fetch("/api/retry-vtu", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ transactionId }),
-      });
-
-      const result = await res.json();
-      alert(result.message);
+      const res = await axios.post("/api/retry-vtu", { transactionId });
+      alert(res.data.message || "VTU Retry Executed");
       fetchTransactions();
     } catch (err: any) {
       console.error("Retry failed:", err);
-      alert("Failed to execute retry: " + (err.message || String(err)));
+      alert("Failed to execute retry: " + (err.response?.data?.error || err.message || String(err)));
     } finally {
       setIsRetryingVTU(null);
     }
@@ -848,11 +907,11 @@ export default function AdminDashboard() {
       }
 
       // 2. Get Ping/Status
-      const pingResp = await axios.get('/api/datahubgh/ping');
+      const pingResp = await axios.get('/api/check-datahub');
       if (pingResp.status === 200) {
         const pResult = pingResp.data;
-        setDataHubPing(pResult.responseTime);
-        setDataHubSettings(prev => ({ ...prev, status: pResult.status }));
+        setDataHubPing(pResult.responseTime || null);
+        setDataHubSettings(prev => ({ ...prev, status: pResult.online ? 'online' : 'offline' }));
       } else {
         setDataHubSettings(prev => ({ ...prev, status: 'offline' }));
       }
@@ -1151,71 +1210,167 @@ export default function AdminDashboard() {
         {currentView === 'dashboard' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
             <header className="mb-8">
-              <h1 className="text-2xl font-bold text-slate-900">Dashboard Overview</h1>
-              <p className="text-slate-500 mt-1">Welcome {user?.user_metadata?.full_name || 'Admin'}. Here's what's happening today.</p>
+              <h1 className="text-2xl font-bold text-slate-900">System Overview</h1>
+              <p className="text-slate-500 mt-1">Real-time monitoring of VTU services and revenue.</p>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                 <div className="text-slate-500 font-medium text-sm mb-2">Total Sales</div>
-                 <div className="text-3xl font-bold text-slate-900">₵{dashboardStats.sales.toFixed(2)}</div>
-                 <div className="text-xs text-slate-400 mt-2 font-medium">All time successful</div>
+            {/* Health Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">Service Health</div>
+                 <div className="flex items-center gap-2 text-xl font-bold">
+                    <Database size={20} className={health.datahub ? "text-emerald-500" : "text-rose-500"} />
+                    <span>DataHub Channel</span>
+                    <span className={`ml-2 px-2 py-0.5 rounded-full text-[10px] ${health.datahub ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                      {health.datahub ? "🟢 ONLINE" : "🔴 OFFLINE"}
+                    </span>
+                 </div>
                </div>
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                 <div className="text-slate-500 font-medium text-sm mb-2">Transactions</div>
-                 <div className="text-3xl font-bold text-slate-900">{dashboardStats.transactions}</div>
-                 <div className="text-xs text-slate-400 mt-2 font-medium">All time</div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">SMS Wallet</div>
+                 <div className="flex items-center gap-2 text-xl font-bold">
+                    <MessageSquare size={20} className="text-indigo-500" />
+                    <span>Arkesel Balance:</span>
+                    <span className="text-indigo-700 ml-1">₵{Number(health.smsBalance).toFixed(2)}</span>
+                 </div>
                </div>
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                 <div className="text-slate-500 font-medium text-sm mb-2">Active Users</div>
-                 <div className="text-3xl font-bold text-slate-900">{dashboardStats.users}</div>
-                 <div className="text-xs text-slate-400 mt-2 font-medium">Registered</div>
-               </div>
-               {/* Arkesel Status Card */}
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
-                  <div className="flex justify-between items-start mb-2">
-                    <div className="text-slate-500 font-medium text-sm">Arkesel SMS</div>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={fetchArkeselStatus} 
-                        disabled={isRefreshingArkesel}
-                        className={`p-1 rounded-md hover:bg-slate-50 text-slate-400 transition-all ${isRefreshingArkesel ? 'animate-spin' : ''}`}
-                      >
-                        <RefreshCw size={14} />
-                      </button>
-                      <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
-                        arkesel?.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                      }`}>
-                        <Activity size={10} className={arkesel?.status === 'online' ? 'animate-pulse' : ''} />
-                        {arkesel?.status || 'checking'}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-3xl font-bold text-slate-900">
-                    {arkesel?.balance !== undefined ? `₵${Number(arkesel.balance).toFixed(2)}` : '₵ --.--'}
-                  </div>
-                  <div className="flex flex-col gap-1 mt-2">
-                    <div className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
-                      <Clock size={10} />
-                      {arkesel?.last_checked ? `Checked: ${new Date(arkesel.last_checked).toLocaleTimeString()}` : 'Initializing...'}
-                    </div>
-                    {arkesel?.error && (
-                      <div className="text-[10px] text-rose-500 font-medium truncate max-w-[150px]" title={arkesel.error}>
-                        Err: {arkesel.error}
-                      </div>
-                    )}
-                  </div>
-                  <MessageSquare className="absolute -right-2 -bottom-2 text-slate-100/50 group-hover:scale-110 transition-transform" size={48} />
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">Last Heartbeat</div>
+                 <div className="flex items-center gap-2 text-xl font-bold">
+                    <RefreshCw size={20} className="text-slate-400 animate-pulse" />
+                    <span>Sync Status:</span>
+                    <span className="text-slate-600 ml-1">{new Date().toLocaleTimeString()}</span>
+                 </div>
                </div>
             </div>
 
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="px-6 py-5 border-b border-slate-100">
-                <h3 className="text-lg font-semibold text-slate-900">Recent Transactions</h3>
+            {/* Stuck Alerts */}
+            {rows.filter(isStuck).length > 0 && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 px-6 py-4 rounded-2xl mb-8 flex items-center justify-between animate-pulse">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="text-rose-600" />
+                  <span className="font-bold uppercase tracking-tight">🚨 CRITICAL: {rows.filter(isStuck).length} transactions appear stuck !</span>
+                </div>
+                <button 
+                  onClick={() => setCurrentView('transactions')}
+                  className="bg-rose-600 text-white px-4 py-1.5 rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors uppercase tracking-widest shadow-lg shadow-rose-200"
+                >
+                  Review Stalled Orders
+                </button>
               </div>
-              <div className="p-8 text-center text-slate-500">
-                <Activity className="h-8 w-8 text-slate-300 mx-auto mb-3" />
-                <p>Connect your database to view recent transactions here.</p>
+            )}
+
+            {/* KPI Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
+                 <div className="relative z-10">
+                   <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Revenue (Today)</div>
+                   <div className="text-3xl font-black text-slate-900 group-hover:scale-105 transition-transform origin-left">₵{Number(kpi.revenue).toFixed(2)}</div>
+                   <p className="text-[10px] text-slate-400 mt-2">Gross income for current date</p>
+                 </div>
+                 <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                    <CreditCard size={100} strokeWidth={1} />
+                 </div>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Transactions</div>
+                 <div className="text-3xl font-black text-slate-900">{kpi.total}</div>
+                 <p className="text-[10px] text-slate-400 mt-2">Volume of orders processed</p>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Success Rate</div>
+                 <div className="flex items-baseline gap-2">
+                    <div className="text-3xl font-black text-emerald-600">{successRate}%</div>
+                    <div className="text-xs font-bold text-emerald-400 uppercase tracking-tighter">Healthy</div>
+                 </div>
+                 <p className="text-[10px] text-slate-400 mt-2">Percentage of successful deliveries</p>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">System Failures</div>
+                 <div className="text-3xl font-black text-rose-600">{kpi.failed}</div>
+                 <p className="text-[10px] text-slate-400 mt-2">Orders requiring manual intervention</p>
+               </div>
+            </div>
+
+            {/* Live Feed */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
+                  <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Live Transaction Stream</h3>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase">Limit: Last 50 Events</div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-400 font-bold text-[10px] uppercase tracking-widest border-b border-slate-100">
+                    <tr>
+                      <th className="px-6 py-4">Network</th>
+                      <th className="px-6 py-4">Quantity</th>
+                      <th className="px-6 py-4">Recipients</th>
+                      <th className="px-6 py-4">Price</th>
+                      <th className="px-6 py-4 text-center">Outcome</th>
+                      <th className="px-6 py-4 text-right">Timestamp</th>
+                      <th className="px-6 py-4 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-20 text-center text-slate-400 italic">
+                          Waiting for live data...
+                        </td>
+                      </tr>
+                    ) : (
+                      rows.map(tx => (
+                        <tr key={tx.id} className={`hover:bg-slate-50/80 transition-colors ${isStuck(tx) ? 'bg-rose-50/50' : ''}`}>
+                          <td className="px-6 py-4">
+                            <span className="font-black text-slate-900 tracking-tight">{tx.network}</span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-600">{tx.capacity}</td>
+                          <td className="px-6 py-4 font-mono text-xs">{tx.recipient_phone}</td>
+                          <td className="px-6 py-4 font-bold text-slate-900">₵{tx.amount}</td>
+                          <td className="px-6 py-4 text-center">
+                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                              tx.vtu_status === 'success' || tx.vtu_status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
+                              tx.vtu_status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                              tx.vtu_status === 'processing' ? 'bg-amber-100 text-amber-700 animate-pulse' :
+                              'bg-slate-100 text-slate-500'
+                            }`}>
+                              {tx.vtu_status || 'PENDING'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">
+                            {new Date(tx.created_at).toLocaleTimeString()}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button 
+                                onClick={() => retryVTU(tx.id)}
+                                className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-900 hover:text-white transition-all shadow-sm"
+                                title="Retry VTU"
+                              >
+                                <RefreshCw size={14} className={isRetryingVTU === tx.id ? 'animate-spin' : ''} />
+                              </button>
+                              <button 
+                                onClick={() => resendSMS(tx)}
+                                className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                                title="Resend SMS"
+                              >
+                                <MessageSquare size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </motion.div>
@@ -1990,43 +2145,42 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className={`p-4 rounded-2xl border transition-all ${arkesel?.status === 'online' ? 'bg-indigo-50 border-indigo-100' : 'bg-rose-50 border-rose-100'}`}>
+                          <div className={`p-4 rounded-2xl border transition-all ${health.smsOnline ? 'bg-indigo-50 border-indigo-100' : 'bg-rose-50 border-rose-100'}`}>
                             <div className="flex items-center justify-between">
                               <div>
-                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${arkesel?.status === 'online' ? 'text-indigo-400' : 'text-rose-400'}`}>SMS Balance</p>
+                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${health.smsOnline ? 'text-indigo-400' : 'text-rose-400'}`}>SMS Balance</p>
                                 <div className="flex items-baseline gap-1">
-                                  <p className={`text-xl font-black ${arkesel?.status === 'online' ? 'text-indigo-900' : 'text-rose-900'}`}>
-                                    {arkesel?.balance !== undefined ? Number(arkesel.balance).toLocaleString() : '--'}
+                                  <p className={`text-xl font-black ${health.smsOnline ? 'text-indigo-900' : 'text-rose-900'}`}>
+                                    {Number(health.smsBalance).toLocaleString()}
                                   </p>
-                                  {arkesel?.status === 'online' && <span className="text-[10px] font-bold text-indigo-400">CREDITS</span>}
+                                  {health.smsOnline && <span className="text-[10px] font-bold text-indigo-400">CREDITS</span>}
                                 </div>
                               </div>
                               <button
                                 type="button"
-                                onClick={fetchArkeselStatus}
-                                disabled={isRefreshingArkesel}
-                                className={`p-2 rounded-lg transition-colors disabled:opacity-50 ${arkesel?.status === 'online' ? 'text-indigo-600 hover:bg-indigo-100' : 'text-rose-600 hover:bg-rose-100'}`}
+                                onClick={loadHealth}
+                                className={`p-2 rounded-lg transition-colors ${health.smsOnline ? 'text-indigo-600 hover:bg-indigo-100' : 'text-rose-600 hover:bg-rose-100'}`}
                                 title="Refresh Balance"
                               >
-                                <RefreshCw size={18} className={isRefreshingArkesel ? 'animate-spin' : ''} />
+                                <RefreshCw size={18} />
                               </button>
                             </div>
                           </div>
                           
-                          <div className={`p-4 rounded-2xl border transition-all ${arkesel?.status === 'online' ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                          <div className={`p-4 rounded-2xl border transition-all ${health.smsOnline ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
                             <div className="flex items-center justify-between">
                               <div>
-                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${arkesel?.status === 'online' ? 'text-emerald-400' : 'text-rose-400'}`}>API Status</p>
+                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${health.smsOnline ? 'text-emerald-400' : 'text-rose-400'}`}>API Status</p>
                                 <div className="flex items-center gap-1.5">
-                                  <div className={`w-2 h-2 rounded-full ${arkesel?.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                                  <p className={`text-sm font-bold capitalize ${arkesel?.status === 'online' ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                    {arkesel?.status || 'checking...'}
+                                  <div className={`w-2 h-2 rounded-full ${health.smsOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                                  <p className={`text-sm font-bold capitalize ${health.smsOnline ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                    {health.smsOnline ? 'online' : 'offline'}
                                   </p>
                                 </div>
                               </div>
                               <div className="text-right">
-                                <p className={`text-[10px] font-mono ${arkesel?.status === 'online' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                  {arkesel?.last_checked ? new Date(arkesel.last_checked).toLocaleTimeString() : ''}
+                                <p className={`text-[10px] font-mono ${health.smsOnline ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {health.lastChecked ? new Date(health.lastChecked).toLocaleTimeString() : ''}
                                 </p>
                                 <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Last Checked</p>
                               </div>
@@ -2034,7 +2188,7 @@ export default function AdminDashboard() {
                           </div>
                         </div>
 
-                        {arkesel?.error && (
+                        {!health.smsOnline && (
                           <motion.div 
                             initial={{ opacity: 0, y: -10 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -2043,7 +2197,7 @@ export default function AdminDashboard() {
                             <AlertCircle className="text-rose-600 shrink-0 mt-0.5" size={14} />
                             <div className="flex-1">
                               <p className="text-[10px] font-bold text-rose-800">API Error Detected</p>
-                              <p className="text-[10px] text-rose-600 font-mono mt-0.5 leading-tight">{arkesel.error}</p>
+                              <p className="text-[10px] text-rose-600 font-mono mt-0.5 leading-tight">Check Arkesel API key or network connectivity.</p>
                             </div>
                           </motion.div>
                         )}
@@ -2116,10 +2270,16 @@ export default function AdminDashboard() {
                             value={dataHubSettings.api_key || ''}
                             onChange={(e) => setDataHubSettings({...dataHubSettings, api_key: e.target.value})}
                             className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
-                            placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxx"
+                            placeholder="Set via DATAHUB_API_KEY env or enter here"
                           />
                         </div>
                       </div>
+                    </div>
+
+                    <div className="mb-6">
+                      <p className="text-[10px] text-slate-400 italic">
+                        Note: Environment variable <strong>DATAHUB_API_KEY</strong> takes precedence over the value entered here.
+                      </p>
                     </div>
 
                     {/* Balance Cards & Actions */}

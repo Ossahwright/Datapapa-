@@ -22,7 +22,7 @@ export default function App() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchGlobalSettings = useCallback(async () => {
+  const fetchGlobalSettings = useCallback(async (retryCount = 0) => {
     try {
       const { data, error } = await supabase
         .from('settings')
@@ -34,8 +34,15 @@ export default function App() {
       if (data) {
         setSettings(data.value as AppSettings);
       }
-    } catch (err) {
-      console.error('Error fetching settings:', err);
+    } catch (err: any) {
+      console.error(`Error fetching settings (attempt ${retryCount + 1}):`, err);
+      
+      // Retry logic for network errors
+      if (retryCount < 2 && (err.message?.includes('Failed to fetch') || err.message?.includes('Network Error'))) {
+        setTimeout(() => fetchGlobalSettings(retryCount + 1), 1500);
+        return;
+      }
+
       // Fallback settings to prevent total breakage
       setSettings({
         app_name: 'Datapapa',

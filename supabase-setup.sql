@@ -248,19 +248,22 @@ EXCEPTION
     NULL;
 END $$;
 
--- Add tables to publication if they are not already there
--- (Supabase might already have them added)
-DO $$
+-- 14. Create get_today_kpi RPC for Admin Dashboard
+CREATE OR REPLACE FUNCTION public.get_today_kpi()
+RETURNS TABLE (
+    total_tx BIGINT,
+    revenue NUMERIC,
+    success_count BIGINT,
+    failed_count BIGINT
+) AS $$
 BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.bundles;
-EXCEPTION WHEN others THEN NULL; END $$;
-
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.transactions;
-EXCEPTION WHEN others THEN NULL; END $$;
-
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.settings;
-EXCEPTION WHEN others THEN NULL; END $$;
+    RETURN QUERY
+    SELECT
+      COUNT(*)                           AS total_tx,
+      COALESCE(SUM(amount), 0)           AS revenue,
+      COUNT(*) FILTER (WHERE vtu_status='success' OR vtu_status='delivered') AS success_count,
+      COUNT(*) FILTER (WHERE vtu_status='failed')  AS failed_count
+    FROM public.transactions
+    WHERE created_at::date = CURRENT_DATE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

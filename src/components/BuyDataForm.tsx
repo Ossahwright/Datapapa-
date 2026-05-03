@@ -57,7 +57,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }
       } catch (err: any) {
         console.error("Failed to fetch bundles:", err);
-        setLoadError(err.message || 'Unknown error occurred');
+        let msg = err.message || 'Unknown error occurred';
+        if (msg.includes('Failed to fetch')) {
+          msg = "Connectivity issue: Could not reach the data server. Please check your internet or try again later.";
+        }
+        setLoadError(msg);
       } finally {
         setIsLoadingBundles(false);
       }
