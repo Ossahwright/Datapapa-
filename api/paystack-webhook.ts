@@ -1,7 +1,34 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import crypto from "crypto";
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase admin client
+const supabaseUrl = process.env.VITE_SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method === "GET") {
+    return res.status(200).send("Webhook is live ✅");
+  }
+
   console.log("🔥 WEBHOOK RECEIVED");
+
+  const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!paystackSecretKey) {
+    console.error("❌ PAYSTACK_SECRET_KEY not set");
+    return res.status(500).send("Configuration error");
+  }
+
+  const hash = crypto
+    .createHmac("sha512", paystackSecretKey)
+    .update(JSON.stringify(req.body))
+    .digest("hex");
+
+  if (hash !== req.headers["x-paystack-signature"]) {
+    console.error("❌ Invalid signature");
+    return res.status(401).send("Invalid signature");
+  }
 
   try {
     const event = req.body;
@@ -14,48 +41,98 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log("✅ PAYMENT CONFIRMED");
 
-    const metadata = event.data.metadata;
+    let metadata = event.data.metadata;
 
-    let transactionId = metadata?.transaction_id;
-
-    // handle string metadata
     if (typeof metadata === "string") {
       try {
-        const parsed = JSON.parse(metadata);
-        transactionId = parsed.transaction_id;
-      } catch (e) {
+        metadata = JSON.parse(metadata);
+      } catch {
         console.error("❌ Metadata parse failed");
       }
     }
 
+    const transactionId = metadata?.transaction_id;
+
     console.log("📌 TRANSACTION ID:", transactionId);
 
     if (!transactionId) {
+      console.error("❌ No transaction ID found in metadata");
       return res.status(200).send("no transaction id");
     }
 
-    // 🔥 CALL DATAHUB (TEST FIRST)
-    const response = await fetch(
+    // 🔥 FETCH TRANSACTION
+    const { data: transaction, error: fetchError } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("id", transactionId)
+      .single();
+
+    if (fetchError || !transaction) {
+      console.error("❌ Transaction not found", fetchError);
+      return res.status(200).send("transaction not found");
+    }
+
+    // Check if already processed
+    if (transaction.vtu_status === "success") {
+      console.log("⚠️ Already processed");
+      return res.status(200).send("already processed");
+    }
+
+    console.log("🚀 CALLING DATAHUB");
+
+    const payload = {
+      networkKey: transaction.datahub_network_key,
+      recipient: transaction.recipient_phone,
+      capacity: transaction.datahub_capacity,
+    };
+
+    console.log("📤 PAYLOAD:", payload);
+
+    const datahubApiKey = process.env.DATAHUB_API_KEY;
+    if (!datahubApiKey) {
+      console.error("❌ DATAHUB_API_KEY not set");
+      return res.status(500).send("Configuration error");
+    }
+
+    const resDH = await fetch(
       "https://app.datahubgh.com/api/external/data-purchase",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": process.env.DATAHUB_API_KEY!,
+          "X-API-Key": datahubApiKey,
         },
-        body: JSON.stringify({
-          networkKey: "YELLO",
-          recipient: "0201234567",
-          capacity: "1",
-        }),
+        body: JSON.stringify(payload),
       }
     );
 
-    const result = await response.json();
+    const result = await resDH.json();
 
     console.log("📥 DATAHUB RESPONSE:", result);
 
-    return res.status(200).json({ success: true });
+    if (result?.success || result?.status === 'SUCCESSFUL' || result?.status === 'PROCESSING') {
+      await supabase.from("transactions").update({
+        vtu_status: "success",
+        status: "completed",
+        api_response: result,
+        paystack_receipt: event.data.reference,
+        updated_at: new Date().toISOString(),
+      }).eq("id", transaction.id);
+
+      console.log("✅ VTU SUCCESS");
+    } else {
+      await supabase.from("transactions").update({
+        vtu_status: "failed",
+        status: "failed",
+        api_response: result,
+        paystack_receipt: event.data.reference,
+        updated_at: new Date().toISOString(),
+      }).eq("id", transaction.id);
+
+      console.error("❌ VTU FAILED");
+    }
+
+    return res.status(200).send("ok");
   } catch (err: any) {
     console.error("❌ WEBHOOK ERROR:", err.message);
     return res.status(500).send("error");

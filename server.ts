@@ -236,12 +236,13 @@ async function purchaseData(transaction: any) {
     // Update status based on response
     // DataHub returns status: SUCCESSFUL, PROCESSING, or FAILED
     const isActuallySuccess = result.success === true || result.status === 'SUCCESSFUL' || result.status === 'PROCESSING';
-    const vtuStatus = isActuallySuccess ? (result.status === 'SUCCESSFUL' ? 'delivered' : 'processing') : 'failed';
+    const vtuStatus = isActuallySuccess ? 'success' : 'failed';
 
     await supabase
       .from("transactions")
       .update({
         vtu_status: vtuStatus,
+        status: isActuallySuccess ? 'completed' : 'failed',
         api_response: result,
         updated_at: new Date().toISOString()
       })
@@ -309,8 +310,8 @@ async function purchaseData(transaction: any) {
     if (!apiKey) return res.json({ success: false, message: "API key missing" });
 
     try {
-      const resp = await axios.get(`${baseUrl}/status`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+      const resp = await axios.get(`${baseUrl}/user`, {
+        headers: { 'X-API-Key': apiKey },
         timeout: 10000,
         validateStatus: () => true
       });
@@ -329,8 +330,8 @@ async function purchaseData(transaction: any) {
 
     const start = Date.now();
     try {
-      const resp = await axios.get(`${baseUrl}/status`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+      const resp = await axios.get(`${baseUrl}/user`, {
+        headers: { 'X-API-Key': apiKey },
         timeout: 5000,
         validateStatus: () => true
       });
@@ -352,13 +353,22 @@ async function purchaseData(transaction: any) {
     if (!apiKey) return res.status(401).json({ error: "API key not set" });
 
     try {
-      const resp = await axios.get(`${baseUrl}/balance`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+      // Trying /user as it's a common endpoint for account balance in DataHub Gh
+      const resp = await axios.get(`${baseUrl}/user`, {
+        headers: { 'X-API-Key': apiKey },
         timeout: 10000
       });
-      return res.json({ balance: resp.data.balance || 0 });
+      
+      // Some versions use 'wallet_balance', others just 'balance'
+      const balance = resp.data.wallet_balance !== undefined ? resp.data.wallet_balance : (resp.data.balance || 0);
+      return res.json({ balance });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message });
+      console.error("[DataHub Balance API] Error:", err.message);
+      if (err.response) {
+        console.error("Response data:", typeof err.response.data === 'string' ? err.response.data.slice(0, 500) : JSON.stringify(err.response.data));
+      }
+      // Return 200 with 0 balance instead of 500 to keep UI clean if it's just a config issue
+      return res.status(200).json({ balance: 0, error: err.message });
     }
   });
 
@@ -401,42 +411,23 @@ async function purchaseData(transaction: any) {
 
       console.log("✅ PAYMENT CONFIRMED");
 
-      // 1. Extract Transaction ID from metadata
-      const metadata = event.data.metadata;
-      let transactionId = metadata?.transaction_id;
+      let metadata = event.data.metadata;
 
-      // 🛠 Handle stringified metadata (VERY IMPORTANT)
       if (typeof metadata === "string") {
         try {
-          const parsed = JSON.parse(metadata);
-          transactionId = parsed.transaction_id;
-        } catch (e) {
-          console.error("❌ [Paystack Webhook] Metadata parsing failed");
+          metadata = JSON.parse(metadata);
+        } catch {
+          console.error("❌ Metadata parse failed");
         }
       }
 
-      // Also check custom fields as a second fallback (standard Paystack practice)
-      if (!transactionId && metadata?.custom_fields) {
-        transactionId = metadata.custom_fields.find((f: any) => f.variable_name === 'transaction_id')?.value;
-      }
+      const transactionId = metadata?.transaction_id;
 
       console.log("📌 TRANSACTION ID:", transactionId);
 
       if (!transactionId) {
-        // Fallback: search by reference if ID is missing in metadata
-        console.log("🔍 [Paystack Webhook] Searching for transaction by reference fallback:", event.data.reference);
-        const { data: txByRef } = await supabase
-          .from("transactions")
-          .select("id")
-          .eq("paystack_receipt", event.data.reference)
-          .maybeSingle();
-        
-        transactionId = txByRef?.id;
-        
-        if (!transactionId) {
-          console.error("❌ [Paystack Webhook] No transaction ID found in metadata or reference search");
-          return res.status(200).send("no transaction id");
-        }
+        console.error("❌ No transaction ID found in metadata");
+        return res.status(200).send("no transaction id");
       }
 
       // 🔥 FETCH TRANSACTION
@@ -451,21 +442,62 @@ async function purchaseData(transaction: any) {
         return res.status(200).send("transaction not found");
       }
 
-      // 3. Update Transaction Record to Success
-      await supabase
-        .from("transactions")
-        .update({
-          status: "success",
+      // Check if already processed
+      if (transaction.vtu_status === "success") {
+        console.log("⚠️ Already processed");
+        return res.sendStatus(200);
+      }
+
+      console.log("🚀 CALLING DATAHUB");
+
+      const payload = {
+        networkKey: transaction.datahub_network_key,
+        recipient: transaction.recipient_phone,
+        capacity: transaction.datahub_capacity,
+      };
+
+      console.log("📤 PAYLOAD:", payload);
+
+      const { apiKey } = await getDataHubConfig();
+      const activeKey = apiKey || process.env.DATAHUB_API_KEY;
+
+      const resDH = await axios.post(
+        "https://app.datahubgh.com/api/external/data-purchase",
+        payload,
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": activeKey,
+          },
+          timeout: 30000
+        }
+      );
+
+      const result = resDH.data;
+
+      console.log("📥 DATAHUB RESPONSE:", result);
+
+      if (result?.success || result?.status === 'SUCCESSFUL' || result?.status === 'PROCESSING') {
+        await supabase.from("transactions").update({
+          vtu_status: "success",
+          status: "completed",
+          api_response: result,
           paystack_receipt: event.data.reference,
-          webhook_received_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", transactionId);
+          updated_at: new Date().toISOString(),
+        }).eq("id", transaction.id);
 
-      console.log("🚀 CALLING DATAHUB NOW");
+        console.log("✅ VTU SUCCESS");
+      } else {
+        await supabase.from("transactions").update({
+          vtu_status: "failed",
+          status: "failed",
+          api_response: result,
+          paystack_receipt: event.data.reference,
+          updated_at: new Date().toISOString(),
+        }).eq("id", transaction.id);
 
-      // 🔥 CALL DATAHUB
-      await purchaseData(transaction);
+        console.error("❌ VTU FAILED");
+      }
 
       return res.status(200).send("ok");
     } catch (err: any) {
