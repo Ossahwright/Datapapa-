@@ -8,32 +8,33 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === "GET") {
-    return res.status(200).send("Webhook is live ✅");
-  }
-
-  console.log("🔥 WEBHOOK RECEIVED");
-
-  const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!paystackSecretKey) {
-    console.error("❌ PAYSTACK_SECRET_KEY not set");
-    return res.status(500).send("Configuration error");
-  }
-
-  const hash = crypto
-    .createHmac("sha512", paystackSecretKey)
-    .update(JSON.stringify(req.body))
-    .digest("hex");
-
-  if (hash !== req.headers["x-paystack-signature"]) {
-    console.error("❌ Invalid signature");
-    return res.status(401).send("Invalid signature");
-  }
-
   try {
-    const event = req.body;
+    // ✅ HANDLE BROWSER TEST
+    if (req.method === "GET") {
+      return res.status(200).send("Webhook is live ✅");
+    }
 
-    console.log("📢 EVENT:", event.event);
+    console.log("🔥 WEBHOOK RECEIVED");
+
+    const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!paystackSecretKey) {
+      console.error("❌ PAYSTACK_SECRET_KEY not set");
+      return res.status(500).send("Configuration error");
+    }
+
+    // Verify Signature
+    const hash = crypto
+      .createHmac("sha512", paystackSecretKey)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (hash !== req.headers["x-paystack-signature"]) {
+      console.error("❌ Invalid signature");
+      return res.status(401).send("Invalid signature");
+    }
+
+    const event = req.body || {};
+    console.log("📢 EVENT:", event?.event);
 
     if (event.event !== "charge.success") {
       return res.status(200).send("ignored");
@@ -52,7 +53,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const transactionId = metadata?.transaction_id;
-
     console.log("📌 TRANSACTION ID:", transactionId);
 
     if (!transactionId) {
@@ -107,7 +107,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     const result = await resDH.json();
-
     console.log("📥 DATAHUB RESPONSE:", result);
 
     if (result?.success || result?.status === 'SUCCESSFUL' || result?.status === 'PROCESSING') {
@@ -134,7 +133,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).send("ok");
   } catch (err: any) {
-    console.error("❌ WEBHOOK ERROR:", err.message);
-    return res.status(500).send("error");
+    console.error("❌ WEBHOOK ERROR:", err.message || err);
+    return res.status(200).send("safe exit");
   }
 }
