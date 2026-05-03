@@ -118,6 +118,41 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!currentTxId) return;
+
+    const channel = supabase
+      .channel("transactions-status")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "transactions",
+        },
+        (payload) => {
+          console.log("🔄 REALTIME UPDATE:", payload);
+
+          const updated = payload.new;
+
+          if (updated.id === currentTxId) {
+            if (updated.vtu_status === "success") {
+              alert("✅ Data delivered successfully");
+            }
+
+            if (updated.vtu_status === "failed") {
+              alert("❌ Delivery failed");
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentTxId]);
+
   const paystackConfig = useMemo(() => ({
     reference: `tx_${new Date().getTime().toString()}`,
     email: 'customer@datapapa.com',
@@ -194,9 +229,12 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
     try {
       // 1. Save transaction FIRST as requested
+      const { data: userData } = await supabase.auth.getUser();
+      
       const { data, error: txError } = await supabase
         .from("transactions")
         .insert({
+          user_id: userData?.user?.id || null,
           amount: selectedBundleObj?.price || 0,
           network: network,
           recipient_phone: phone,

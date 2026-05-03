@@ -372,21 +372,7 @@ async function purchaseData(transaction: any) {
     }
   });
 
-  // Paystack Webhook Implementation
-  app.all("/api/paystack-webhook", express.json(), async (req, res) => {
-    try {
-      if (req.method === "GET") {
-        return res.status(200).send("Webhook is live ✅");
-      }
-
-      console.log("🔥 WEBHOOK RECEIVED");
-
-      return res.status(200).send("ok");
-    } catch (err: any) {
-      console.error("❌ ERROR:", err?.message || err);
-      return res.status(200).send("safe exit");
-    }
-  });
+  // Paystack Webhook logic has been moved to /api/paystack-webhook.ts for better deployment compatibility.
 
   // DataHub GH Webhook (Order Status Updates)
   app.post("/api/datahub-webhook", async (req, res) => {

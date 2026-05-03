@@ -398,44 +398,14 @@ export default function AdminDashboard() {
   const fetchCustomers = async () => {
     setIsLoadingCustomers(true);
     try {
-      // Fetch all profiles first
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (profilesError) throw profilesError;
-
-      // Also get transaction summaries to merge
       const { data: summariesData, error: summariesError } = await supabase.rpc("get_customers_summary");
 
       if (summariesError) {
-        console.warn("Summary RPC error (ignoring for fallback):", summariesError);
+        console.error("RPC Error:", summariesError);
+        throw summariesError;
       }
 
-      // Merge profiles with their transaction summaries if they exist
-      const mergedCustomers = (profilesData || []).map(profile => {
-        // Try to find summary by user_id if the RPC supports it, 
-        // or by matching email/phone if applicable.
-        // For now, we'll just show the profile and if they have transactions, 
-        // the RPC summary usually identifies them by recipient_phone which isn't in profiles.
-        // So we'll try to match user_id if we update the RPC, 
-        // or just show the profile with 0 stats for now.
-        
-        const summary = (summariesData || []).find((s: any) => s.user_id === profile.id);
-        
-        return {
-          id: profile.id,
-          email: profile.email,
-          recipient_phone: summary?.recipient_phone || 'No phone recorded',
-          total_spent: summary?.total_spent || 0,
-          transaction_count: summary?.transaction_count || 0,
-          role: profile.role,
-          created_at: profile.created_at
-        };
-      });
-
-      setCustomers(mergedCustomers);
+      setCustomers(summariesData || []);
     } catch (err) {
       console.error("Customer fetch error:", err);
     } finally {
@@ -443,7 +413,14 @@ export default function AdminDashboard() {
     }
   };
 
-  const fetchCustomerTransactions = async (phone: string) => {
+  const viewCustomer = async (phone: string) => {
+    if (!phone || phone === 'No phone recorded' || phone === 'NONE') {
+      setCustomerTransactions([]);
+      setSelectedCustomerPhone('NONE');
+      return;
+    }
+
+    setSelectedCustomerPhone(phone);
     const { data, error } = await supabase
       .from("transactions")
       .select("*")
@@ -451,7 +428,7 @@ export default function AdminDashboard() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(error);
+      console.error("View customer error:", error);
       return;
     }
 
@@ -460,7 +437,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (selectedCustomerPhone) {
-      fetchCustomerTransactions(selectedCustomerPhone);
+      viewCustomer(selectedCustomerPhone);
     }
   }, [selectedCustomerPhone]);
 
@@ -726,11 +703,11 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteCustomer = async (customerId: string) => {
+  const handleDeleteCustomer = async (userId: string) => {
     if (isActionProcessing) return;
     
     const previousCustomers = [...customers];
-    setCustomers(current => current.filter(c => c.id !== customerId));
+    setCustomers(current => current.filter(c => c.user_id !== userId));
     setIsActionProcessing(true);
 
     try {
@@ -741,7 +718,7 @@ export default function AdminDashboard() {
       const { error: txError } = await supabase
         .from('transactions')
         .delete()
-        .eq('user_id', customerId);
+        .eq('user_id', userId);
         
       if (txError) {
         console.warn("Transaction deletion warning (continuing):", txError);
@@ -750,7 +727,7 @@ export default function AdminDashboard() {
       const { error } = await supabase
         .from('profiles')
         .delete()
-        .eq('id', customerId);
+        .eq('id', userId);
 
       if (error) throw error;
       
@@ -768,6 +745,52 @@ export default function AdminDashboard() {
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [txToDelete, setTxToDelete] = useState<any>(null);
   const [isDeletingTx, setIsDeletingTx] = useState(false);
+  const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
+
+  const isStuck = (t: any) =>
+    t.vtu_status === "processing" &&
+    Date.now() - new Date(t.created_at).getTime() > 1000000;
+
+  const resendSMS = async (tx: any) => {
+    try {
+      const res = await fetch("/api/resend-sms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ transactionId: tx.id }),
+      });
+      const result = await res.json();
+      alert(result.message);
+    } catch (err: any) {
+      console.error("Resend SMS failed:", err);
+      alert("Failed to resend SMS: " + (err.message || String(err)));
+    }
+  };
+
+  const retryVTU = async (transactionId: string) => {
+    if (isRetryingVTU) return;
+    setIsRetryingVTU(transactionId);
+    
+    try {
+      const res = await fetch("/api/retry-vtu", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ transactionId }),
+      });
+
+      const result = await res.json();
+      alert(result.message);
+      fetchTransactions();
+    } catch (err: any) {
+      console.error("Retry failed:", err);
+      alert("Failed to execute retry: " + (err.message || String(err)));
+    } finally {
+      setIsRetryingVTU(null);
+    }
+  };
 
   const handleDeleteTransaction = async (txId: string) => {
     if (isDeletingTx) return;
@@ -901,7 +924,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const txChannel = supabase
-      .channel("transactions-realtime")
+      .channel("admin-transactions")
       .on(
         "postgres_changes",
         {
@@ -910,10 +933,22 @@ export default function AdminDashboard() {
           table: "transactions",
         },
         (payload) => {
-          console.log("REALTIME UPDATE:", payload);
-          if (currentView === 'transactions') {
+          console.log("🔄 ADMIN REALTIME:", payload);
+          
+          if (payload.eventType === 'UPDATE') {
+            setTransactions(prev =>
+              prev.map(t =>
+                t.id === payload.new.id ? { ...t, ...payload.new } : t
+              )
+            );
+          } else if (payload.eventType === 'INSERT') {
+            // We could prepend, but pagination makes this tricky
+            // For simplicity, just refresh
             fetchTransactions();
+          } else if (payload.eventType === 'DELETE') {
+            setTransactions(prev => prev.filter(t => t.id !== payload.old.id));
           }
+          
           fetchDashboardStats();
         }
       )
@@ -943,7 +978,7 @@ export default function AdminDashboard() {
           if (currentView === 'customers') {
             fetchCustomers();
             if (selectedCustomerPhone) {
-              fetchCustomerTransactions(selectedCustomerPhone);
+              viewCustomer(selectedCustomerPhone);
             }
           }
         }
@@ -1231,103 +1266,134 @@ export default function AdminDashboard() {
                   <tbody className="divide-y divide-slate-100">
                     {isLoadingTransactions ? (
                       <tr>
-                        <td colSpan={10} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={11} className="px-6 py-12 text-center text-slate-500">
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
                           <p>Loading transactions...</p>
                         </td>
                       </tr>
                     ) : transactions.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={11} className="px-6 py-12 text-center text-slate-500">
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
                           <p>No transactions found in the database.</p>
                         </td>
                       </tr>
                     ) : (
-                      transactions.map((tx) => (
-                        <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                            {tx.id.substring(0, 8)}...{tx.id.substring(tx.id.length - 4)}
-                          </td>
-                          <td className="px-6 py-4 text-slate-600">
-                            {new Date(tx.created_at).toLocaleString()}
-                          </td>
-                          <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                            {tx.paystack_receipt || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              {tx.network?.toLowerCase() === 'mtn' && (
-                                <img src="https://i.postimg.cc/5NPHHMBJ/MTN-LOGO-1.png" alt="MTN" className="w-6 h-6 rounded-full object-cover" />
-                              )}
-                              {tx.network?.toLowerCase() === 'telecel' && (
-                                <img src="https://i.postimg.cc/SRgWNYSf/TELECEL-LOGO-1.jpg" alt="Telecel" className="w-6 h-6 rounded-full object-cover" />
-                              )}
-                              {(tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at') && (
-                                <img src="https://i.postimg.cc/0yXPdkQf/AIRTELTIGO-LOGO-1.jpg" alt="AirtelTigo" className="w-6 h-6 rounded-full object-cover" />
-                              )}
-                              <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium uppercase tracking-wider ${
-                                tx.network?.toLowerCase() === 'mtn' ? 'bg-yellow-100 text-yellow-800' :
-                                tx.network?.toLowerCase() === 'telecel' ? 'bg-red-100 text-red-800' :
-                                tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at' ? 'bg-blue-100 text-blue-800' :
-                                'bg-slate-100 text-slate-800'
+                      transactions.map((tx) => {
+                        const stuck = isStuck(tx);
+                        return (
+                          <tr key={tx.id} className={`hover:bg-slate-50/50 transition-colors ${stuck ? 'bg-amber-50/30' : ''}`}>
+                            <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                              {tx.id.substring(0, 8)}...{tx.id.substring(tx.id.length - 4)}
+                            </td>
+                            <td className="px-6 py-4 text-slate-600">
+                              {new Date(tx.created_at).toLocaleString()}
+                            </td>
+                            <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                              {tx.paystack_receipt || 'N/A'}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                {tx.network?.toLowerCase() === 'mtn' && (
+                                  <img src="https://i.postimg.cc/5NPHHMBJ/MTN-LOGO-1.png" alt="MTN" className="w-6 h-6 rounded-full object-cover" />
+                                )}
+                                {tx.network?.toLowerCase() === 'telecel' && (
+                                  <img src="https://i.postimg.cc/SRgWNYSf/TELECEL-LOGO-1.jpg" alt="Telecel" className="w-6 h-6 rounded-full object-cover" />
+                                )}
+                                {(tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at') && (
+                                  <img src="https://i.postimg.cc/0yXPdkQf/AIRTELTIGO-LOGO-1.jpg" alt="AirtelTigo" className="w-6 h-6 rounded-full object-cover" />
+                                )}
+                                <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium uppercase tracking-wider ${
+                                  tx.network?.toLowerCase() === 'mtn' ? 'bg-yellow-100 text-yellow-800' :
+                                  tx.network?.toLowerCase() === 'telecel' ? 'bg-red-100 text-red-800' :
+                                  tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at' ? 'bg-blue-100 text-blue-800' :
+                                  'bg-slate-100 text-slate-800'
+                                }`}>
+                                  {tx.network || 'Unknown'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-slate-700">
+                              {tx.capacity || 'N/A'}
+                            </td>
+                            <td className="px-6 py-4 font-medium text-slate-900">
+                              {tx.payee_phone || 'N/A'}
+                            </td>
+                            <td className="px-6 py-4 font-medium text-slate-900">
+                              {tx.recipient_phone || 'N/A'}
+                            </td>
+                            <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                              ₵{Number(tx.amount || 0).toFixed(2)}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
+                                tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700' :
+                                tx.vtu_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-slate-100 text-slate-700'
                               }`}>
-                                {tx.network || 'Unknown'}
+                                {tx.vtu_status === 'processing' && <RefreshCw size={10} className="animate-spin mr-1" />}
+                                {tx.vtu_status === 'success' ? '✅ Delivered' : 
+                                 tx.vtu_status === 'failed' ? '❌ Failed' : 
+                                 tx.vtu_status === 'processing' ? '⏳ Processing' : 
+                                 tx.vtu_status || 'N/A'}
                               </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-slate-700">
-                            {tx.capacity || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4 font-medium text-slate-900">
-                            {tx.payee_phone || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4 font-medium text-slate-900">
-                            {tx.recipient_phone || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                            ₵{Number(tx.amount || 0).toFixed(2)}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                              tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
-                              tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
-                              tx.vtu_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-slate-100 text-slate-700'
-                            }`}>
-                              {tx.vtu_status || 'N/A'}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                              tx.status === 'success' || tx.status === 'completed' ? 'bg-green-100 text-green-700' :
-                              tx.status === 'failed' ? 'bg-red-100 text-red-700' :
-                              tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-slate-100 text-slate-700'
-                            }`}>
-                              {tx.status || 'N/A'}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <button 
-                                onClick={() => setSelectedTransaction(tx)}
-                                className="p-2 text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
-                                title="View Details"
-                              >
-                                <Search size={16} />
-                              </button>
-                              <button 
-                                onClick={() => setTxToDelete(tx)}
-                                className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete Transaction"
-                              >
-                                <X size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                              {stuck && (
+                                <div className="text-[10px] text-amber-600 font-bold mt-1 uppercase">Stuck Detected</div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                tx.status === 'success' || tx.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                tx.status === 'paid' ? 'bg-blue-100 text-blue-700' :
+                                tx.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-slate-100 text-slate-700'
+                              }`}>
+                                {tx.status || 'N/A'}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <div className="flex items-center justify-center gap-2">
+                                <button 
+                                  onClick={() => setSelectedTransaction(tx)}
+                                  className="p-2 text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                  title="View Details"
+                                >
+                                  <Search size={16} />
+                                </button>
+                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || stuck) && (
+                                  <button 
+                                    onClick={() => retryVTU(tx.id)}
+                                    disabled={isRetryingVTU === tx.id}
+                                    className={`p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors ${isRetryingVTU === tx.id ? 'animate-spin' : ''}`}
+                                    title="Retry VTU Delivery"
+                                  >
+                                    <RefreshCw size={16} />
+                                  </button>
+                                )}
+                                {tx.vtu_status === 'success' && (
+                                  <button 
+                                    onClick={() => resendSMS(tx)}
+                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                    title="Resend Delivery SMS"
+                                  >
+                                    <MessageSquare size={16} />
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => setTxToDelete(tx)}
+                                  className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete Transaction"
+                                >
+                                  <X size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1672,44 +1738,38 @@ export default function AdminDashboard() {
                         .map(customer => {
                           const isActive = selectedCustomerPhone === customer.recipient_phone;
                           return (
-                            <li key={customer.id}>
+                            <li key={`${customer.user_id || 'guest'}-${customer.recipient_phone}`}>
                               <div
                                 className={`w-full text-left px-6 py-4 hover:bg-slate-50 transition-colors ${isActive ? 'bg-indigo-50/50' : ''}`}
                               >
                                 <div className="flex justify-between items-start">
-                                  <div className="flex-1 min-w-0" onClick={() => setSelectedCustomerPhone(customer.recipient_phone === 'No phone recorded' ? 'NONE' : customer.recipient_phone)}>
-                                    <div className="font-semibold text-slate-900 truncate hover:text-indigo-600 transition-colors cursor-pointer">{customer.email}</div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-slate-900 truncate">{customer.recipient_phone || 'Unknown'}</div>
                                     <div className="text-xs text-slate-500 mb-1 flex items-center gap-1">
                                       <CreditCard size={10} />
-                                      {customer.recipient_phone}
+                                      {customer.transaction_count} orders
                                     </div>
                                     <div className="flex items-center gap-2 mt-1">
-                                      <div className="text-xs text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 italic">
-                                        {customer.transaction_count} purchases
-                                      </div>
-                                      <div className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">₵{Number(customer.total_spent).toFixed(2)}</div>
+                                      <div className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">₵{Number(customer.total_spent || 0).toFixed(2)}</div>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-1.5 ml-4">
                                     <button 
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        setSelectedCustomerPhone(customer.recipient_phone === 'No phone recorded' ? 'NONE' : customer.recipient_phone);
-                                        setViewingCustomerTransactions(customer);
+                                        viewCustomer(customer.recipient_phone);
                                       }}
-                                      title="View Detailed Transactions"
-                                      className="p-1.5 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg transition-all border border-indigo-100"
+                                      className="px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors"
                                     >
-                                      <Search size={14} />
+                                      View
                                     </button>
-                                    {customer.id !== user?.id && (
+                                    {customer.user_id && (
                                       <button 
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setCustomerToDelete(customer);
                                         }}
-                                        title="Delete Customer Account"
-                                        className="p-1.5 text-red-500 hover:bg-red-500 hover:text-white rounded-lg transition-all border border-red-100"
+                                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                                       >
                                         <X size={14} />
                                       </button>
@@ -2234,11 +2294,11 @@ export default function AdminDashboard() {
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 mb-2">Delete Customer?</h3>
                 <p className="text-slate-600 mb-6 font-medium">
-                  Are you sure you want to delete <span className="font-semibold">{customerToDelete.email}</span>? This will also remove their transaction history.
+                  Are you sure you want to delete <span className="font-semibold">{customerToDelete.recipient_phone}</span>? This will also remove their transaction history.
                 </p>
                 <div className="flex gap-3">
                   <button
-                    onClick={() => handleDeleteCustomer(customerToDelete.id)}
+                    onClick={() => handleDeleteCustomer(customerToDelete.user_id)}
                     disabled={isActionProcessing}
                     className="flex-1 px-4 py-2.5 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50"
                   >
