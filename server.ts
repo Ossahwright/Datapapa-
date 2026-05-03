@@ -407,7 +407,44 @@ async function purchaseData(transaction: any) {
       console.log("🚀 [Server] Calling purchaseData for:", transactionId);
       const vtuResult = await purchaseData(transaction);
 
-      return res.json(vtuResult);
+      // 2. Deliver Confirmation Notifications
+          if (vtuStatus === 'delivered' && transaction.recipient_phone) {
+            // Fetch settings for SMS template
+            try {
+              const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'general').maybeSingle();
+              const settings = settingsData?.value || {};
+              
+              if (settings.sms_enabled !== false) {
+                const smsTemplate = settings.sms_template_success;
+
+                const message = buildSuccessSMS({
+                  volume: transaction.capacity,
+                  network: transaction.network,
+                  phone: transaction.recipient_phone,
+                  transactionId: transaction.id,
+                  template: smsTemplate
+                });
+
+                // Success Notification to Customer
+                await sendSMS(transaction.recipient_phone, message);
+
+                // Admin notification for completion
+                await sendSMS(
+                  process.env.ADMIN_PHONE || "233244014207",
+                  `Datapapa ✅: ${transaction.capacity} ${transaction.network} delivered to ${transaction.recipient_phone}. Ref: ${transaction.id}`
+                );
+              }
+            } catch (settingsErr) {
+              console.error("Error fetching settings for SMS:", settingsErr);
+              // Fallback SMS
+              await sendSMS(
+                transaction.recipient_phone,
+                `Datapapa ✅\nYour ${transaction.capacity} ${transaction.network} data has been delivered to ${transaction.recipient_phone}.\nRef: ${transaction.id}`
+              );
+            }
+          }
+
+          return res.json(vtuResult);
     } catch (err: any) {
       console.error("❌ [Server] Manual VTU Trigger Error:", err.message);
       return res.status(500).json({ success: false, error: err.message });
@@ -608,7 +645,7 @@ async function purchaseData(transaction: any) {
         if (status === 'SUCCESSFUL') vtuStatus = 'delivered';
         if (status === 'FAILED') vtuStatus = 'failed';
 
-        // 1. Update Transaction by reference or orderNumber
+      // 1. Update Transaction by reference or orderNumber
         const txRef = data.reference || data.orderNumber;
         
         let updateQuery = supabase.from('transactions').update({ 
@@ -620,7 +657,8 @@ async function purchaseData(transaction: any) {
         if (txRef) {
           updateQuery = updateQuery.or(`api_response->>reference.eq.${txRef},api_response->>orderNumber.eq.${txRef}`);
         } else if (data.recipient) {
-          updateQuery = updateQuery.eq('recipient_phone', data.recipient).eq('vtu_status', 'processing');
+          // If no ref, match by recipient and processing/success state
+          updateQuery = updateQuery.eq('recipient_phone', data.recipient).or('vtu_status.eq.processing,vtu_status.eq.success');
         }
 
         const { data: updated, error: updateErr } = await updateQuery.select();
@@ -632,36 +670,40 @@ async function purchaseData(transaction: any) {
           
           // 2. Deliver Confirmation Notifications
           if (vtuStatus === 'delivered' && updated[0].recipient_phone) {
-            const adminPhone = "233244014207";
+            const adminPhone = process.env.ADMIN_PHONE || "233244014207";
             const recipient = updated[0].recipient_phone;
             const capacity = updated[0].capacity;
             const network = updated[0].network;
             const transaction_id = updated[0].id;
 
-            // Fetch settings for SMS template
-            const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'sms_settings').maybeSingle();
-            const smsTemplate = settingsData?.value?.sms_template_success;
+            // Fetch settings for SMS template (key is 'general' not 'sms_settings')
+            const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'general').maybeSingle();
+            const settings = settingsData?.value || {};
+            
+            // Check if SMS is enabled
+            if (settings.sms_enabled === false) {
+              console.log("[DataHub Webhook] SMS is disabled in settings. Skipping.");
+            } else {
+              const smsTemplate = settings.sms_template_success;
 
-            const message = buildSuccessSMS({
-              volume: capacity,
-              network: network,
-              phone: recipient,
-              transactionId: transaction_id,
-              template: smsTemplate
-            });
+              const message = buildSuccessSMS({
+                volume: capacity,
+                network: network,
+                phone: recipient,
+                transactionId: transaction_id,
+                template: smsTemplate
+              });
 
-            // Success Notification to Customer as requested
-            await sendSMS(recipient, message);
+              // Success Notification to Customer
+              await sendSMS(recipient, message);
 
-            // Admin notification for completion
-            await sendSMS(
-              adminPhone,
-              `DELIVERED: ${capacity} ${network} to ${recipient}. Ref: ${txRef}`
-            );
+              // Admin notification for completion
+              await sendSMS(
+                adminPhone,
+                `DELIVERED: ${capacity} ${network} to ${recipient}. Ref: ${txRef || transaction_id}`
+              );
+            }
           }
-        } else {
-          console.warn("[DataHub Webhook] No matching processing transaction found for update.");
-        }
         
         return res.status(200).json({ received: true });
       }
@@ -944,7 +986,10 @@ async function purchaseData(transaction: any) {
    */
   async function sendSMS(to: string, message: string) {
     try {
-      if (!process.env.ARKESEL_API_KEY) {
+      const arkeselKey = process.env.ARKESEL_API_KEY?.trim();
+      const senderId = (process.env.ARKESEL_SENDER_ID || "Datapapa").trim();
+
+      if (!arkeselKey) {
         console.error("❌ Missing ARKESEL_API_KEY");
         return;
       }
@@ -958,17 +1003,17 @@ async function purchaseData(transaction: any) {
       }
 
       const payload = {
-        sender: process.env.ARKESEL_SENDER_ID || "Datapapa",
+        sender: senderId.slice(0, 11),
         message,
         recipients: [phone],
       };
 
-      console.log("📤 Sending SMS to:", phone);
+      console.log(`[Arkesel] Sending SMS to ${phone} using sender: ${payload.sender}`);
 
       const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
         headers: {
           "Content-Type": "application/json",
-          "api-key": process.env.ARKESEL_API_KEY,
+          "api-key": arkeselKey,
         },
         timeout: 15000
       });
@@ -981,17 +1026,20 @@ async function purchaseData(transaction: any) {
         await supabase.from("sms_logs").insert({
           phone: phone,
           message: message,
-          status: (data.status === 'success' || data.code === '1000') ? "sent" : "failed",
+          status: (data.status === 'success' || data.code === '1000' || data.code === 1000) ? "sent" : "failed",
           response: data,
           created_at: new Date().toISOString()
-        });
+        }).select().maybeSingle();
       } catch (logErr) {
-        console.error("SMS LOG ERROR:", logErr);
+        console.error("SMS LOG ERROR (likely table missing):", logErr);
       }
 
       return data;
     } catch (err: any) {
       console.error("❌ SMS ERROR:", err.message);
+      if (err.response) {
+        console.error("❌ SMS ERROR DATA:", JSON.stringify(err.response.data));
+      }
     }
   }
 
