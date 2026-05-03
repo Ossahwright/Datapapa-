@@ -84,6 +84,111 @@ async function startServer() {
     res.json({ status: "ok", time: new Date().toISOString() });
   });
 
+  // Paystack Webhook (Consolidated from /api/paystack-webhook.ts)
+  app.post("/api/paystack-webhook", async (req, res) => {
+    try {
+      const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+      if (!PAYSTACK_SECRET_KEY) {
+        console.error("❌ Missing PAYSTACK_SECRET_KEY");
+        return res.status(200).send("env missing");
+      }
+
+      // SIGNATURE VERIFICATION
+      const signature = req.headers["x-paystack-signature"] as string;
+      const hash = crypto
+        .createHmac("sha512", PAYSTACK_SECRET_KEY)
+        .update(JSON.stringify(req.body))
+        .digest("hex");
+
+      if (hash !== signature) {
+        console.error("❌ [Webhook] Invalid signature");
+        return res.status(401).send("invalid signature");
+      }
+
+      const event = req.body || {};
+      console.log("📢 [Webhook] Event Received:", event?.event);
+
+      if (event.event !== "charge.success") {
+        return res.status(200).send("ignored");
+      }
+
+      const paystackReference = event.data?.reference;
+      let metadata = event.data?.metadata;
+      if (typeof metadata === "string") {
+        try { metadata = JSON.parse(metadata); } catch { console.error("❌ Metadata parse failed"); }
+      }
+
+      const transactionId = metadata?.transaction_id;
+      if (!transactionId) {
+        console.error("❌ No transaction ID in metadata");
+        return res.status(200).send("no transaction id");
+      }
+
+      // FETCH TRANSACTION
+      const { data: transaction, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (fetchErr || !transaction) {
+        console.error("❌ Transaction not found", fetchErr);
+        return res.status(200).send("transaction not found");
+      }
+
+      // UPDATE STATUS TO PAID
+      await supabase
+        .from("transactions")
+        .update({
+          paystack_receipt: paystackReference,
+          status: "paid",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transaction.id);
+
+      // 📩 CUSTOMER SMS: PAYMENT RECEIVED
+      await sendSMS(
+        transaction.recipient_phone,
+        `⏳ Datapapa\nYour payment was received.\nYour data is being processed...`
+      );
+
+      // IDEMPOTENCY CHECK
+      if (transaction.vtu_status === "success" || transaction.vtu_status === "delivered") {
+        console.log("⚠️ Already processed success");
+        return res.status(200).send("already processed");
+      }
+
+      // TRIGGER VTU
+      console.log("🚀 [Webhook] Triggering purchaseData for:", transactionId);
+      const result = await purchaseData(transaction);
+      
+      if (result?.success) {
+        // 📩 CUSTOMER SMS: SUCCESS
+        await sendSMS(
+          transaction.recipient_phone,
+          `Datapapa ✅\nYour ${transaction.capacity} ${transaction.network} data has been delivered to ${transaction.recipient_phone}.\nRef: ${transaction.id}`
+        );
+
+        // 📩 ADMIN SMS: SUCCESS
+        await sendSMS(
+          process.env.ADMIN_PHONE || "233244014207",
+          `💰 NEW VTU\n${transaction.network} ${transaction.capacity}\nTo: ${transaction.recipient_phone}\n₵${transaction.amount}`
+        );
+      } else {
+        // ⚠️ ADMIN ALERT: FAILURE
+        await sendSMS(
+          process.env.ADMIN_PHONE || "233244014207",
+          `⚠️ VTU FAILED\n${transaction.recipient_phone}\n${transaction.network} ${transaction.capacity}\nRef: ${transaction.id}`
+        );
+      }
+
+      return res.status(200).send("ok");
+    } catch (err: any) {
+      console.error("❌ [Webhook] Error:", err.message);
+      return res.status(200).send("error");
+    }
+  });
+
 // API Route for Purchasing Data
   app.post("/api/purchase-data", async (req, res) => {
     const { networkKey, recipient, capacity, paystack_ref, bundle } = req.body;
@@ -454,111 +559,128 @@ async function purchaseData(transaction: any) {
     }
   });
 
-  // API Route for Sending SMS via Arkesel
+  // API Route for Sending SMS via Arkesel V2 (REST POST)
   app.post("/api/send-sms", async (req, res) => {
-    const { recipients, message, sender } = req.body;
-    
-    const arkeselKey = process.env.ARKESEL_API_KEY?.trim();
-    
-    if (!arkeselKey) {
-      console.error("ARKESEL_API_KEY is missing in environment");
-      return res.status(500).json({ success: false, error: "ARKESEL_API_KEY is missing" });
-    }
-
     try {
-      const recipientList = Array.isArray(recipients) ? recipients.join(',') : recipients;
+      const { recipients, message, sender, phone } = req.body;
       
-      console.log(`[Arkesel] Sending SMS to: ${recipientList}`);
-      console.log(`[Arkesel] Sender ID: ${sender || "Datapapa"}`);
-      console.log(`[Arkesel] Key length: ${arkeselKey.length}`);
-
-      // Arkesel V1 GET implementation
-      const response = await axios.get("https://sms.arkesel.com/sms/api", {
-        params: {
-          action: 'send-sms',
-          api_key: arkeselKey,
-          to: recipientList,
-          from: sender || "Datapapa",
-          sms: message
-        },
-        headers: {
-          'Accept': 'application/json'
-        },
-        timeout: 15000, 
-        validateStatus: () => true 
-      });
-
-      console.log(`[Arkesel] Status: ${response.status}`);
-      console.log(`[Arkesel] Response Data:`, response.data);
-
-      const rawData = response.data;
-      let isSuccess = false;
-      let statusInfo = "";
-
-      // Handle common V1 response patterns
-      if (typeof rawData === 'string') {
-        const cleanedData = rawData.trim();
-        if (cleanedData.includes('1000')) {
-          isSuccess = true;
-          statusInfo = "Success (1000)";
-        } else if (cleanedData.toLowerCase().includes('authentication failed')) {
-          statusInfo = "Authentication failed (Invalid API Key)";
-        } else {
-          statusInfo = cleanedData;
-        }
-      } else if (typeof rawData === 'number') {
-        if (rawData === 1000) {
-          isSuccess = true;
-          statusInfo = "Success (1000)";
-        } else {
-          statusInfo = String(rawData);
-        }
-      } else if (rawData && typeof rawData === 'object') {
-        const status = String(rawData.status || rawData.code || '');
-        if (status === '1000' || status === 'success' || (typeof rawData.data === 'string' && rawData.data.includes('1000'))) {
-          isSuccess = true;
-          statusInfo = "Success (1000)";
-        } else {
-          statusInfo = rawData.message || rawData.data || JSON.stringify(rawData);
-        }
+      // Support both 'recipients' (array/string) and 'phone' (single string)
+      const targetPhone = phone || (Array.isArray(recipients) ? recipients[0] : recipients);
+      
+      if (!targetPhone || !message) {
+        return res.status(400).json({ success: false, error: "Phone/Recipients and message are required" });
       }
 
-      // Explicit check for common error codes in V1
-      const errorMap: Record<string, string> = {
-        '101': 'Invalid API Key',
-        '102': 'Authentication Failed',
-        '103': 'Invalid Action',
-        '104': 'Recipient Number Missing',
-        '105': 'Sender ID Missing',
-        '106': 'Message Body Missing',
-        '107': 'Invalid Recipient Number',
-        '108': 'Sender ID not approved',
-        '109': 'Insufficient Balance',
-        '110': 'System Error'
-      };
-
-      if (!isSuccess && errorMap[statusInfo.trim()]) {
-        statusInfo = `${statusInfo.trim()} - ${errorMap[statusInfo.trim()]}`;
+      const arkeselKey = process.env.ARKESEL_API_KEY?.trim();
+      if (!arkeselKey) {
+        console.error("ARKESEL_API_KEY is missing in environment");
+        return res.status(500).json({ success: false, error: "SMS service not configured" });
       }
 
-      if (isSuccess) {
-        return res.json({ success: true, data: rawData });
+      // Format number to 233 format
+      let formatted = targetPhone.trim().replace(/\D/g, '');
+      if (formatted.startsWith("0")) {
+        formatted = "233" + formatted.substring(1);
+      } else if (formatted.length === 9) {
+        formatted = "233" + formatted;
+      }
+
+      console.log(`[Arkesel V2] Sending SMS to: ${formatted}`);
+
+      const response = await axios.post(
+        "https://sms.arkesel.com/api/v2/sms/send",
+        {
+          sender: (sender || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11),
+          message,
+          recipients: [formatted],
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "api-key": arkeselKey,
+          },
+          timeout: 15000
+        }
+      );
+
+      console.log(`[Arkesel V2] Response:`, response.data);
+
+      if (response.data && (response.data.status === 'success' || response.data.code === '1000')) {
+        return res.json({ success: true, result: response.data });
       } else {
-        console.error("Arkesel reported failure:", { statusInfo, rawData });
-        return res.json({ 
+        return res.status(400).json({ 
           success: false, 
-          error: statusInfo.length > 0 ? statusInfo : "Unknown error from Arkesel",
-          raw: rawData
+          error: response.data?.message || "Failed to send SMS", 
+          details: response.data 
         });
       }
     } catch (error: any) {
-      console.error("Arkesel Integration Fatal Error:", error.message);
+      console.error("Arkesel V2 Integration Error:", error.message);
       return res.status(500).json({ 
         success: false, 
-        error: `Network Error: ${error.message}` 
+        error: error.response?.data?.message || error.message 
       });
     }
   });
+
+  // API Route for Re-sending SMS for a specific transaction
+  app.post("/api/resend-sms", async (req, res) => {
+    try {
+      const { transactionId } = req.body;
+      if (!transactionId) return res.status(400).json({ error: "Transaction ID required" });
+
+      const { data: transaction, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (fetchErr || !transaction) return res.status(404).json({ error: "Transaction not found" });
+
+      // Fetch settings for SMS template
+      const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'sms_settings').maybeSingle();
+      const smsTemplate = settingsData?.value?.sms_template_success;
+
+      const message = buildSuccessSMS({
+        volume: transaction.capacity,
+        network: transaction.network,
+        phone: transaction.recipient_phone,
+        transactionId: transaction.id,
+        template: smsTemplate
+      });
+
+      const result = await sendSMS(transaction.recipient_phone, message);
+      return res.json({ success: true, message: "SMS resent", result });
+    } catch (err: any) {
+      console.error("[API] Resend SMS Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API Route for Retrying VTU Purchase
+  app.post("/api/retry-vtu", async (req, res) => {
+    try {
+      const { transactionId } = req.body;
+      if (!transactionId) return res.status(400).json({ error: "Transaction ID required" });
+
+      const { data: transaction, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (fetchErr || !transaction) return res.status(404).json({ error: "Transaction not found" });
+
+      console.log(`[API] Retrying VTU for ${transactionId}`);
+      const result = await purchaseData(transaction);
+      
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[API] Retry VTU Error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
 
   async function getArkeselBalance() {
     try {
@@ -693,52 +815,57 @@ async function purchaseData(transaction: any) {
 
   /**
    * Centralized SMS helper using Arkesel V2 (POST)
-   * Diligently implemented by Lead Engineer
    */
-  async function sendSMS(phone: string, message: string) {
+  async function sendSMS(to: string, message: string) {
     try {
-      console.log("🚀 SMS FUNCTION TRIGGERED");
-      console.log("API KEY:", process.env.ARKESEL_API_KEY);
+      if (!process.env.ARKESEL_API_KEY) {
+        console.error("❌ Missing ARKESEL_API_KEY");
+        return;
+      }
 
-      const formattedPhone = phone.startsWith("0")
-        ? "233" + phone.slice(1)
-        : phone;
+      // format number → 233XXXXXXXXX
+      let phone = to.trim().replace(/\D/g, '');
+      if (phone.startsWith("0")) {
+        phone = "233" + phone.substring(1);
+      } else if (phone.length === 9) {
+        phone = "233" + phone;
+      }
 
       const payload = {
-        sender: "Datapapa",
+        sender: process.env.ARKESEL_SENDER_ID || "Datapapa",
         message,
-        recipients: [formattedPhone],
+        recipients: [phone],
       };
 
-      console.log("📤 SMS PAYLOAD:", payload);
+      console.log("📤 Sending SMS to:", phone);
 
       const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
         headers: {
           "Content-Type": "application/json",
-          "api-key": process.env.ARKESEL_API_KEY!,
+          "api-key": process.env.ARKESEL_API_KEY,
         },
         timeout: 15000
       });
 
       const data = response.data;
-      console.log("✅ PARSED SMS RESPONSE:", data);
+      console.log("📩 SMS RESPONSE:", data);
 
-      // Keep logging to Supabase if possible, but the user requested this specific implementation
-      // I will add the logging back in as a good practice if it doesn't conflict
+      // Log to database
       try {
         await supabase.from("sms_logs").insert({
-          phone: formattedPhone,
-          message,
-          status: data.status === 'success' ? "sent" : "failed",
-          response: data
+          phone: phone,
+          message: message,
+          status: (data.status === 'success' || data.code === '1000') ? "sent" : "failed",
+          response: data,
+          created_at: new Date().toISOString()
         });
       } catch (logErr) {
-        console.error("FATAL SMS LOG ERROR:", logErr);
+        console.error("SMS LOG ERROR:", logErr);
       }
 
       return data;
-    } catch (err) {
-      console.error("❌ SMS ERROR:", err);
+    } catch (err: any) {
+      console.error("❌ SMS ERROR:", err.message);
     }
   }
 

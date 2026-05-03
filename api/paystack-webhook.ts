@@ -9,16 +9,27 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function sendSMS(to: string, message: string) {
   try {
+    if (!process.env.ARKESEL_API_KEY) {
+      console.error("❌ Missing ARKESEL_API_KEY");
+      return;
+    }
+
+    // format number → 233XXXXXXXXX
+    let phone = to;
+    if (to.startsWith("0")) {
+      phone = "233" + to.substring(1);
+    }
+
     const res = await fetch("https://sms.arkesel.com/api/v2/sms/send", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "api-key": process.env.ARKESEL_API_KEY || "",
+        "api-key": process.env.ARKESEL_API_KEY,
       },
       body: JSON.stringify({
-        sender: process.env.ARKESEL_SENDER_ID,
+        sender: process.env.ARKESEL_SENDER_ID || "Datapapa",
         message,
-        recipients: [to],
+        recipients: [phone],
       }),
     });
 
@@ -123,6 +134,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
       .eq("id", transaction.id);
 
+    await sendSMS(
+      transaction.recipient_phone,
+      `⏳ Datapapa
+Your payment was received.
+Your data is being processed...`
+    );
+
     // ✅ IDEMPOTENCY CHECK
     if (transaction.vtu_status === "success") {
       console.log("⚠️ Already processed success");
@@ -205,13 +223,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       console.log("✅ VTU SUCCESS");
 
-      // ✅ NOTIFY CUSTOMER
-      const msg = `Datapapa ✅
+      // 📩 CUSTOMER SMS
+      await sendSMS(
+        transaction.recipient_phone,
+        `Datapapa ✅
 Your ${transaction.capacity} ${transaction.network} data has been delivered to ${transaction.recipient_phone}.
-Ref: ${transaction.id}`;
-      await sendSMS(transaction.recipient_phone, msg);
+Ref: ${transaction.id}`
+      );
 
-      // ✅ NOTIFY ADMIN
+      // 📩 ADMIN SMS
       await sendSMS(
         process.env.ADMIN_PHONE || "",
         `💰 NEW VTU
@@ -220,7 +240,6 @@ To: ${transaction.recipient_phone}
 ₵${transaction.amount}`
       );
     } else {
-      console.error("❌ DataHub Error:", result?.error || result?.message);
       await supabase.from("transactions").update({
         vtu_status: "failed",
         status: "failed",
@@ -231,11 +250,12 @@ To: ${transaction.recipient_phone}
 
       console.error("❌ VTU FAILED");
 
-      // ✅ NOTIFY ADMIN OF FAILURE
+      // ⚠️ ADMIN ALERT
       await sendSMS(
         process.env.ADMIN_PHONE || "",
         `⚠️ VTU FAILED
 ${transaction.recipient_phone}
+${transaction.network} ${transaction.capacity}
 Ref: ${transaction.id}`
       );
     }
