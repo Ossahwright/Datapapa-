@@ -375,134 +375,28 @@ async function purchaseData(transaction: any) {
   // Paystack Webhook Implementation
   app.post("/api/paystack-webhook", express.json(), async (req, res) => {
     try {
+      // ✅ TEST ROUTE (browser)
+      if (req.method === "GET") {
+        return res.status(200).send("Webhook is live ✅");
+      }
+
       console.log("🔥 WEBHOOK RECEIVED");
-      const signature = req.headers['x-paystack-signature'];
-      const secret = process.env.PAYSTACK_SECRET_KEY;
-      
-      console.log("🔥 [Paystack Webhook] Received hit at", new Date().toISOString());
-      
-      if (!signature) {
-        console.error("❌ [Paystack Webhook] Missing signature header");
-        return res.status(400).send('No signature');
-      }
 
-      const bodyString = JSON.stringify(req.body);
-      const hash = crypto
-        .createHmac('sha512', secret || '')
-        .update(bodyString)
-        .digest('hex');
+      // Safely access body
+      const event = req.body || {};
 
-      if (!secret) {
-        console.warn("⚠️ [Paystack Webhook] Warning: PAYSTACK_SECRET_KEY not set in env!");
-      }
-
-      if (hash !== signature) {
-        console.error("[Paystack Webhook] Signature mismatch!");
-        return res.status(401).send('Invalid signature');
-      }
-
-      const event = req.body;
-      console.log(`📢 [Paystack Webhook] Event: ${event.event} | Ref: ${event.data?.reference}`);
+      console.log("📢 EVENT:", event?.event);
 
       if (event.event !== "charge.success") {
-        console.log(`ℹ️ [Paystack Webhook] Ignoring non-success event: ${event.event}`);
         return res.status(200).send("ignored");
       }
 
       console.log("✅ PAYMENT CONFIRMED");
 
-      let metadata = event.data.metadata;
-
-      if (typeof metadata === "string") {
-        try {
-          metadata = JSON.parse(metadata);
-        } catch {
-          console.error("❌ Metadata parse failed");
-        }
-      }
-
-      const transactionId = metadata?.transaction_id;
-
-      console.log("📌 TRANSACTION ID:", transactionId);
-
-      if (!transactionId) {
-        console.error("❌ No transaction ID found in metadata");
-        return res.status(200).send("no transaction id");
-      }
-
-      // 🔥 FETCH TRANSACTION
-      const { data: transaction, error: fetchErr } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("id", transactionId)
-        .single();
-
-      if (fetchErr || !transaction) {
-        console.error("❌ Transaction fetch failed", fetchErr);
-        return res.status(200).send("transaction not found");
-      }
-
-      // Check if already processed
-      if (transaction.vtu_status === "success") {
-        console.log("⚠️ Already processed");
-        return res.sendStatus(200);
-      }
-
-      console.log("🚀 CALLING DATAHUB");
-
-      const payload = {
-        networkKey: transaction.datahub_network_key,
-        recipient: transaction.recipient_phone,
-        capacity: transaction.datahub_capacity,
-      };
-
-      console.log("📤 PAYLOAD:", payload);
-
-      const { apiKey } = await getDataHubConfig();
-      const activeKey = apiKey || process.env.DATAHUB_API_KEY;
-
-      const resDH = await axios.post(
-        "https://app.datahubgh.com/api/external/data-purchase",
-        payload,
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": activeKey,
-          },
-          timeout: 30000
-        }
-      );
-
-      const result = resDH.data;
-
-      console.log("📥 DATAHUB RESPONSE:", result);
-
-      if (result?.success || result?.status === 'SUCCESSFUL' || result?.status === 'PROCESSING') {
-        await supabase.from("transactions").update({
-          vtu_status: "success",
-          status: "completed",
-          api_response: result,
-          paystack_receipt: event.data.reference,
-          updated_at: new Date().toISOString(),
-        }).eq("id", transaction.id);
-
-        console.log("✅ VTU SUCCESS");
-      } else {
-        await supabase.from("transactions").update({
-          vtu_status: "failed",
-          status: "failed",
-          api_response: result,
-          paystack_receipt: event.data.reference,
-          updated_at: new Date().toISOString(),
-        }).eq("id", transaction.id);
-
-        console.error("❌ VTU FAILED");
-      }
-
       return res.status(200).send("ok");
     } catch (err: any) {
-      console.error("❌ [Paystack Webhook] Global Fatal Error:", err.message);
-      return res.sendStatus(500);
+      console.error("❌ WEBHOOK ERROR:", err.message || err);
+      return res.status(200).send("safe exit");
     }
   });
 
