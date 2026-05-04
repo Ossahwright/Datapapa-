@@ -1519,7 +1519,7 @@ export default function AdminDashboard() {
                               {tx.capacity || 'N/A'}
                             </td>
                             <td className="px-6 py-4 font-medium text-slate-900">
-                              {tx.payee_phone || 'N/A'}
+                              {tx.payer_phone_number || tx.payee_phone || 'N/A'}
                             </td>
                             <td className="px-6 py-4 font-medium text-slate-900">
                               {tx.recipient_phone || 'N/A'}
@@ -2981,6 +2981,10 @@ export default function AdminDashboard() {
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Recipient</label>
                       <p className="font-bold text-lg text-slate-900">{selectedTransaction.recipient_phone}</p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Payer Phone</label>
+                      <p className="font-medium text-slate-900">{selectedTransaction.payer_phone_number || selectedTransaction.payee_phone || 'N/A'}</p>
                     </div>
                   </div>
 

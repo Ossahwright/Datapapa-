@@ -31,6 +31,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const paystackReference = event.data?.reference;
+    const customerPhone = event.data?.customer?.phone;
     let metadata = event.data?.metadata;
     if (typeof metadata === "string") {
       try { metadata = JSON.parse(metadata); } catch { console.error("❌ Metadata parse failed"); }
@@ -62,6 +63,7 @@ export default async function handler(req: any, res: any) {
       .from("transactions")
       .update({
         paystack_receipt: paystackReference,
+        payer_phone_number: customerPhone || transaction.payer_phone_number,
         status: "paid",
         updated_at: new Date().toISOString()
       })

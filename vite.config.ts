@@ -15,9 +15,9 @@ export default defineConfig(({ mode }) => {
         name: 'vercel-api-bridge',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
-            const url = req.url ? new URL(req.url, `http://${req.headers.host || 'localhost'}`) : null;
-            if (url && url.pathname.startsWith('/api/')) {
-              const apiPath = url.pathname;
+            const url = req.url || "";
+            if (url.startsWith('/api/')) {
+              const apiPath = url.split('?')[0];
               // Look for the file in the /api directory
               const filePath = path.resolve(process.cwd(), apiPath.slice(1) + ".ts");
               

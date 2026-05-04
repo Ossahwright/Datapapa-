@@ -3,9 +3,9 @@ import axios from 'axios';
 
 // Initialize Supabase admin client
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFzeHphcmh4Z2Z3bm9ndnVxb21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMjAyOTcsImV4cCI6MjA5MjU5NjI5N30.ZQZFhxQgzy9JBGUBW9wRfRDs44wcFkmDFu78PUJIags';
 
-export const supabase = createClient(supabaseUrl, supabaseKey!);
+export const supabase = createClient(supabaseUrl, supabaseKey);
 
 /**
  * Standardizes phone numbers to 233 format
@@ -67,13 +67,16 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
     }
 
     const formatted = formatPhone(to);
-    const payload = {
-      sender: (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11),
-      message,
-      recipients: [formatted],
-    };
+    const finalSender = (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11);
 
     console.log("🚀 [SMS] Sending SMS to:", formatted);
+    
+    const payload = {
+      sender: finalSender,
+      message: message,
+      recipients: [formatted]
+    };
+
     const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
       headers: {
         "Content-Type": "application/json",
@@ -87,10 +90,17 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
 
     // Log to database
     try {
+      const isSuccess = data && (
+        String(data).includes('1000') || 
+        data.code === '1000' || 
+        data.code === 1000 || 
+        data.status === 'success'
+      );
+
       await supabase.from("sms_logs").insert({
         phone: formatted,
         message: message,
-        status: (data.status === 'success' || data.code === '1000' || data.code === 1000) ? "sent" : "failed",
+        status: isSuccess ? "sent" : "failed",
         response: data,
         created_at: new Date().toISOString()
       });
@@ -98,8 +108,11 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
       console.error("[SMS] Log error:", logErr);
     }
 
-    return response.data;
+    return data;
   } catch (err: any) {
+    if (err.response) {
+      console.error("❌ [SMS] Error Response:", JSON.stringify(err.response.data));
+    }
     console.error("❌ [SMS] Error:", err.message);
     return { success: false, error: err.message };
   }

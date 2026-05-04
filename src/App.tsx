@@ -97,7 +97,12 @@ export default function App() {
 
   const initializeApp = useCallback(async () => {
     setIsLoading(true);
-    await Promise.all([fetchGlobalSettings(), fetchUserRole()]);
+    
+    // Set a maximum wait time for initialization
+    const timeoutPromise = new Promise(resolve => setTimeout(resolve, 5000));
+    const initPromise = Promise.all([fetchGlobalSettings(), fetchUserRole()]);
+    
+    await Promise.race([initPromise, timeoutPromise]);
     setIsLoading(false);
   }, [fetchGlobalSettings, fetchUserRole]);
 

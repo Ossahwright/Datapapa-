@@ -13,19 +13,34 @@ export default async function handler(req: any, res: any) {
     // Add User-specified aliases
     bundle,
     phone,
-    paystack_ref
+    paystack_ref,
+    payer_phone_number
   } = req.body;
 
   // Use aliases if primary ones are missing
   const finalTransactionId = transaction_id || paystack_ref;
   const finalRecipient = recipient || phone;
-  const finalCapacity = capacity || bundle;
+  
+  // Extract from bundle object if it exists
+  const bundleCapacity = typeof bundle === 'object' && bundle !== null ? bundle.capacity : bundle;
+  const bundleNetworkKey = typeof bundle === 'object' && bundle !== null ? bundle.network_key : networkKey;
+  
+  const finalCapacity = capacity || bundleCapacity;
+  const finalNetworkKey = networkKey || bundleNetworkKey;
 
-  console.log(`[API] Purchase Data Request: ${finalTransactionId} for ${finalRecipient}`);
+  console.log(`[API] Purchase Data Request: ${finalTransactionId} for ${finalRecipient} (${finalCapacity})`);
 
   try {
-    // 1. Fetch transaction details if only ID is provided
-    let transaction = req.body;
+    // 1. Update payer phone if provided
+    if (finalTransactionId && payer_phone_number) {
+      await supabase
+        .from('transactions')
+        .update({ payer_phone_number })
+        .eq('id', finalTransactionId);
+    }
+
+    // 2. Fetch transaction details if only ID is provided
+    let transaction = { ...req.body };
     if (finalTransactionId && !finalRecipient) {
       const { data, error } = await supabase
         .from('transactions')
@@ -42,7 +57,9 @@ export default async function handler(req: any, res: any) {
     // Ensure we have normalized fields for purchaseData function
     transaction.recipient_phone = transaction.recipient_phone || finalRecipient;
     transaction.capacity = transaction.capacity || finalCapacity;
-    transaction.transaction_id = transaction.id || finalTransactionId;
+    transaction.network_key = transaction.network_key || finalNetworkKey;
+    transaction.id = transaction.id || finalTransactionId;
+    transaction.transaction_id = transaction.id;
 
     if (!transaction.recipient_phone) {
       return res.status(400).json({ success: false, error: 'Target phone missing' });

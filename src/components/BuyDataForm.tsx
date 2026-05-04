@@ -200,7 +200,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           bundle, // Matches component state
           phone,  // Matches component state
           paystack_ref: paystackResponse.reference,
-          transaction_id: currentTxId // Still good to send for backend matching
+          transaction_id: currentTxId, // Still good to send for backend matching
+          payer_phone_number: currentPayerPhone
         }),
       });
 
