@@ -52,7 +52,7 @@ export default async function handler(req: any, res: any) {
             await sendSMS(trans.recipient_phone, message, "Datapapa");
             await sendSMS(
               process.env.ADMIN_PHONE || "233244014207",
-              `DELIVERED: ${trans.capacity} ${trans.network} to ${trans.recipient_phone}. Ref: ${txRef || trans.id}`,
+              `SENT: ${trans.capacity} ${trans.network} to ${trans.recipient_phone}. Ref: ${txRef || trans.id}`,
               "Datapapa"
             );
           }

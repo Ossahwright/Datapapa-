@@ -69,7 +69,7 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
     const formatted = formatPhone(to);
     const finalSender = (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11);
 
-    console.log("🚀 [SMS] Sending SMS to:", formatted);
+    console.log("🚀 [SMS] Sending SMS to:", formatted, "| Msg:", message.substring(0, 50) + (message.length > 50 ? "..." : ""));
     
     const payload = {
       sender: finalSender,
@@ -134,7 +134,7 @@ export function buildSuccessSMS({
   transactionId: string;
   template?: string;
 }) {
-  const defaultTemplate = `Datapapa\n\nYour purchase of {capacity} {network} data for {phone} was successful.\n\nKindly contact or WhatsApp us on 0244014207\nThank you for your trust.`;
+  const defaultTemplate = `Datapapa: {capacity} {network} data for {phone} was sent. Support: 0244014207. Thank you.`;
   let msg = template || defaultTemplate;
   
   // Normalized variables

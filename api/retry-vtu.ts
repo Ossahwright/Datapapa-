@@ -46,7 +46,7 @@ export default async function handler(req: any, res: any) {
           
           await sendSMS(
             process.env.ADMIN_PHONE || "233244014207",
-            `Datapapa ✅: ${transaction.capacity} ${transaction.network} to ${transaction.recipient_phone}. Ref: ${transaction.id}`
+            `Datapapa: ${transaction.capacity} ${transaction.network} to ${transaction.recipient_phone}. Ref: ${transaction.id}`
           );
         }
       } catch (smsErr) {

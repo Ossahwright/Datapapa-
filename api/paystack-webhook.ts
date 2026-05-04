@@ -72,7 +72,7 @@ export default async function handler(req: any, res: any) {
     // 📩 CUSTOMER SMS: PAYMENT RECEIVED
     await sendSMS(
       transaction.recipient_phone,
-      `⏳ Datapapa\nYour payment was received.\nYour data is being processed...`
+      `Datapapa: Your order is being processed for ${transaction.recipient_phone}.`
     );
 
     // TRIGGER VTU
@@ -83,7 +83,7 @@ export default async function handler(req: any, res: any) {
       // 📩 CUSTOMER SMS: SUCCESS
       await sendSMS(
         transaction.recipient_phone,
-        `Datapapa ✅\nYour ${transaction.capacity} ${transaction.network} data has been delivered to ${transaction.recipient_phone}.\nRef: ${transaction.id}`
+        `Datapapa: ${transaction.capacity} ${transaction.network} data sent to ${transaction.recipient_phone}. Ref: ${transaction.id}`
       );
     }
 
