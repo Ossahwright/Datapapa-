@@ -38,33 +38,6 @@ export default async function handler(req: any, res: any) {
       vtuResult.vtu_status === 'delivered'
     )));
 
-    if (isActuallyDelivered && transaction.recipient_phone) {
-      console.log(`[RetryVTU] Success detected, sending notifications...`);
-      try {
-        const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'general').maybeSingle();
-        const settings = settingsData?.value || {};
-        
-        if (settings.sms_enabled !== false) {
-          const message = buildSuccessSMS({
-            volume: transaction.capacity,
-            network: transaction.network,
-            phone: transaction.recipient_phone,
-            transactionId: transaction.id,
-            template: settings.sms_template_success
-          });
-
-          await sendSMS(transaction.recipient_phone, message);
-          
-          await sendSMS(
-            process.env.ADMIN_PHONE || "233244014207",
-            `Datapapa: ${transaction.capacity} ${transaction.network} to ${transaction.recipient_phone}. Ref: ${transaction.id}`
-          );
-        }
-      } catch (smsErr) {
-        console.error("[RetryVTU] Post-trigger SMS failure:", smsErr);
-      }
-    }
-
     return res.json({
       ...vtuResult,
       message: isActuallyDelivered ? "VTU Delivery Triggered Successfully" : `VTU Failed: ${vtuResult?.error || "Unknown Provider Error"}`

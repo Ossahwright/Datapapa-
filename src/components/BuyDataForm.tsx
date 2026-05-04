@@ -181,54 +181,37 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const initializePayment = usePaystackPayment(paystackConfig);
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("💰 PAYMENT SUCCESS");
-    setIsLoading(true);
+    console.log("💰 PAYMENT SUCCESS CALLBACK");
     setPaymentStatus("success");
+    setIsLoading(false);
     
     try {
       const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
       setPayerPhone(currentPayerPhone);
       setTransactionId(paystackResponse.reference);
-      setSuccess(true);
 
-      // Trigger VTU according to user's desired implementation
-      console.log("🚀 [DataHub] SENDING DATAHUB REQUEST FROM FRONTEND");
-      const res = await fetch("/api/purchase-data", {
+      console.log("🚀 [API] TRIGGERING DATAHUB");
+      fetch("/api/purchase-data", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          bundle, // Matches component state
-          phone,  // Matches component state
+          bundle, 
+          phone, 
           paystack_ref: paystackResponse.reference,
-          transaction_id: currentTxId, // Still good to send for backend matching
+          transaction_id: currentTxId, 
           payer_phone_number: currentPayerPhone
         }),
-      });
+      }).catch(e => console.error("VTU trigger error:", e));
 
-      console.log("📡 BACKEND RESPONSE STATUS:", res.status);
-      const data = await res.json();
-      console.log("📡 BACKEND RESPONSE:", data);
+      setTimeout(() => {
+        window.location.href = '/'; 
+      }, 3000);
 
-      const onSuccess = () => {
-        setTimeout(() => {
-          setSuccess(false);
-          setNetwork('');
-          setBundle('');
-          setPhone('');
-          setTransactionId('');
-          // Force a clean reload to homepage
-          window.location.reload();
-        }, 2000); 
-      };
-      
-      onSuccess();
     } catch (err: any) {
-      setError(err.message || 'Payment processing failed. Please contact support.');
-      setPaymentStatus("idle");
-    } finally {
-      setIsLoading(false);
+      console.error("Payment post-processing error:", err);
+      setTimeout(() => window.location.href = '/', 3000);
     }
   };
 

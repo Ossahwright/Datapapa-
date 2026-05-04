@@ -28,7 +28,22 @@ export default async function handler(req: any, res: any) {
   const finalCapacity = capacity || bundleCapacity;
   const finalNetworkKey = networkKey || bundleNetworkKey;
 
-  console.log(`[API] Purchase Data Request: ${finalTransactionId} for ${finalRecipient} (${finalCapacity})`);
+  console.log(`💰 [API] PAYMENT SUCCESS: ${finalTransactionId}`);
+  console.log(`📱 [API] Recipient: ${finalRecipient} | Capacity: ${finalCapacity} | Network: ${finalNetworkKey}`);
+
+  const allowedNetworks = ['mtn', 'telecel', 'vodafone', 'airteltigo', 'at', 'YELLO', 'TELECEL', 'AT_PREMIUM', 'AT_BIGTIME'];
+  const isValidNetwork = finalNetworkKey && allowedNetworks.some(n => n.toLowerCase() === String(finalNetworkKey).toLowerCase());
+  const isValidRecipient = finalRecipient && String(finalRecipient).length >= 10;
+  const isValidCapacity = finalCapacity && String(finalCapacity).length > 0;
+
+  if (!isValidRecipient || !isValidCapacity || !isValidNetwork) {
+    console.error(`❌ [API] VALIDATION FAILED: Net=${finalNetworkKey}, Rec=${finalRecipient}, Cap=${finalCapacity}`);
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid request data',
+      details: { network: isValidNetwork, recipient: isValidRecipient, capacity: isValidCapacity }
+    });
+  }
 
   try {
     // 1. Update payer phone if provided
@@ -49,6 +64,7 @@ export default async function handler(req: any, res: any) {
         .single();
       
       if (error || !data) {
+        console.error(`❌ [API] TRANSACTION NOT FOUND: ${finalTransactionId}`);
         return res.status(404).json({ success: false, error: 'Transaction not found' });
       }
       transaction = data;
@@ -61,13 +77,10 @@ export default async function handler(req: any, res: any) {
     transaction.id = transaction.id || finalTransactionId;
     transaction.transaction_id = transaction.id;
 
-    if (!transaction.recipient_phone) {
-      return res.status(400).json({ success: false, error: 'Target phone missing' });
-    }
-
     // 2. Perform Data Purchase
-    console.log("🚀 [DataHub] SENDING DATAHUB REQUEST");
+    console.log("🚀 [API] SENDING DATAHUB REQUEST");
     const result = await purchaseData(transaction);
+    console.log("📡 [API] DATAHUB RESPONSE:", JSON.stringify(result));
 
     return res.status(result.success ? 200 : 400).json(result);
   } catch (err: any) {
