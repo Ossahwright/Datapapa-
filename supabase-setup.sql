@@ -267,3 +267,22 @@ BEGIN
     WHERE created_at::date = CURRENT_DATE;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 15. Create sms_logs table
+CREATE TABLE IF NOT EXISTS public.sms_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    phone TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL,           -- sent, failed
+    response JSONB,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.sms_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Admins can manage sms_logs" ON public.sms_logs;
+CREATE POLICY "Admins can manage sms_logs"
+ON public.sms_logs
+FOR ALL
+USING (public.is_admin())
+WITH CHECK (public.is_admin());

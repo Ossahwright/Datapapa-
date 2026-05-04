@@ -182,108 +182,190 @@ export async function purchaseData(transaction: any) {
     recipient = '0' + recipient;
   }
 
-  const networkKey = transaction.datahub_network_key || transaction.network_key || transaction.network;
+  const networkMapping: Record<string, string> = {
+    'mtn': '1',
+    'telecel': '2',
+    'vodafone': '2',
+    'airteltigo': '3',
+    'at': '3'
+  };
+
+  const rawNetwork = String(transaction.network || "").toLowerCase();
+  const networkKey = transaction.datahub_network_key || 
+                    transaction.network_key || 
+                    networkMapping[rawNetwork] || 
+                    transaction.network;
+
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
-  const finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
+  let finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
+  
+  // Normalize capacity strings for DataHub if they are standard GB/MB formats
+  if (finalCapacity.includes("MB")) {
+    finalCapacity = finalCapacity.replace("MB", "").trim();
+  }
 
   // Harmonized payload for various DataHubGH API versions
   const payload = {
-    networkKey,
-    network: networkKey, // Alias found in some docs
-    network_id: networkKey, // Numeric alias
+    network_id: networkKey,
     recipient,
-    phone: recipient, // Common alias
-    msisdn: recipient, // Telecom alias
+    plan: finalCapacity,
+    // Maintain aliases for backward compatibility/different endpoints
+    networkKey,
+    network: networkKey,
+    phone: recipient,
+    msisdn: recipient,
     capacity: finalCapacity,
-    bundle: finalCapacity, // Common alias
-    plan: finalCapacity, // Common alias
-    plan_id: finalCapacity, // Numeric alias
+    bundle: finalCapacity,
+    plan_id: finalCapacity,
   };
 
   console.log("📝 [DataHub] Payload Prepared:", JSON.stringify(payload));
 
-  try {
-    // 🟠 Set status to processing early so UI shows movement
-    await supabase
-      .from("transactions")
-      .update({ 
-        vtu_status: 'processing',
-        updated_at: new Date().toISOString() 
-      })
-      .eq("id", transaction.id);
+  const maxRetries = 2;
+  let attempts = 0;
+  let lastError = null;
 
-    const { apiKey, baseUrl } = await getDataHubConfig();
-    if (!apiKey) throw new Error("API key missing");
-
-    const startTime = Date.now();
-    const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-        "Accept": "application/json",
-        "User-Agent": "Datapapa-VTU-Serverless/1.0"
-      },
-      timeout: 35000,
-      validateStatus: () => true
-    });
-
-    const duration = Date.now() - startTime;
-    const result = response.data;
-    
-    console.log("📡 [DataHub] DATAHUB RESPONSE:", JSON.stringify(result));
-    
-    // Log to datahubgh_logs
+  while (attempts <= maxRetries) {
     try {
-      await supabase.from("datahubgh_logs").insert({
-        endpoint: `${baseUrl}/data-purchase`,
-        status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
-        http_status: response.status,
-        response_time: duration,
-        request_payload: payload,
-        response_data: result,
-        created_at: new Date().toISOString()
+      attempts++;
+      if (attempts > 1) {
+        console.log(`🔄 [DataHub] Internal Retry Attempt ${attempts - 1} for ${transaction.id}`);
+        // Wait 2 seconds before retry
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      // 🟠 Set status to processing early so UI shows movement
+      const { error: updateErr } = await supabase
+        .from("transactions")
+        .update({ 
+          vtu_status: 'processing',
+          updated_at: new Date().toISOString() 
+        })
+        .eq("id", transaction.id);
+      
+      if (updateErr) {
+        console.warn("⚠️ [DataHub] Failed to update transaction to processing:", updateErr.message);
+      }
+
+      const { apiKey, baseUrl } = await getDataHubConfig();
+      
+      if (!apiKey) {
+        console.error("❌ [DataHub] API key missing in settings");
+        throw new Error("DataHub API key missing. Please configure it in Admin Settings > DataHub Integration.");
+      }
+
+      const startTime = Date.now();
+      const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          "Accept": "application/json"
+        },
+        timeout: 45000, // Increased timeout
+        validateStatus: () => true
       });
-    } catch (logErr) {
-      console.error("[DataHub Logging Error]:", logErr);
-    }
 
-    // Improved success check based on typical DataHubGH/similar API responses
-    const isActuallySuccess = (response.status >= 200 && response.status < 300) && (
-      result.success === true || 
-      result.status?.toUpperCase() === 'SUCCESSFUL' || 
-      result.status?.toUpperCase() === 'PROCESSING' ||
-      result.status?.toUpperCase() === 'SUCCESS' ||
-      result.status?.toUpperCase() === 'DELIVERED' ||
-      result.status?.toUpperCase() === 'COMPLETED' ||
-      result.code === 200 ||
-      result.code === '200'
-    );
-    
-    const vtuStatus = isActuallySuccess ? 'delivered' : 'failed';
+      const duration = Date.now() - startTime;
+      const result = response.data;
+      
+      console.log(`📡 [DataHub] RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
+      
+      // Log to datahubgh_logs
+      try {
+        await supabase.from("datahubgh_logs").insert({
+          endpoint: `${baseUrl}/data-purchase`,
+          status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
+          http_status: response.status,
+          response_time: duration,
+          request_payload: payload,
+          response_data: result,
+          created_at: new Date().toISOString()
+        });
+      } catch (logErr) {
+        console.error("[DataHub Logging Error]:", logErr);
+      }
 
-    await supabase
-      .from("transactions")
-      .update({
+      // ⚠️ Check for transient errors that warrant a retry
+      if (response.status === 504 || response.status === 502 || response.status === 429) {
+        console.warn(`⚠️ [DataHub] Transient error ${response.status}. Retrying...`);
+        lastError = `HTTP ${response.status}`;
+        continue;
+      }
+
+      // Improved success check
+      const resultStr = JSON.stringify(result).toLowerCase();
+      const isActuallySuccess = (response.status >= 200 && response.status < 300) && (
+        result.success === true || 
+        result.status === true ||
+        result.status === 'true' ||
+        result.status?.toUpperCase() === 'SUCCESSFUL' || 
+        result.status?.toUpperCase() === 'PROCESSING' ||
+        result.status?.toUpperCase() === 'SUCCESS' ||
+        result.status?.toUpperCase() === 'DELIVERED' ||
+        result.status?.toUpperCase() === 'COMPLETED' ||
+        result.code === 200 ||
+        result.code === '200' ||
+        result.message?.toLowerCase().includes("successful") ||
+        resultStr.includes('"status":"success"') ||
+        resultStr.includes('"code":1000') // Arkesel style if used as proxy
+      );
+
+      // If we got a definite "error" status in the body even with 200, it's a failure (don't retry)
+      const isDefiniteFailure = result.status === false || 
+                               result.success === false || 
+                               result.status?.toLowerCase() === 'error' ||
+                               result.status?.toLowerCase() === 'failed';
+
+      if (!isActuallySuccess && !isDefiniteFailure && attempts <= maxRetries) {
+         console.warn(`⚠️ [DataHub] Ambiguous response. Retrying...`);
+         continue;
+      }
+      
+      const vtuStatus = isActuallySuccess ? 'delivered' : 'failed';
+
+      await supabase
+        .from("transactions")
+        .update({
+          vtu_status: vtuStatus,
+          status: isActuallySuccess ? 'completed' : 'failed',
+          api_response: result,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transaction.id);
+
+      return { 
+        success: isActuallySuccess, 
+        status: response.status,
         vtu_status: vtuStatus,
-        status: isActuallySuccess ? 'completed' : 'failed',
-        api_response: result,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", transaction.id);
-
-    return { 
-      success: isActuallySuccess, 
-      status: response.status,
-      vtu_status: vtuStatus,
-      ...result 
-    };
-  } catch (err: any) {
-    console.error("❌ [DataHub] Error:", err.message);
-    await supabase.from("transactions").update({ 
-      vtu_status: 'failed', 
-      status: 'failed', 
-      api_response: { error: err.message } 
-    }).eq("id", transaction.id);
-    return { success: false, error: err.message };
+        ...result 
+      };
+    } catch (err: any) {
+      lastError = err.message;
+      console.error(`❌ [DataHub] Attempt ${attempts} Error:`, err.message);
+      
+      // If it's a timeout, we might want to retry
+      if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        continue;
+      }
+      
+      // For other errors, update DB and return
+      await supabase.from("transactions").update({ 
+        vtu_status: 'failed', 
+        status: 'failed', 
+        api_response: { error: err.message, attempt: attempts } 
+      }).eq("id", transaction.id);
+      
+      return { success: false, error: err.message };
+    }
   }
+
+  // If we exhausted retries
+  console.error(`❌ [DataHub] All ${attempts} attempts failed. Last error: ${lastError}`);
+  await supabase.from("transactions").update({ 
+    vtu_status: 'failed', 
+    status: 'failed', 
+    api_response: { error: `Exhausted retries: ${lastError}`, attempts } 
+  }).eq("id", transaction.id);
+  
+  return { success: false, error: `Exhausted retries: ${lastError}` };
 }

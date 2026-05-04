@@ -117,7 +117,9 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       return acc;
     }, {});
 
-  const currentBundles = network ? (allBundles[network] || []) : [];
+  const currentBundles = network 
+    ? [...(allBundles[network] || [])].sort((a: any, b: any) => a.price - b.price) 
+    : [];
   const selectedBundleObj = currentBundles.find((b: any) => String(b.id) === String(bundle));
 
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
@@ -440,12 +442,23 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                 <button
                   key={net.id}
                   onClick={() => { setNetwork(net.id); setBundle(''); }}
-                  className={`relative overflow-hidden p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-3 ${
+                  className={`relative overflow-hidden p-6 rounded-2xl border-2 transition-all flex flex-col items-center gap-4 ${
                     network === net.id 
                       ? 'border-indigo-600 bg-indigo-50/30 ring-4 ring-indigo-600/10' 
-                      : 'border-slate-100 hover:border-slate-300 bg-white'
+                      : 'border-slate-100 hover:border-slate-300 shadow-sm hover:shadow-md bg-white'
                   }`}
                 >
+                  {/* Radio Button Indicator */}
+                  <div className={`absolute top-3 right-3 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                    network === net.id
+                      ? 'border-indigo-600 bg-indigo-600'
+                      : 'border-slate-300 bg-white'
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full bg-white transition-transform duration-200 ${
+                      network === net.id ? 'scale-100' : 'scale-0'
+                    }`} />
+                  </div>
+
                   <div className={`w-16 h-16 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 overflow-hidden ${net.color} ${net.text}`}>
                     {net.logo ? (
                       <img src={net.logo} alt={net.name} className="w-full h-full object-cover" />
