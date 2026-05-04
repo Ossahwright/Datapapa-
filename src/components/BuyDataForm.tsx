@@ -140,7 +140,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           const updated = payload.new;
 
           if (updated.id === currentTxId) {
-            if (updated.vtu_status === "success") {
+            if (updated.vtu_status === "delivered" || updated.vtu_status === "success") {
               alert("✅ Data delivered successfully");
             }
 
@@ -179,7 +179,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const initializePayment = usePaystackPayment(paystackConfig);
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("Payment successful:", paystackResponse.reference);
+    console.log("💰 PAYMENT SUCCESS");
     setIsLoading(true);
     setPaymentStatus("success");
     
@@ -189,17 +189,35 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       setTransactionId(paystackResponse.reference);
       setSuccess(true);
 
-      // Trigger VTU immediately as fallback/direct trigger
-      if (currentTxId) {
-        console.log("🚀 DATAHUB FUNCTION TRIGGERED VIA AXIOS");
-        axios.post("/api/trigger-vtu", { transactionId: currentTxId })
-          .catch(err => console.error("Frontend VTU trigger error:", err));
-      }
+      // Trigger VTU according to user's desired implementation
+      console.log("🚀 [DataHub] SENDING DATAHUB REQUEST FROM FRONTEND");
+      const res = await fetch("/api/purchase-data", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          bundle, // Matches component state
+          phone,  // Matches component state
+          paystack_ref: paystackResponse.reference,
+          transaction_id: currentTxId // Still good to send for backend matching
+        }),
+      });
+
+      console.log("📡 BACKEND RESPONSE STATUS:", res.status);
+      const data = await res.json();
+      console.log("📡 BACKEND RESPONSE:", data);
 
       const onSuccess = () => {
         setTimeout(() => {
+          setSuccess(false);
+          setNetwork('');
+          setBundle('');
+          setPhone('');
+          setTransactionId('');
+          // Force a clean reload to homepage
           window.location.reload();
-        }, 1200);
+        }, 2000); 
       };
       
       onSuccess();
@@ -235,11 +253,16 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       // 1. Save transaction FIRST as requested
       const { data: userData } = await supabase.auth.getUser();
       
+      const sellingPrice = selectedBundleObj?.price || 0;
+      const costPrice = parseFloat(selectedBundleObj?.original?.cost_price || '0') || 0;
+      const profit = Math.max(0, sellingPrice - costPrice);
+
       const { data, error: txError } = await supabase
         .from("transactions")
         .insert({
           user_id: userData?.user?.id || null,
-          amount: selectedBundleObj?.price || 0,
+          amount: sellingPrice,
+          profit: profit,
           network: network,
           recipient_phone: phone,
           status: "pending",

@@ -5,18 +5,32 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const { networkKey, recipient, capacity, transaction_id } = req.body;
+  const { 
+    networkKey, 
+    recipient, 
+    capacity, 
+    transaction_id,
+    // Add User-specified aliases
+    bundle,
+    phone,
+    paystack_ref
+  } = req.body;
 
-  console.log(`[API] Purchase Data Request: ${transaction_id} for ${recipient}`);
+  // Use aliases if primary ones are missing
+  const finalTransactionId = transaction_id || paystack_ref;
+  const finalRecipient = recipient || phone;
+  const finalCapacity = capacity || bundle;
+
+  console.log(`[API] Purchase Data Request: ${finalTransactionId} for ${finalRecipient}`);
 
   try {
     // 1. Fetch transaction details if only ID is provided
     let transaction = req.body;
-    if (transaction_id && !recipient) {
+    if (finalTransactionId && !finalRecipient) {
       const { data, error } = await supabase
         .from('transactions')
         .select('*')
-        .eq('id', transaction_id)
+        .eq('id', finalTransactionId)
         .single();
       
       if (error || !data) {
@@ -25,43 +39,18 @@ export default async function handler(req: any, res: any) {
       transaction = data;
     }
 
+    // Ensure we have normalized fields for purchaseData function
+    transaction.recipient_phone = transaction.recipient_phone || finalRecipient;
+    transaction.capacity = transaction.capacity || finalCapacity;
+    transaction.transaction_id = transaction.id || finalTransactionId;
+
     if (!transaction.recipient_phone) {
       return res.status(400).json({ success: false, error: 'Target phone missing' });
     }
 
     // 2. Perform Data Purchase
+    console.log("🚀 [DataHub] SENDING DATAHUB REQUEST");
     const result = await purchaseData(transaction);
-
-    // 3. If successful, trigger SMS
-    const isActuallyDelivered = result.success && (result.status === 'SUCCESSFUL' || result.vtu_status === 'success' || result.status === 'delivered');
-
-    if (isActuallyDelivered) {
-      try {
-        // Fetch settings for SMS template
-        const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'general').maybeSingle();
-        const settings = settingsData?.value || {};
-        
-        if (settings.sms_enabled !== false) {
-          const message = buildSuccessSMS({
-            volume: transaction.capacity,
-            network: transaction.network,
-            phone: transaction.recipient_phone,
-            transactionId: transaction.id,
-            template: settings.sms_template_success
-          });
-
-          await sendSMS(transaction.recipient_phone, message);
-          
-          // Notify Admin
-          await sendSMS(
-            process.env.ADMIN_PHONE || "233244014207",
-            `Datapapa ✅: ${transaction.capacity} ${transaction.network} to ${transaction.recipient_phone}. Ref: ${transaction.id}`
-          );
-        }
-      } catch (smsErr) {
-        console.error("[API] Post-purchase SMS failure:", smsErr);
-      }
-    }
 
     return res.status(result.success ? 200 : 400).json(result);
   } catch (err: any) {

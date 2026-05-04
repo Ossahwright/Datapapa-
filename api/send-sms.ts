@@ -5,8 +5,8 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const { phone, recipients, message, sender } = req.body;
-  const target = phone || (Array.isArray(recipients) ? recipients[0] : recipients);
+  const { phone, recipients, message, sender, to } = req.body;
+  const target = to || phone || (Array.isArray(recipients) ? recipients[0] : recipients);
 
   if (!target || !message) {
     return res.status(400).json({ success: false, error: 'Target phone and message are required' });

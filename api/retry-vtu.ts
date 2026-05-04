@@ -19,8 +19,14 @@ export default async function handler(req: any, res: any) {
 
     const vtuResult = await purchaseData(transaction);
     
-    // Delivery check
-    const isActuallyDelivered = vtuResult.success && (vtuResult.status === 'SUCCESSFUL' || vtuResult.vtu_status === 'success');
+    // Delivery check - improved to handle various success strings
+    const isActuallyDelivered = vtuResult.success === true || (
+      vtuResult.status?.toUpperCase() === 'SUCCESSFUL' || 
+      vtuResult.status?.toUpperCase() === 'SUCCESS' ||
+      vtuResult.status?.toUpperCase() === 'DELIVERED' ||
+      vtuResult.status?.toUpperCase() === 'COMPLETED' ||
+      vtuResult.vtu_status === 'success'
+    );
 
     if (isActuallyDelivered && transaction.recipient_phone) {
       try {
@@ -48,7 +54,10 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    return res.json(vtuResult);
+    return res.json({
+      ...vtuResult,
+      message: vtuResult.success ? "VTU Delivery Triggered Successfully" : `VTU Failed: ${vtuResult.error || "Unknown Error"}`
+    });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }

@@ -1,10 +1,14 @@
 import axios from 'axios';
+import { getDataHubConfig } from '../../src/lib/server-utils';
 
 export default async function handler(req: any, res: any) {
   const start = Date.now();
+  const { baseUrl, apiKey } = await getDataHubConfig();
+  
   try {
-    const resp = await axios.get("https://app.datahubgh.com/api/external/status", {
-      timeout: 5000,
+    const statusUrl = `${baseUrl}/status`;
+    const resp = await axios.get(statusUrl, {
+      timeout: 10000,
       validateStatus: () => true
     });
     
@@ -12,17 +16,22 @@ export default async function handler(req: any, res: any) {
     const isOnline = resp.status === 200;
     
     return res.json({ 
-      status: isOnline ? (duration < 2000 ? 'online' : 'degraded') : 'offline', 
-      responseTime: duration,
+      status: isOnline ? (duration < 2500 ? 'online' : 'degraded') : 'offline', 
+      responseTimeMs: duration,
       online: isOnline,
+      httpStatus: resp.status,
+      baseUrl: baseUrl,
+      hasApiKey: !!apiKey,
       data: resp.data
     });
   } catch (err: any) {
     return res.json({ 
       status: 'offline', 
-      responseTime: Date.now() - start,
+      responseTimeMs: Date.now() - start,
       online: false,
-      error: err.message
+      baseUrl: baseUrl,
+      error: err.message,
+      stack: err.stack?.split('\n').slice(0, 2).join('\n')
     });
   }
 }

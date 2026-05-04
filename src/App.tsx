@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './lib/supabase';
 import Navbar from './components/Navbar';
 import Home from './pages/Home';
@@ -56,9 +56,19 @@ export default function App() {
     }
   }, []);
 
-  const fetchUserRole = useCallback(async () => {
+  const isFetchingRole = useRef(false);
+
+  const fetchUserRole = useCallback(async (existingUser?: any) => {
+    if (isFetchingRole.current) return;
+    isFetchingRole.current = true;
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      let user = existingUser;
+      
+      if (!user) {
+        const { data } = await supabase.auth.getUser();
+        user = data?.user;
+      }
       
       if (user) {
         const { data, error } = await supabase
@@ -72,9 +82,16 @@ export default function App() {
       } else {
         setUserRole(null);
       }
-    } catch (err) {
-      console.error('Error fetching user role:', err);
-      setUserRole(null);
+    } catch (err: any) {
+      if (err.message?.includes('Lock') || err.message?.includes('stole')) {
+        // Silently fail for lock errors as they usually mean another request succeeded
+        console.warn('User role fetch lock conflict, skipping...');
+      } else {
+        console.error('Error fetching user role:', err);
+        setUserRole(null);
+      }
+    } finally {
+      isFetchingRole.current = false;
     }
   }, []);
 
@@ -102,8 +119,8 @@ export default function App() {
       .subscribe();
 
     // Listen for auth state changes
-    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(() => {
-      fetchUserRole();
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange((_event, session) => {
+      fetchUserRole(session?.user);
     });
 
     return () => {

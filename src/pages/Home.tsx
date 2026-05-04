@@ -5,19 +5,10 @@ import {
   Globe, 
   CreditCard, 
   ChevronRight, 
-  Smartphone, 
-  MessageCircle,
-  MessageSquare,
-  RefreshCw,
-  History,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  ExternalLink
+  Smartphone
 } from "lucide-react";
 import { motion } from "framer-motion";
 import React, { useEffect, useState } from "react";
-import axios from "axios";
 import BuyDataForm from "../components/BuyDataForm";
 import { supabase } from "../lib/supabase";
 
@@ -33,103 +24,16 @@ interface HomeProps {
   } | null;
 }
 
-const statusMap: Record<string, string> = {
-  success: "✅ Delivered",
-  failed: "❌ Failed",
-  processing: "⏳ Processing",
-};
-
 export default function Home({ settings }: HomeProps) {
   const [user, setUser] = useState<any>(null);
-  const [userTransactions, setUserTransactions] = useState<any[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   useEffect(() => {
-    const checkUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      if (data?.user) {
-        setUser(data.user);
-        fetchUserTransactions(data.user.id);
-      }
-    };
-    checkUser();
-    
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUser(session.user);
-        fetchUserTransactions(session.user.id);
-      } else {
-        setUser(null);
-        setUserTransactions([]);
-      }
+      setUser(session?.user || null);
     });
 
     return () => subscription.unsubscribe();
   }, []);
-
-  const fetchUserTransactions = async (userId: string) => {
-    setIsLoadingHistory(true);
-    try {
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(10);
-
-      if (error) throw error;
-      setUserTransactions(data || []);
-    } catch (err) {
-      console.error("Failed to fetch user transactions:", err);
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("user-transactions")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "transactions",
-        },
-        (payload) => {
-          setUserTransactions(prev =>
-            prev.map(t =>
-              t.id === payload.new.id ? { ...t, ...payload.new } : t
-            )
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const retryVTU = async (transactionId: string) => {
-    try {
-      const res = await axios.post("/api/retry-vtu", { transactionId });
-      alert(res.data.message || "Retry executed");
-    } catch (err: any) {
-      console.error("Retry failed:", err);
-      alert("Retry failed: " + (err.response?.data?.message || err.message));
-    }
-  };
-
-  const resendSMS = async (tx: any) => {
-    try {
-      const res = await axios.post("/api/resend-sms", { transactionId: tx.id });
-      alert(res.data.message || "SMS resent");
-    } catch (err: any) {
-      console.error("SMS resend failed:", err);
-      alert("SMS resend failed: " + (err.response?.data?.message || err.message));
-    }
-  };
 
   const appName = settings?.app_name || "Datapapa";
 
@@ -192,110 +96,6 @@ export default function Home({ settings }: HomeProps) {
           <BuyDataForm settings={settings} />
         </div>
       </section>
-
-      {/* Order History Section (for logged in users) */}
-      {user && (
-        <section className="py-16 bg-white border-t border-slate-100">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-600 text-white rounded-lg">
-                  <History size={20} />
-                </div>
-                <h2 className="text-2xl font-bold text-slate-900">Your Recent Orders</h2>
-              </div>
-              <button 
-                onClick={() => fetchUserTransactions(user.id)}
-                className="text-indigo-600 hover:text-indigo-700 font-semibold text-sm flex items-center gap-2"
-              >
-                {isLoadingHistory ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                Refresh
-              </button>
-            </div>
-
-            {userTransactions.length === 0 ? (
-              <div className="bg-slate-50 rounded-3xl p-12 text-center border-2 border-dashed border-slate-200">
-                <div className="mx-auto w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4 text-slate-400">
-                  <Clock size={32} />
-                </div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1">No orders yet</h3>
-                <p className="text-slate-500">Your recent data purchases will appear here.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {userTransactions.map((tx) => (
-                  <motion.div
-                    key={tx.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm shadow-slate-100 hover:shadow-md transition-all group"
-                  >
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white uppercase ${
-                          tx.network?.toLowerCase() === 'mtn' ? 'bg-yellow-500' :
-                          tx.network?.toLowerCase() === 'telecel' ? 'bg-red-600' :
-                          tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at' ? 'bg-red-500' :
-                          'bg-slate-400'
-                        }`}>
-                          {tx.network?.[0] || '?'}
-                        </div>
-                        <div>
-                          <div className={`text-xs font-bold uppercase tracking-wider ${
-                            tx.vtu_status === 'success' ? 'text-green-600' :
-                            tx.vtu_status === 'failed' ? 'text-red-500' :
-                            'text-amber-600'
-                          }`}>
-                            {statusMap[tx.vtu_status as string] || "⏳ Processing"}
-                          </div>
-                          <div className="font-bold text-slate-900">{tx.capacity} {tx.network}</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-slate-400 font-mono mb-1">Ref: {tx.id.slice(0, 8)}</div>
-                        <div className="text-sm font-bold text-indigo-600">₵{Number(tx.amount).toFixed(2)}</div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 mb-6">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-500">Recipient</span>
-                        <span className="font-semibold text-slate-900">{tx.recipient_phone}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-500">Date</span>
-                        <span className="text-slate-700">{new Date(tx.created_at).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2 pt-4 border-t border-slate-50">
-                      {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending') && (
-                        <button 
-                          onClick={() => retryVTU(tx.id)}
-                          className="flex-1 inline-flex items-center justify-center gap-2 py-2 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg hover:bg-amber-100 transition-colors"
-                        >
-                          <RefreshCw size={12} />
-                          Retry
-                        </button>
-                      )}
-                      {tx.vtu_status === 'success' && (
-                        <button 
-                          onClick={() => resendSMS(tx)}
-                          className="flex-1 inline-flex items-center justify-center gap-2 py-2 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-lg hover:bg-indigo-100 transition-colors"
-                        >
-                          <MessageSquare size={12} />
-                          Resend SMS
-                        </button>
-                      )}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Networks Supported */}
       <section className="py-10 bg-slate-50 border-y border-slate-100">

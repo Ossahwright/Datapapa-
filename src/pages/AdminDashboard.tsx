@@ -54,6 +54,8 @@ export default function AdminDashboard() {
   const [form, setForm] = useState({
     network: '',
     network_key: '',
+    datahub_network_key: '',
+    datahub_capacity: '',
     capacity: '',
     volume: '',
     description: '',
@@ -66,6 +68,8 @@ export default function AdminDashboard() {
   const [newBundle, setNewBundle] = useState({
     network: 'MTN',
     network_key: 'YELLO',
+    datahub_network_key: '',
+    datahub_capacity: '',
     capacity: '',
     volume: '',
     description: '',
@@ -117,13 +121,19 @@ export default function AdminDashboard() {
 
   const loadHealth = async () => {
     try {
-      const [dhRes, smsRes] = await Promise.allSettled([
+      const [dhRes, smsRes, balRes] = await Promise.allSettled([
         axios.get("/api/check-datahub"),
-        axios.get("/api/check-sms-balance")
+        axios.get("/api/check-sms-balance"),
+        axios.get("/api/datahubgh/balance")
       ]);
       
       const dh = dhRes.status === 'fulfilled' ? dhRes.value.data : { online: false };
       const sms = smsRes.status === 'fulfilled' ? smsRes.value.data : { balance: 0 };
+      const bal = balRes.status === 'fulfilled' ? balRes.value.data : { balance: 0 };
+
+      if (balRes.status === 'fulfilled') {
+        setDataHubBalance(bal.balance);
+      }
 
       setHealth({ 
         datahub: dh.online, 
@@ -213,9 +223,13 @@ export default function AdminDashboard() {
   }, []);
 
   const successRate = kpi.total ? ((kpi.success / kpi.total) * 100).toFixed(1) : 0;
-  const isStuck = (t: any) =>
-    t.vtu_status === "processing" &&
-    Date.now() - new Date(t.created_at).getTime() > 5 * 60 * 1000;
+  const isStuck = (t: any) => {
+    if (!t?.created_at) return false;
+    const diff = Date.now() - new Date(t.created_at).getTime();
+    const isProcessingTooLong = t.vtu_status === "processing" && diff > 5 * 60 * 1000;
+    const isPendingTooLong = t.vtu_status === "pending" && t.status === "paid" && diff > 10 * 60 * 1000;
+    return isProcessingTooLong || isPendingTooLong;
+  };
 
   const ITEMS_PER_PAGE = 10;
   const navigate = useNavigate();
@@ -447,8 +461,8 @@ export default function AdminDashboard() {
     setIsSendingTestSMS(true);
     setTestSMSResult(null);
     try {
-      console.log("Sending test SMS via /api/arkesel/send-sms to:", formattedPhone);
-      const response = await axios.post('/api/arkesel/send-sms', {
+      console.log("Sending test SMS via /api/send-sms to:", formattedPhone);
+      const response = await axios.post('/api/send-sms', {
         to: formattedPhone,
         message: `Test SMS from ${appSettings.app_name}. If you see this, your Arkesel integration is working!`,
         sender: appSettings.sms_sender_id
@@ -563,6 +577,8 @@ export default function AdminDashboard() {
     setForm({
       network: bundle.network || "",
       network_key: bundle.network_key || "",
+      datahub_network_key: bundle.datahub_network_key || "",
+      datahub_capacity: bundle.datahub_capacity || "",
       capacity: bundle.capacity || "",
       volume: bundle.volume || "",
       description: bundle.description || "",
@@ -579,6 +595,8 @@ export default function AdminDashboard() {
     const updates = updatesParam || {
       network: form.network,
       network_key: form.network_key,
+      datahub_network_key: form.datahub_network_key,
+      datahub_capacity: form.datahub_capacity,
       capacity: form.capacity,
       volume: form.volume,
       cost_price: form.cost_price === '' ? 0 : Number(form.cost_price),
@@ -738,6 +756,8 @@ export default function AdminDashboard() {
       const { error } = await supabase.from("bundles").insert({
         network: newBundle.network,
         network_key: newBundle.network_key,
+        datahub_network_key: newBundle.datahub_network_key,
+        datahub_capacity: newBundle.datahub_capacity,
         capacity: newBundle.capacity,
         volume: newBundle.volume,
         cost_price: costPriceVal,
@@ -765,6 +785,8 @@ export default function AdminDashboard() {
       setNewBundle({
         network: 'MTN',
         network_key: 'YELLO',
+        datahub_network_key: '',
+        datahub_capacity: '',
         capacity: '',
         volume: '',
         description: '',
@@ -927,9 +949,13 @@ export default function AdminDashboard() {
   const handleTestDataHub = async () => {
     setIsTestingDataHub(true);
     try {
-      const resp = await axios.post('/api/datahubgh/test');
+      const resp = await axios.post('/api/datahubgh/ping');
       const result = resp.data;
-      alert(result.message || (result.success ? "Test success" : "Test failed"));
+      if (result.online) {
+        alert(`✅ DataHub Connection Success!\n\nStatus: ${result.status}\nHTTP: ${result.httpStatus}\nLatency: ${result.responseTimeMs}ms\nBase: ${result.baseUrl}\nKey: ${result.hasApiKey ? 'PRESENT' : 'MISSING'}`);
+      } else {
+        alert(`❌ DataHub Connection Failed\n\nError: ${result.error || 'Unknown error'}\nBase: ${result.baseUrl}`);
+      }
     } catch (err: any) {
       let errMsg = err.message || String(err);
       if (err.code === 'ERR_NETWORK') {
@@ -1171,6 +1197,18 @@ export default function AdminDashboard() {
                 />
               )}
             </button>
+
+            {/* Back to Homepage */}
+            <div className="pt-4 mt-4 border-t border-slate-800">
+              <button 
+                onClick={() => navigate('/')}
+                className="w-full flex items-center px-3 py-2.5 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-all group"
+                title={!isSidebarOpen ? 'Back to Homepage' : ''}
+              >
+                <RefreshCw className={`h-5 w-5 shrink-0 ${isSidebarOpen ? 'mr-3' : 'mx-auto'} text-slate-500 group-hover:text-white`} />
+                {isSidebarOpen && <span>Back to Homepage</span>}
+              </button>
+            </div>
           </nav>
         </div>
 
@@ -1215,33 +1253,42 @@ export default function AdminDashboard() {
             </header>
 
             {/* Health Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
-                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">Service Health</div>
-                 <div className="flex items-center gap-2 text-xl font-bold">
-                    <Database size={20} className={health.datahub ? "text-emerald-500" : "text-rose-500"} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-2">Service Health</div>
+                 <div className="flex items-center gap-2 text-lg font-bold">
+                    <Database size={18} className={health.datahub ? "text-emerald-500" : "text-rose-500"} />
                     <span>DataHub Channel</span>
-                    <span className={`ml-2 px-2 py-0.5 rounded-full text-[10px] ${health.datahub ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                      {health.datahub ? "🟢 ONLINE" : "🔴 OFFLINE"}
+                    <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[9px] ${health.datahub ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                      {health.datahub ? "ONLINE" : "OFFLINE"}
                     </span>
                  </div>
                </div>
 
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
-                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">SMS Wallet</div>
-                 <div className="flex items-center gap-2 text-xl font-bold">
-                    <MessageSquare size={20} className="text-indigo-500" />
-                    <span>Arkesel Balance:</span>
+               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-2">DataHub Wallet</div>
+                 <div className="flex items-center gap-2 text-lg font-bold">
+                    <Wallet size={18} className="text-emerald-500" />
+                    <span>Balance:</span>
+                    <span className="text-emerald-700 ml-1">₵{dataHubBalance !== null ? Number(dataHubBalance).toFixed(2) : '---'}</span>
+                 </div>
+               </div>
+
+               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-2">SMS Wallet</div>
+                 <div className="flex items-center gap-2 text-lg font-bold">
+                    <MessageSquare size={18} className="text-indigo-500" />
+                    <span>Arkesel:</span>
                     <span className="text-indigo-700 ml-1">₵{Number(health.smsBalance).toFixed(2)}</span>
                  </div>
                </div>
 
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
-                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-3">Last Heartbeat</div>
-                 <div className="flex items-center gap-2 text-xl font-bold">
-                    <RefreshCw size={20} className="text-slate-400 animate-pulse" />
-                    <span>Sync Status:</span>
-                    <span className="text-slate-600 ml-1">{new Date().toLocaleTimeString()}</span>
+               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center">
+                 <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-2">Last Heartbeat</div>
+                 <div className="flex items-center gap-2 text-lg font-bold">
+                    <RefreshCw size={18} className="text-slate-400 animate-pulse" />
+                    <span>Sync:</span>
+                    <span className="text-slate-600 ml-1 font-mono text-sm">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                  </div>
                </div>
             </div>
@@ -1705,7 +1752,12 @@ export default function AdminDashboard() {
                                   <option value="AT_BIGTIME">AT_BIGTIME</option>
                                 </select>
                               ) : (
-                                <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{bundle.network_key}</span>
+                                <div className="flex flex-col">
+                                  <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{bundle.network_key}</span>
+                                  {bundle.datahub_network_key && (
+                                    <span className="text-[10px] text-slate-400 font-mono mt-1">DH: {bundle.datahub_network_key}</span>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="px-6 py-4 text-slate-600">
@@ -1729,19 +1781,12 @@ export default function AdminDashboard() {
                                   className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
                                 />
                               ) : (
-                                <span className="text-slate-900 font-medium">{bundle.capacity}</span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              {isEditing ? (
-                                <input 
-                                  type="text" 
-                                  value={editingBundle.volume || ''}
-                                  onChange={(e) => setEditingBundle({ ...editingBundle, volume: e.target.value })}
-                                  className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
-                                />
-                              ) : (
-                                <span className="text-slate-600 italic text-xs">{bundle.volume || '-'}</span>
+                                <div className="flex flex-col">
+                                  <span className="text-slate-900 font-medium">{bundle.capacity}</span>
+                                  {bundle.datahub_capacity && (
+                                    <span className="text-[10px] text-slate-400 font-mono">DH: {bundle.datahub_capacity}</span>
+                                  )}
+                                </div>
                               )}
                             </td>
                             <td className="px-6 py-4">
@@ -1797,8 +1842,9 @@ export default function AdminDashboard() {
                                       onClick={() => handleUpdateBundle(bundle.id, { 
                                         description: editingBundle.description, 
                                         capacity: editingBundle.capacity,
-                                        volume: editingBundle.volume,
                                         network_key: editingBundle.network_key,
+                                        datahub_network_key: editingBundle.network_key,
+                                        datahub_capacity: editingBundle.capacity ? editingBundle.capacity.toUpperCase().replace("GB", "").trim() : '',
                                         selling_price: parseFloat(editingBundle.selling_price) || 0,
                                         cost_price: parseFloat(editingBundle.cost_price || '0') || 0
                                       })}
@@ -1966,28 +2012,70 @@ export default function AdminDashboard() {
                      </div>
                   ) : (
                     <div className="space-y-4">
-                      {customerTransactions.map(tx => (
-                        <div key={tx.id} className="border border-slate-100 rounded-xl p-4 hover:shadow-md transition-shadow">
-                          <div className="flex justify-between items-start mb-2">
-                            <div>
-                               <div className="font-semibold text-slate-900">{tx.network} - {tx.capacity}</div>
-                               <div className="text-xs text-slate-500">{new Date(tx.created_at).toLocaleString()}</div>
+                      {customerTransactions.map(tx => {
+                        const stuck = isStuck(tx);
+                        return (
+                          <div key={tx.id} className="border border-slate-100 rounded-xl p-4 hover:shadow-md transition-shadow relative group">
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white uppercase text-[10px] ${
+                                  tx.network?.toLowerCase() === 'mtn' ? 'bg-yellow-500' :
+                                  tx.network?.toLowerCase() === 'telecel' ? 'bg-red-600' :
+                                  tx.network?.toLowerCase() === 'airteltigo' || tx.network?.toLowerCase() === 'at' ? 'bg-red-500' :
+                                  'bg-slate-400'
+                                }`}>
+                                  {tx.network?.[0] || '?'}
+                                </div>
+                                <div>
+                                  <div className="font-semibold text-slate-900">{tx.network} - {tx.capacity}</div>
+                                  <div className="text-xs text-slate-500">{new Date(tx.created_at).toLocaleString()}</div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-bold text-slate-900">₵{Number(tx.amount).toFixed(2)}</div>
+                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">Ref: {tx.id.substring(0, 8)}</div>
+                              </div>
                             </div>
-                            <div className="font-bold text-slate-900">₵{Number(tx.amount).toFixed(2)}</div>
+                            
+                            <div className="flex justify-between items-center pt-3 mt-3 border-t border-slate-50">
+                              <div className="flex gap-2 items-center">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                  tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
+                                  tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                                  'bg-slate-100 text-slate-700'
+                                }`}>
+                                  {tx.vtu_status || 'PENDING'}
+                                </span>
+                                {stuck && (
+                                  <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold">STUCK</span>
+                                )}
+                              </div>
+
+                              <div className="flex gap-1.5 opacity-100 transition-opacity">
+                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || stuck) && (
+                                  <button 
+                                    onClick={() => retryVTU(tx.id)}
+                                    className="p-1.5 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors"
+                                    title="Retry Delivery"
+                                  >
+                                    <RefreshCw size={14} className={isRetryingVTU === tx.id ? 'animate-spin' : ''} />
+                                  </button>
+                                )}
+                                {tx.vtu_status === 'success' && (
+                                  <button 
+                                    onClick={() => resendSMS(tx)}
+                                    className="p-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
+                                    title="Resend SMS"
+                                  >
+                                    <MessageSquare size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-50">
-                            <div className="text-xs font-mono text-slate-400">Ref: {tx.paystack_receipt || tx.id.substring(0, 8)}</div>
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                                tx.status === 'success' || tx.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                tx.status === 'failed' ? 'bg-red-100 text-red-700' :
-                                tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                                'bg-slate-100 text-slate-700'
-                              }`}>
-                                {tx.status || 'N/A'}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2588,10 +2676,16 @@ export default function AdminDashboard() {
                         value={newBundle.network || 'MTN'}
                         onChange={(e) => {
                           const net = e.target.value;
-                          let key = 'YELLO' as 'YELLO' | 'TELECEL' | 'AT_PREMIUM' | 'AT_BIGTIME';
+                          let key = 'YELLO';
                           if (net === 'Telecel') key = 'TELECEL';
                           if (net === 'AirtelTigo') key = 'AT_BIGTIME';
-                          setNewBundle({...newBundle, network: net, network_key: key});
+                          setNewBundle({
+                            ...newBundle, 
+                            network: net, 
+                            network_key: key, 
+                            datahub_network_key: key,
+                            datahub_capacity: newBundle.capacity ? newBundle.capacity.toUpperCase().replace("GB", "").trim() : ''
+                          });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
@@ -2602,43 +2696,42 @@ export default function AdminDashboard() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">DataHub Key</label>
-                      <select 
-                        value={newBundle.network_key || 'YELLO'}
-                        onChange={(e) => setNewBundle({...newBundle, network_key: e.target.value})}
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Network Key</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. YELLO, 1, 2"
+                        value={newBundle.network_key || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewBundle({
+                            ...newBundle, 
+                            network_key: val,
+                            datahub_network_key: val
+                          });
+                        }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
-                      >
-                        <option value="YELLO">YELLO (MTN)</option>
-                        <option value="TELECEL">TELECEL (Telecel)</option>
-                        <option value="AT_PREMIUM">AT_PREMIUM (iShare)</option>
-                        <option value="AT_BIGTIME">AT_BIGTIME (Bigtime)</option>
-                      </select>
+                      />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Capacity</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 1GB, 500MB"
-                        value={newBundle.capacity || ''}
-                        onChange={(e) => setNewBundle({...newBundle, capacity: e.target.value})}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Volume (API Data)</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 1000, 2000"
-                        value={newBundle.volume || ''}
-                        onChange={(e) => setNewBundle({...newBundle, volume: e.target.value})}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Display Capacity</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. 1GB, 500MB"
+                      value={newBundle.capacity || ''}
+                      onChange={(e) => {
+                        const cap = e.target.value;
+                        setNewBundle({
+                          ...newBundle, 
+                          capacity: cap,
+                          datahub_capacity: cap.toUpperCase().replace("GB", "").trim()
+                        });
+                      }}
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      required
+                    />
                   </div>
 
                   <div>
@@ -2760,43 +2853,28 @@ export default function AdminDashboard() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">DataHub Key</label>
-                      <select 
-                        value={form.network_key || 'YELLO'}
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Network Key</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. YELLO, 1, 2"
+                        value={form.network_key || ''}
                         onChange={(e) => setForm({...form, network_key: e.target.value})}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
-                      >
-                        <option value="YELLO">YELLO (MTN)</option>
-                        <option value="TELECEL">TELECEL (Telecel)</option>
-                        <option value="AT_PREMIUM">AT_PREMIUM (iShare)</option>
-                        <option value="AT_BIGTIME">AT_BIGTIME (Bigtime)</option>
-                      </select>
+                      />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Capacity</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 1GB, 500MB"
-                        value={form.capacity || ''}
-                        onChange={(e) => setForm({...form, capacity: e.target.value})}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Volume (API Data)</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. 1000, 2000"
-                        value={form.volume || ''}
-                        onChange={(e) => setForm({...form, volume: e.target.value})}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Display Capacity</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. 1GB, 500MB"
+                      value={form.capacity || ''}
+                      onChange={(e) => setForm({...form, capacity: e.target.value})}
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      required
+                    />
                   </div>
 
                   <div>

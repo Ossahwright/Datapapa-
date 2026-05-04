@@ -5,6 +5,7 @@ export default async function handler(req: any, res: any) {
 
   try {
     const payload = req.body;
+    console.log("🔔 [DataHub] WEBHOOK RECEIVED", JSON.stringify(payload));
     const { event, data } = payload;
     
     console.log("[DataHub Webhook] Event:", event);
@@ -12,6 +13,10 @@ export default async function handler(req: any, res: any) {
     if (event === 'order.status_updated') {
       const status = data.status; // PROCESSING, SUCCESSFUL, FAILED
       let vtuStatus = status === 'SUCCESSFUL' ? 'delivered' : (status === 'FAILED' ? 'failed' : 'processing');
+
+      if (status === "SUCCESSFUL") {
+        console.log("✅ [DataHub Webhook] Delivery successful");
+      }
 
       const txRef = data.reference || data.orderNumber;
       
@@ -43,10 +48,12 @@ export default async function handler(req: any, res: any) {
               template: settings.sms_template_success
             });
 
-            await sendSMS(trans.recipient_phone, message);
+            console.log("🚀 [DataHub Webhook] Sending SMS");
+            await sendSMS(trans.recipient_phone, message, "Datapapa");
             await sendSMS(
               process.env.ADMIN_PHONE || "233244014207",
-              `DELIVERED: ${trans.capacity} ${trans.network} to ${trans.recipient_phone}. Ref: ${txRef || trans.id}`
+              `DELIVERED: ${trans.capacity} ${trans.network} to ${trans.recipient_phone}. Ref: ${txRef || trans.id}`,
+              "Datapapa"
             );
           }
         }

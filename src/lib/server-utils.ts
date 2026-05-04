@@ -68,11 +68,12 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
 
     const formatted = formatPhone(to);
     const payload = {
-      sender: (senderId || process.env.ARKESEL_SENDER_ID || "DataHubGH").slice(0, 11),
+      sender: (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11),
       message,
       recipients: [formatted],
     };
 
+    console.log("🚀 [SMS] Sending SMS to:", formatted);
     const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
       headers: {
         "Content-Type": "application/json",
@@ -81,9 +82,11 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
       timeout: 20000
     });
 
+    const data = response.data;
+    console.log("📡 [SMS] SMS API response:", JSON.stringify(data));
+
     // Log to database
     try {
-      const data = response.data;
       await supabase.from("sms_logs").insert({
         phone: formatted,
         message: message,
@@ -118,12 +121,26 @@ export function buildSuccessSMS({
   transactionId: string;
   template?: string;
 }) {
-  const defaultTemplate = `Datapapa ✅\n\nYour {volume} {network} data has been delivered to {phone}.\n\nRef: {transaction_id}\n\nNeed help? 0244014207`;
+  const defaultTemplate = `Datapapa\n\nYour purchase of {capacity} {network} data for {phone} was successful.\n\nKindly contact or WhatsApp us on 0244014207\nThank you for your trust.`;
   let msg = template || defaultTemplate;
+  
+  // Normalized variables
+  const capacityStr = volume || '';
+  const networkStr = (network || '').toUpperCase();
+  
+  let phoneStr = phone || '';
+  if (phoneStr.startsWith('233') && phoneStr.length > 10) {
+    phoneStr = '0' + phoneStr.slice(3);
+  } else if (phoneStr.length === 9 && !phoneStr.startsWith('0')) {
+    phoneStr = '0' + phoneStr;
+  }
+
   return msg
-    .replace("{volume}", volume)
-    .replace("{network}", network)
-    .replace("{phone}", phone)
+    .replace("{capacity}", capacityStr)
+    .replace("{volume}", capacityStr) // Fallback for old templates
+    .replace("{network}", networkStr)
+    .replace("{phone}", phoneStr)
+    .replace("{app_name}", "Datapapa")
     .replace("{transaction_id}", transactionId || 'N/A');
 }
 
@@ -131,6 +148,18 @@ export function buildSuccessSMS({
  * Core Data Purchase Logic
  */
 export async function purchaseData(transaction: any) {
+  // 🛡️ Idempotency: Don't process if already successful
+  if (transaction.vtu_status === 'success' || transaction.vtu_status === 'completed' || transaction.status === 'completed') {
+    console.log("♻️ [DataHub] Transaction already processed successfully:", transaction.id);
+    return { success: true, message: "Already processed", vtu_status: 'success' };
+  }
+
+  // 🛡️ Prevent concurrent processing if called within seconds
+  if (transaction.vtu_status === 'processing' && (Date.now() - new Date(transaction.updated_at).getTime() < 60000)) {
+     console.log("⏳ [DataHub] Transaction already being processed:", transaction.id);
+     return { success: true, message: "Processing in progress", vtu_status: 'processing' };
+  }
+
   console.log("🚀 [DataHub] Purchasing for:", transaction.id);
 
   let recipient = transaction.recipient_phone;
@@ -144,30 +173,80 @@ export async function purchaseData(transaction: any) {
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
   const finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
 
+  // Harmonized payload for various DataHubGH API versions
   const payload = {
     networkKey,
+    network: networkKey, // Alias found in some docs
+    network_id: networkKey, // Numeric alias
     recipient,
+    phone: recipient, // Common alias
+    msisdn: recipient, // Telecom alias
     capacity: finalCapacity,
+    bundle: finalCapacity, // Common alias
+    plan: finalCapacity, // Common alias
+    plan_id: finalCapacity, // Numeric alias
   };
 
+  console.log("📝 [DataHub] Payload Prepared:", JSON.stringify(payload));
+
   try {
+    // 🟠 Set status to processing early so UI shows movement
+    await supabase
+      .from("transactions")
+      .update({ 
+        vtu_status: 'processing',
+        updated_at: new Date().toISOString() 
+      })
+      .eq("id", transaction.id);
+
     const { apiKey, baseUrl } = await getDataHubConfig();
     if (!apiKey) throw new Error("API key missing");
 
+    const startTime = Date.now();
     const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": apiKey,
+        "Accept": "application/json",
         "User-Agent": "Datapapa-VTU-Serverless/1.0"
       },
       timeout: 35000,
       validateStatus: () => true
     });
 
+    const duration = Date.now() - startTime;
     const result = response.data;
-    const isActuallySuccess = response.status === 200 && (result.success === true || result.status === 'SUCCESSFUL' || result.status === 'PROCESSING');
     
-    const vtuStatus = isActuallySuccess ? 'success' : 'failed';
+    console.log("📡 [DataHub] DATAHUB RESPONSE:", JSON.stringify(result));
+    
+    // Log to datahubgh_logs
+    try {
+      await supabase.from("datahubgh_logs").insert({
+        endpoint: `${baseUrl}/data-purchase`,
+        status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
+        http_status: response.status,
+        response_time: duration,
+        request_payload: payload,
+        response_data: result,
+        created_at: new Date().toISOString()
+      });
+    } catch (logErr) {
+      console.error("[DataHub Logging Error]:", logErr);
+    }
+
+    // Improved success check based on typical DataHubGH/similar API responses
+    const isActuallySuccess = (response.status >= 200 && response.status < 300) && (
+      result.success === true || 
+      result.status?.toUpperCase() === 'SUCCESSFUL' || 
+      result.status?.toUpperCase() === 'PROCESSING' ||
+      result.status?.toUpperCase() === 'SUCCESS' ||
+      result.status?.toUpperCase() === 'DELIVERED' ||
+      result.status?.toUpperCase() === 'COMPLETED' ||
+      result.code === 200 ||
+      result.code === '200'
+    );
+    
+    const vtuStatus = isActuallySuccess ? 'delivered' : 'failed';
 
     await supabase
       .from("transactions")
