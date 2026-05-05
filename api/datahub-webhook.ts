@@ -1,92 +1,131 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabase } from '../lib/supabase';
-import { sendSMS, buildSmsMessage } from '../lib/sms';
+import { sendSMS, buildSuccessSMS } from '../src/lib/server-utils';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+  console.log("🔔 [WEBHOOK RECEIVED] ATTEMPTING TO PROCESS");
+  
+  // Return early for non-POST
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const payload = req.body;
-    console.log("🔔 [WEBHOOK RECEIVED]", JSON.stringify(payload));
-    const { event, data } = payload;
+    console.log("📦 [WEBHOOK PAYLOAD]", JSON.stringify(payload));
     
-    if (event === 'order.status_updated') {
-      const status = String(data.status).toUpperCase(); // PROCESSING, SUCCESSFUL, FAILED
-      const txRef = data.reference || data.orderNumber;
+    // Extract event and data per requirement
+    const { event, data } = payload;
+
+    if (!payload || !event) {
+      console.warn("⚠️ [Webhook] Received empty or invalid payload");
+      return res.status(200).json({ success: false, message: "Invalid payload" });
+    }
+
+    // Validate event type
+    if (event === "order.status_updated") {
+      const status = String(data?.status || "").toUpperCase(); // SUCCESSFUL, FAILED, PROCESSING, etc.
+      const reference = data?.reference || data?.orderNumber;
+      const phoneNumber = data?.phoneNumber || data?.recipient; // Use phoneNumber as primary as per spec
       
-      console.log(`📡 [Webhook] Processing Ref: ${txRef}, Status: ${status}`);
+      console.log(`📡 [Webhook] Processing event: ${event} | Status: ${status} | Ref: ${reference}`);
 
-      let vtuStatus = 'processing';
-      if (status === 'SUCCESSFUL' || status === 'COMPLETED' || status === 'DELIVERED') vtuStatus = 'delivered';
-      if (status === 'FAILED' || status === 'REJECTED') vtuStatus = 'failed';
-
-      // 1. Update Transaction Status
-      let updateQuery = supabase.from('transactions').update({ 
-        vtu_status: vtuStatus,
-        updated_at: new Date().toISOString(),
-        api_response: payload // Store last webhook payload
-      });
-
-      if (txRef) {
-        updateQuery = updateQuery.or(`api_response->>reference.eq.${txRef},api_response->>orderNumber.eq.${txRef},id.eq.${txRef}`);
-      } else if (data.recipient) {
-        updateQuery = updateQuery.eq('recipient_phone', data.recipient).eq('vtu_status', 'processing');
+      if (!reference) {
+        console.error("❌ [Webhook] Missing reference in payload");
+        return res.status(200).json({ success: false, message: "Missing reference" });
       }
 
-      const { data: updated, error: updateErr } = await updateQuery.select();
-      
-      if (updateErr) {
-        console.error("❌ [Webhook] Supabase Update Error:", updateErr.message);
+      // Map to internal vtu_status
+      let vtu_status = 'processing';
+      if (status === 'SUCCESSFUL') vtu_status = 'delivered';
+      if (status === 'FAILED' || status === 'REJECTED') vtu_status = 'failed';
+
+      // 1. Update Transaction in DB
+      // We try both ID (UUID) and a possible reference_id column if it exists
+      const { data: txUpdate, error: txError } = await supabase
+        .from('transactions')
+        .update({
+          vtu_status,
+          api_response: payload,
+          updated_at: new Date().toISOString()
+        })
+        .or(`id.eq."${reference}",reference_id.eq."${reference}"`)
+        .select()
+        .single();
+
+      if (txError) {
+        console.error("❌ [Webhook] Database update failed:", txError.message);
       }
 
-      if (!updateErr && updated && updated.length > 0) {
-        const trans = updated[0];
-        console.log(`✅ [Webhook] Transaction ${trans.id} updated to ${vtuStatus}`);
+      const transaction = txUpdate;
 
-        // 2. Trigger SMS ONLY on SUCCESSFUL delivery
-        if (vtuStatus === 'delivered' && trans.recipient_phone) {
-          const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'general').maybeSingle();
-          const settings = settingsData?.value || {};
-          
-          if (settings.sms_enabled !== false) {
-            const message = buildSmsMessage({
-              capacity: trans.capacity,
-              network: trans.network,
-              phone: trans.recipient_phone
-            });
+      if (!transaction) {
+        console.warn(`⚠️ [Webhook] No matching transaction found in database for ref: ${reference}`);
+      }
 
-            console.log(`🚀 [Webhook] SENDING SMS TO ${trans.recipient_phone}`);
-            const smsRes = await sendSMS(trans.recipient_phone, message, "Datapapa");
-            
-            // Log SMS status
-            await supabase.from('transactions').update({
-                sms_status: smsRes.success ? 'sent' : 'failed',
-                sms_response: smsRes
-            }).eq('id', trans.id);
-            
-            console.log("📡 [SMS Response]:", JSON.stringify(smsRes));
+      // 2. Trigger SMS ONLY on SUCCESSFUL delivery and ONLY if not already sent
+      if (status === "SUCCESSFUL" && transaction?.sms_status !== 'sent') {
+        console.log(`✅ [Webhook] DELIVERY SUCCESS! Preparing SMS for ${reference}...`);
+        
+        // Gather variables for SMS
+        const capacity = transaction?.capacity || data?.capacity || data?.plan || "data";
+        const network = transaction?.network || data?.network || "provider";
+        const recipient = phoneNumber || transaction?.recipient_phone;
 
-            // Optional Admin Alert
-            if (process.env.ADMIN_PHONE) {
-               await sendSMS(process.env.ADMIN_PHONE, `SUCCESS: ${trans.capacity} ${trans.network} to ${trans.recipient_phone}`, "Datapapa");
+        if (recipient) {
+          const message = buildSuccessSMS({
+            volume: String(capacity),
+            network: String(network),
+            phone: String(recipient),
+            transactionId: String(reference)
+          });
+
+          console.log("🚀 [Webhook] SENDING SMS to", recipient);
+          console.log("💬 [Webhook] Message Content:", message);
+
+          try {
+            const smsResult = await sendSMS(recipient, message, "Datapapa");
+            console.log("📡 [Webhook] SMS Response:", JSON.stringify(smsResult));
+
+            // 3. Log SMS status to database
+            if (transaction) {
+              const isSmsSuccess = smsResult && (
+                smsResult.status === 'success' || 
+                String(smsResult).includes('1000') ||
+                smsResult.code === 1000 ||
+                smsResult.code === '1000'
+              );
+              
+              await supabase.from('transactions').update({
+                sms_status: isSmsSuccess ? 'sent' : 'failed',
+                sms_response: smsResult
+              }).eq('id', transaction.id);
             }
+          } catch (smsErr) {
+            console.error("❌ [Webhook] SMS sending failed:", smsErr);
           }
-        } else if (vtuStatus === 'failed') {
-          console.warn(`⚠️ [Webhook] Delivery FAILED for ${trans.id}`);
-          // Update status if needed
-          await supabase.from('transactions').update({
-             status: 'failed',
-             error_message: data.status_message || "Delivery failed via webhook"
-          }).eq('id', trans.id);
+        } else {
+          console.error("❌ [Webhook] Missing phone number for SMS notification");
         }
       } else {
-        console.warn(`⚠️ [Webhook] No matching transaction found for ref: ${txRef}`);
+         console.log(`ℹ️ [Webhook] Skipping SMS. Status: ${status} | SMS Status: ${transaction?.sms_status}`);
+         
+         // If failed, ensure error message is updated
+         if (vtu_status === 'failed' && transaction) {
+            await supabase.from('transactions').update({
+              error_message: data?.status_message || data?.error || "Delivery failed via webhook"
+            }).eq('id', transaction.id);
+         }
       }
+    } else {
+      console.log(`ℹ️ [Webhook] Ignoring unhandled event: ${event}`);
     }
-    
-    return res.status(200).json({ success: true });
+
+    // Always return 200 within 10 seconds as required
+    return res.status(200).json({ success: true, message: "Webhook processed" });
   } catch (err: any) {
     console.error("❌ [Webhook] Fatal Error:", err.message);
-    return res.status(500).json({ error: err.message });
+    // Still return 200 to acknowledge receipt and prevent DataHub retry loops if desired
+    return res.status(200).json({ success: false, error: err.message });
   }
 }

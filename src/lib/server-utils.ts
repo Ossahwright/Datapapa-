@@ -242,13 +242,14 @@ export async function purchaseData(transaction: any) {
       const result = response.data;
       console.log(`📡 [DataHub] DATAHUB RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
       
+      // Log to database
       try {
-        await supabase.from("datahubgh_logs").insert({
+        await supabase.from("datahub_logs").insert({
           endpoint: `${baseUrl}/data-purchase`,
           status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
           http_status: response.status,
-          request_payload: payload,
-          response_data: result,
+          payload: payload, // Renamed from request_payload to payload for consistency
+          response: result, // Renamed from response_data to response for consistency
           created_at: new Date().toISOString()
         });
       } catch (logErr) {

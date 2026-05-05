@@ -923,10 +923,10 @@ export default function AdminDashboard() {
     setIsFetchingLogs(true);
     try {
       const { data, error } = await supabase
-        .from('datahubgh_logs')
+        .from('datahub_logs')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(50);
       
       if (!error && data) {
         setDataHubLogs(data);

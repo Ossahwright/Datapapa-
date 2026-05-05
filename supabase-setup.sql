@@ -32,9 +32,16 @@ CREATE TABLE public.transactions (
     network_key TEXT,
     capacity TEXT,
     payee_phone TEXT,
+    payer_phone_number TEXT,
     recipient_phone TEXT NOT NULL,
     status TEXT NOT NULL,
     vtu_status TEXT,
+    datahub_network_key TEXT,
+    datahub_capacity TEXT,
+    retry_count INTEGER DEFAULT 0,
+    sms_status TEXT,
+    sms_response JSONB,
+    error_message TEXT,
     api_response JSONB,
     profit NUMERIC,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
@@ -195,24 +202,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 11. Create datahubgh_logs table
-CREATE TABLE IF NOT EXISTS public.datahubgh_logs (
+-- 11. Create datahub_logs table
+CREATE TABLE IF NOT EXISTS public.datahub_logs (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     endpoint TEXT NOT NULL,
     status TEXT NOT NULL,           -- success, failed
     http_status INTEGER,
     response_time INTEGER,          -- in ms
-    request_payload JSONB,
-    response_data JSONB,
+    payload JSONB,
+    response JSONB,
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE public.datahubgh_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.datahub_logs ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Admins can manage datahubgh_logs" ON public.datahubgh_logs;
-CREATE POLICY "Admins can manage datahubgh_logs"
-ON public.datahubgh_logs
+DROP POLICY IF EXISTS "Admins can manage datahub_logs" ON public.datahub_logs;
+CREATE POLICY "Admins can manage datahub_logs"
+ON public.datahub_logs
 FOR ALL
 USING (public.is_admin())
 WITH CHECK (public.is_admin());

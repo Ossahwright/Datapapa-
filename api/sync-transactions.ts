@@ -47,23 +47,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             updated_at: new Date().toISOString()
           }).eq('id', tx.id);
 
-          // SEND SMS IF NOT ALREADY SENT
-          if (tx.sms_status !== 'sent') {
-            const message = buildSuccessSMS({
-              volume: tx.capacity,
-              network: tx.network,
-              phone: tx.recipient_phone,
-              transactionId: tx.id
-            });
-
-            const smsRes = await sendSMS(tx.recipient_phone, message);
-            const smsSuccess = smsRes && (smsRes.status === 'success' || String(smsRes).includes('1000'));
-            
-            await supabase.from('transactions').update({
-              sms_status: smsSuccess ? 'sent' : 'failed'
-            }).eq('id', tx.id);
-          }
-
           results.push({ id: tx.id, status: 'delivered' });
         } else if (isFailed) {
           await supabase.from('transactions').update({
