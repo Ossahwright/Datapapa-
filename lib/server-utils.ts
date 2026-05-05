@@ -1,77 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
+import { callDataHubAPI } from './datahub-client.js';
 
 // Initialize Supabase admin client
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFzeHphcmh4Z2Z3bm9ndnVxb21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMjAyOTcsImV4cCI6MjA5MjU5NjI5N30.ZQZFhxQgzy9JBGUBW9wRfRDs44wcFkmDFu78PUJIags';
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
-
-export async function syncWalletSilently() {
-  try {
-    // 🔍 Check last sync time
-    const { data } = await supabase
-      .from("provider_settings")
-      .select("last_synced_at")
-      .eq("provider_name", "datahubgh")
-      .single();
-
-    const lastSync = data?.last_synced_at
-      ? new Date(data.last_synced_at)
-      : null;
-
-    const now = new Date();
-
-    // ⛔ Rate limit: only sync if > 30 seconds ago
-    if (lastSync && now.getTime() - lastSync.getTime() < 30000) {
-      return; // skip silently
-    }
-
-    const { apiKey } = await getDataHubConfig();
-
-    // 🌐 Call DataHubGH API
-    const response = await fetch("https://datahubgh.com/api/balance", {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-
-    const result = await response.json();
-    console.log("DATAHUB RESPONSE:", result);
-
-    const balance =
-      result?.balance ??
-      result?.data?.balance ??
-      result?.wallet ??
-      0;
-
-    if (!response.ok) throw new Error("Balance fetch failed");
-
-    // 💾 Update DB
-    await supabase
-      .from("provider_settings")
-      .update({
-        wallet_balance: balance,
-        last_synced_at: now.toISOString(),
-        status: "online",
-      })
-      .eq("provider_name", "datahubgh");
-
-  } catch (err) {
-    console.error("Silent wallet sync failed:", err);
-
-    await supabase
-      .from("provider_settings")
-      .update({ status: "offline" })
-      .eq("provider_name", "datahubgh");
-  }
-}
 
 /**
  * Standardizes phone numbers to 233 format
  */
 export function formatPhone(phone: string): string {
-  const cleaned = phone.trim().replace(/\D/g, '');
+  const cleaned = String(phone).trim().replace(/\D/g, '');
   if (cleaned.startsWith("0")) {
     return "233" + cleaned.slice(1);
   }
@@ -129,7 +70,7 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
     const formatted = formatPhone(to);
     const finalSender = (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11);
 
-    console.log("🚀 [SMS] Sending SMS to:", formatted, "| Msg:", message.substring(0, 50) + (message.length > 50 ? "..." : ""));
+    console.log("🚀 [SMS] Sending SMS to:", formatted);
     
     const payload = {
       sender: finalSender,
@@ -170,22 +111,20 @@ export async function sendSMS(to: string, message: string, senderId?: string) {
 
     return data;
   } catch (err: any) {
-    if (err.response) {
-      console.error("❌ [SMS] Error Response:", JSON.stringify(err.response.data));
-    }
     console.error("❌ [SMS] Error:", err.message);
     return { success: false, error: err.message };
   }
 }
 
 /**
- * Builds the success message using a template from settings
+ * Builds the success message
  */
 export function buildSuccessSMS({
   volume,
   network,
   phone,
   transactionId,
+  template,
 }: {
   volume: string;
   network: string;
@@ -203,20 +142,95 @@ export function buildSuccessSMS({
     phoneStr = '0' + phoneStr;
   }
 
-  return `Datapapa\n\nYour transaction of ${capacityStr} ${networkStr} data for ${phoneStr} was successful.\n\nKindly contact us on 0244014207\nThank you for your trust.`;
+  if (template) {
+    return template
+      .replace('{capacity}', capacityStr)
+      .replace('{network}', networkStr)
+      .replace('{phone}', phoneStr)
+      .replace('{id}', transactionId);
+  }
+
+  return `Datapapa\n\nYour transaction of ${capacityStr} ${networkStr} data for ${phoneStr} was successful.\n\nRef: ${transactionId}\n\nKindly contact us on 0244014207\nThank you for choosing us.`;
+}
+
+/**
+ * Silent Wallet Sync Logic
+ */
+export async function syncWalletSilently() {
+  try {
+    const { data: psData } = await supabase
+      .from("provider_settings")
+      .select("last_synced_at")
+      .eq("provider_name", "datahubgh")
+      .single();
+
+    const lastSync = psData?.last_synced_at ? new Date(psData.last_synced_at) : null;
+    const now = new Date();
+
+    if (lastSync && now.getTime() - lastSync.getTime() < 30000) return;
+
+    const { apiKey } = await getDataHubConfig();
+    if (!apiKey) return;
+
+    const response = await fetch("https://datahubgh.com/api/balance", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    const result = await response.json();
+    const balance = result?.balance ?? result?.data?.balance ?? result?.wallet ?? 0;
+
+    if (response.ok) {
+      await supabase
+        .from("provider_settings")
+        .update({
+          wallet_balance: balance,
+          last_synced_at: now.toISOString(),
+          status: "online",
+        })
+        .eq("provider_name", "datahubgh");
+    }
+  } catch (err) {
+    console.error("Silent wallet sync failed:", err);
+    await supabase.from("provider_settings").update({ status: "offline" }).eq("provider_name", "datahubgh");
+  }
+}
+
+/**
+ * Logs a webhook event for auditing
+ */
+export async function logWebhook({
+  reference,
+  payload,
+  status
+}: {
+  reference: string;
+  payload: any;
+  status: 'processed' | 'ignored' | 'error';
+}) {
+  try {
+    await supabase.from("webhook_logs").insert({
+      reference,
+      payload,
+      status,
+      created_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("[Webhook Log] Failed to log:", err);
+  }
 }
 
 /**
  * Core Data Purchase Logic
  */
 export async function purchaseData(transaction: any) {
-  // 🛡️ Idempotency: Don't process if already successful
-  if (transaction.vtu_status === 'success' || transaction.vtu_status === 'completed' || transaction.status === 'completed' || transaction.vtu_status === 'delivered') {
+  // 🛡️ Idempotency: Don't process if already successful or pending delivering
+  const terminalStatuses = ['success', 'completed', 'delivered'];
+  if (terminalStatuses.includes(transaction.vtu_status) || transaction.status === 'completed' || transaction.delivery_status === 'delivered') {
     console.log("♻️ [DataHub] Transaction already processed successfully:", transaction.id);
     return { success: true, message: "Already processed", vtu_status: 'success' };
   }
 
-  // 🛡️ Prevent concurrent processing if called within seconds
+  // 🛡️ Prevent concurrent processing if called within seconds or if already in 'processing' state
   if (transaction.vtu_status === 'processing' && (Date.now() - new Date(transaction.updated_at).getTime() < 30000)) {
      console.log("⏳ [DataHub] Transaction already being processed:", transaction.id);
      return { success: true, message: "Processing in progress", vtu_status: 'processing' };
@@ -261,20 +275,16 @@ export async function purchaseData(transaction: any) {
     reference: transaction.id
   };
 
-  console.log("📝 [DataHub] SENDING DATAHUB REQUEST:", JSON.stringify(payload));
+  console.log("📝 [DataHub] PURCHASING VIA CLIENT:", JSON.stringify(payload));
 
-  const maxRetries = 3;
+  const maxRetries = 2;
   let attempts = 0;
   let lastError = null;
 
   while (attempts < maxRetries) {
     try {
       attempts++;
-      if (attempts > 1) {
-        console.log(`🔄 [DataHub] RETRY ATTEMPT ${attempts - 1} for ${transaction.id}`);
-        await new Promise(r => setTimeout(r, 1500));
-      }
-
+      
       await supabase
         .from("transactions")
         .update({ 
@@ -283,52 +293,18 @@ export async function purchaseData(transaction: any) {
         })
         .eq("id", transaction.id);
 
-      const { apiKey, baseUrl } = await getDataHubConfig();
-      
-      if (!apiKey) {
-        throw new Error("DataHub API key missing");
-      }
-
-      const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "Accept": "application/json"
-        },
-        timeout: 10000, 
-        validateStatus: () => true
+      const apiResponse = await callDataHubAPI("data-purchase", {
+        body: payload
       });
 
-      const result = response.data;
-      console.log(`📡 [DataHub] DATAHUB RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
-      
-      // Log to database
-      try {
-        await supabase.from("datahub_logs").insert({
-          endpoint: `${baseUrl}/data-purchase`,
-          status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
-          http_status: response.status,
-          payload: payload, // Renamed from request_payload to payload for consistency
-          response: result, // Renamed from response_data to response for consistency
-          created_at: new Date().toISOString()
-        });
-      } catch (logErr) {
-        console.error("[DataHub Logging Error]:", logErr);
-      }
-
-      const isActuallySuccess = (response.status >= 200 && response.status < 300) && (
-        result.success === true || 
-        result.status === true ||
-        result.status?.toUpperCase() === 'SUCCESSFUL' || 
-        result.status?.toUpperCase() === 'PROCESSING' ||
-        result.status?.toUpperCase() === 'SUCCESS'
-      );
-
-      if (isActuallySuccess) {
+      if (apiResponse.success) {
+        const result = apiResponse.data;
+        
         await supabase
           .from("transactions")
           .update({
             vtu_status: 'processing',
+            delivery_status: 'delivering',
             api_response: result,
             updated_at: new Date().toISOString()
           })
@@ -336,20 +312,22 @@ export async function purchaseData(transaction: any) {
 
         return { 
           success: true, 
-          status: response.status,
+          status: apiResponse.status,
           vtu_status: 'processing',
           ...result 
         };
       }
 
-      // If not successful and we have retries left, continue
-      lastError = result.message || result.error || "Unknown API Error";
+      lastError = apiResponse.error || "Unknown API Error";
       console.warn(`⚠️ [DataHub] Attempt ${attempts} failed: ${lastError}`);
       
     } catch (err: any) {
       lastError = err.message;
       console.error(`❌ [DataHub] Attempt ${attempts} Exception:`, err.message);
-      if (attempts >= maxRetries) break;
+    }
+
+    if (attempts < maxRetries) {
+      await new Promise(r => setTimeout(r, 2000));
     }
   }
 
@@ -357,6 +335,7 @@ export async function purchaseData(transaction: any) {
   console.error(`❌ [DataHub] ALL RETRIES EXHAUSTED for ${transaction.id}: ${lastError}`);
   await supabase.from("transactions").update({ 
     vtu_status: 'failed', 
+    delivery_status: 'failed',
     status: 'failed', 
     error_message: lastError,
     api_response: { error: lastError, attempts } 

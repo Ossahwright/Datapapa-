@@ -73,14 +73,22 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       try {
         const { data, error } = await supabase.from('bundles').select('*').order('capacity', { ascending: true });
         if (error) {
+          if (error.message?.includes('Lock broken') || error.message?.includes('steal')) {
+            console.warn("Harmless Supabase lock error ignored.");
+            return;
+          }
           console.error("Supabase error fetching bundles:", error.message);
           setLoadError(error.message);
         } else if (data) {
           setDbBundles(data);
         }
       } catch (err: any) {
-        console.error("Failed to fetch bundles:", err);
         let msg = err.message || 'Unknown error occurred';
+        if (msg.includes('Lock broken') || msg.includes('steal')) {
+          console.warn("Harmless Supabase lock abort error ignored.");
+          return;
+        }
+        console.error("Failed to fetch bundles:", err);
         if (msg.includes('Failed to fetch')) {
           msg = "Connectivity issue: Could not reach the data server. Please check your internet or try again later.";
         }
@@ -165,11 +173,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           const updated = payload.new;
 
           if (updated.id === currentTxId) {
-            if (updated.vtu_status === "delivered" || updated.vtu_status === "success") {
+            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
               alert("✅ Data delivered successfully");
             }
 
-            if (updated.vtu_status === "failed") {
+            if (updated.delivery_status === "failed" || updated.vtu_status === "failed") {
               alert("❌ Delivery failed");
             }
           }

@@ -1,4 +1,4 @@
-import { sendSMS } from '../src/lib/server-utils';
+import { sendSMS } from '../lib/server-utils.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {

@@ -1,21 +1,17 @@
-import axios from 'axios';
+import { callDataHubAPI } from '../lib/datahub-client.js';
 
 export default async function handler(req: any, res: any) {
   try {
-    const response = await axios.get("https://app.datahubgh.com/api/external/status", {
-      timeout: 10000,
-      validateStatus: () => true
+    const result = await callDataHubAPI("balance", { method: 'GET' });
+
+    return res.json({
+      status: result.success ? "healthy" : "down",
+      online: result.success,
+      duration: result.duration,
+      timestamp: new Date().toISOString(),
+      data: result.data || {}
     });
-
-    const data = response.data;
-    const isOnline = response.status === 200 && (
-      data?.status === "operational" || 
-      data?.status === "ok" || 
-      data?.services?.api === "healthy"
-    );
-
-    return res.status(200).json({ online: isOnline, data });
   } catch (err: any) {
-    return res.status(200).json({ online: false, error: err.message });
+     return res.status(200).json({ status: "down", online: false, error: err.message });
   }
 }

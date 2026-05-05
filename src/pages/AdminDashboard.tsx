@@ -144,21 +144,90 @@ export default function AdminDashboard() {
   const [kpi, setKpi] = useState({ total: 0, revenue: 0, success: 0, failed: 0 });
   const [rows, setRows] = useState<any[]>([]);
 
+  const [providerSettings, setProviderSettings] = useState<any>(null);
+
+  const fetchProviderSettings = async () => {
+    try {
+      const { data } = await supabase.from('provider_settings').select('*').eq('provider_name', 'datahubgh').maybeSingle();
+      if (data) {
+        setProviderSettings(data);
+        if (data.wallet_balance !== null) {
+          setDataHubBalance(data.wallet_balance);
+        }
+      }
+    } catch(err) {
+      console.error(err);
+    }
+  };
+
+  const syncWallet = async () => {
+    if (providerSettings && providerSettings.last_synced_at) {
+      const lastSynced = new Date(providerSettings.last_synced_at).getTime();
+      const now = Date.now();
+      if (now - lastSynced < 10000) {
+        alert("Please wait before syncing again");
+        return;
+      }
+    }
+
+    setIsRefreshingDataHub(true);
+    try {
+      const res = await fetch("/api/sync-datahub-wallet", {
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        await fetchProviderSettings(); // refresh UI
+      } else {
+        alert(data.error || "Failed to sync");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Error syncing wallet");
+    } finally {
+      setIsRefreshingDataHub(false);
+    }
+  };
+
+  const syncWalletSilently = async () => {
+    try {
+      if (providerSettings && providerSettings.last_synced_at) {
+         const lastSynced = new Date(providerSettings.last_synced_at).getTime();
+         const now = Date.now();
+         if (now - lastSynced < 10000) {
+           return;
+         }
+      }
+      const res = await fetch("/api/sync-datahub-wallet", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchProviderSettings();
+      }
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    fetchProviderSettings();
+    const interval = setInterval(() => {
+      fetchProviderSettings();
+    }, 30000); // every 30s
+
+    return () => clearInterval(interval);
+  }, []);
+
   const loadHealth = async () => {
     try {
-      const [dhRes, smsRes, balRes] = await Promise.allSettled([
+      const [dhRes, smsRes] = await Promise.allSettled([
         axios.get("/api/check-datahub"),
-        axios.get("/api/check-sms-balance"),
-        axios.get("/api/datahubgh/balance")
+        axios.get("/api/check-sms-balance")
       ]);
       
       const dh = dhRes.status === 'fulfilled' ? dhRes.value.data : { online: false };
       const sms = smsRes.status === 'fulfilled' ? smsRes.value.data : { balance: 0 };
-      const bal = balRes.status === 'fulfilled' ? balRes.value.data : { balance: 0 };
-
-      if (balRes.status === 'fulfilled') {
-        setDataHubBalance(bal.balance);
-      }
 
       setHealth({ 
         datahub: dh.online, 
@@ -198,14 +267,14 @@ export default function AdminDashboard() {
         
         const { data: txs } = await supabase
           .from("transactions")
-          .select("amount, vtu_status")
+          .select("amount, vtu_status, delivery_status")
           .gte("created_at", today.toISOString());
           
         if (txs) {
           const total = txs.length;
           const revenue = txs.reduce((sum, tx) => sum + Number(tx.amount), 0);
-          const success = txs.filter(tx => tx.vtu_status === 'success' || tx.vtu_status === 'delivered').length;
-          const failed = txs.filter(tx => tx.vtu_status === 'failed').length;
+          const success = txs.filter(tx => tx.delivery_status === 'delivered' || tx.vtu_status === 'success' || tx.vtu_status === 'delivered').length;
+          const failed = txs.filter(tx => tx.delivery_status === 'failed' || tx.vtu_status === 'failed').length;
           setKpi({ total, revenue, success, failed });
         }
       }
@@ -871,6 +940,8 @@ export default function AdminDashboard() {
   const [txToDelete, setTxToDelete] = useState<any>(null);
   const [isDeletingTx, setIsDeletingTx] = useState(false);
   const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
+  const [isRetryingSMS, setIsRetryingSMS] = useState<string | null>(null);
+  const [isRecoveringStuck, setIsRecoveringStuck] = useState(false);
 
   const resendSMS = async (tx: any) => {
     try {
@@ -879,6 +950,38 @@ export default function AdminDashboard() {
     } catch (err: any) {
       console.error("Resend SMS failed:", err);
       alert("Failed to resend SMS: " + (err.response?.data?.error || err.message || String(err)));
+    }
+  };
+
+  const retrySMSAction = async (transactionId: string) => {
+    if (isRetryingSMS) return;
+    setIsRetryingSMS(transactionId);
+    try {
+      const response = await axios.post('/api/retry-sms', { transactionId });
+      if (response.data.success) {
+        alert("SMS Sent Successfully!");
+      } else {
+        alert(`SMS failed: ${response.data.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsRetryingSMS(null);
+    }
+  };
+
+  const triggerStuckRecovery = async () => {
+    if (isRecoveringStuck) return;
+    setIsRecoveringStuck(true);
+    try {
+      const response = await axios.post('/api/stuck-recovery');
+      const { summary } = response.data;
+      alert(`Recovery complete!\nDetected: ${summary.detected}\nFixed (Marked failed for retry): ${summary.fixed}\nErrors: ${summary.errors}`);
+      fetchTransactions();
+    } catch (err: any) {
+      alert(`Recovery failed: ${err.message}`);
+    } finally {
+      setIsRecoveringStuck(false);
     }
   };
 
@@ -895,6 +998,25 @@ export default function AdminDashboard() {
       alert("Failed to execute retry: " + (err.response?.data?.error || err.message || String(err)));
     } finally {
       setIsRetryingVTU(null);
+    }
+  };
+
+  const markDelivered = async (txId: string) => {
+    try {
+      const { error } = await supabase
+        .from("transactions")
+        .update({
+          delivery_status: "delivered",
+          delivery_updated_at: new Date().toISOString()
+        })
+        .eq("id", txId);
+
+      if (error) throw error;
+      alert("Marked as delivered");
+      fetchTransactions();
+    } catch (err: any) {
+      console.error("Mark as delivered error:", err);
+      alert("Failed to mark as delivered: " + (err.message || String(err)));
     }
   };
 
@@ -948,10 +1070,7 @@ export default function AdminDashboard() {
     setIsRefreshingDataHub(true);
     try {
       // 1. Get Balance
-      const balanceResp = await axios.get('/api/datahubgh/balance');
-      if (balanceResp.status === 200) {
-        setDataHubBalance(balanceResp.data.balance);
-      }
+      await syncWalletSilently();
 
       // 2. Get Ping/Status
       const pingResp = await axios.get('/api/check-datahub');
@@ -1335,47 +1454,68 @@ export default function AdminDashboard() {
                   <AlertCircle className="text-rose-600" />
                   <span className="font-bold uppercase tracking-tight">🚨 CRITICAL: {rows.filter(isStuck).length} transactions appear stuck !</span>
                 </div>
-                <button 
-                  onClick={() => setCurrentView('transactions')}
-                  className="bg-rose-600 text-white px-4 py-1.5 rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors uppercase tracking-widest shadow-lg shadow-rose-200"
-                >
-                  Review Stalled Orders
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={triggerStuckRecovery}
+                    disabled={isRecoveringStuck}
+                    className="bg-white text-rose-600 px-4 py-1.5 border border-rose-200 rounded-xl font-bold text-xs hover:bg-rose-50 transition-colors uppercase tracking-widest"
+                  >
+                    {isRecoveringStuck ? 'Recovering...' : 'Auto-Fix Stuck'}
+                  </button>
+                  <button 
+                    onClick={() => setCurrentView('transactions')}
+                    className="bg-rose-600 text-white px-4 py-1.5 rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors uppercase tracking-widest shadow-lg shadow-rose-200"
+                  >
+                    Review Stalled Orders
+                  </button>
+                </div>
               </div>
             )}
 
             {/* KPI Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
                  <div className="relative z-10">
                    <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Revenue (Today)</div>
                    <div className="text-3xl font-black text-slate-900 group-hover:scale-105 transition-transform origin-left">₵{Number(kpi.revenue).toFixed(2)}</div>
-                   <p className="text-[10px] text-slate-400 mt-2">Gross income for current date</p>
-                 </div>
-                 <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                    <CreditCard size={100} strokeWidth={1} />
+                   <p className="text-[10px] text-slate-400 mt-2">Gross income for today</p>
                  </div>
                </div>
 
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                  <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Transactions</div>
                  <div className="text-3xl font-black text-slate-900">{kpi.total}</div>
-                 <p className="text-[10px] text-slate-400 mt-2">Volume of orders processed</p>
+                 <p className="text-[10px] text-slate-400 mt-2">Total orders today</p>
                </div>
 
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                  <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Success Rate</div>
                  <div className="flex items-baseline gap-2">
                     <div className="text-3xl font-black text-emerald-600">{successRate}%</div>
-                    <div className="text-xs font-bold text-emerald-400 uppercase tracking-tighter">Healthy</div>
                  </div>
-                 <p className="text-[10px] text-slate-400 mt-2">Percentage of successful deliveries</p>
+                 <p className="text-[10px] text-slate-400 mt-2">Delivery health</p>
                </div>
 
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">System Failures</div>
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Failures</div>
                  <div className="text-3xl font-black text-rose-600">{kpi.failed}</div>
-                 <p className="text-[10px] text-slate-400 mt-2">Orders requiring manual intervention</p>
+                 <p className="text-[10px] text-slate-400 mt-2">Failed VTU orders</p>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">SMS Failed</div>
+                 <div className="text-3xl font-black text-rose-600">
+                   {rows.filter(r => r.sms_status === 'failed').length}
+                 </div>
+                 <p className="text-[10px] text-slate-400 mt-2">Failed notifications</p>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">Stuck Orders</div>
+                 <div className="text-3xl font-black text-amber-600">
+                   {rows.filter(isStuck).length}
+                 </div>
+                 <p className="text-[10px] text-slate-400 mt-2">Locked over 5 mins</p>
                </div>
             </div>
 
@@ -1419,12 +1559,15 @@ export default function AdminDashboard() {
                           <td className="px-6 py-4 font-bold text-slate-900">₵{tx.amount}</td>
                           <td className="px-6 py-4 text-center">
                             <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                              tx.vtu_status === 'success' || tx.vtu_status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
-                              tx.vtu_status === 'failed' ? 'bg-rose-100 text-rose-700' :
-                              tx.vtu_status === 'processing' ? 'bg-amber-100 text-amber-700 animate-pulse' :
+                              tx.delivery_status === 'delivered' || tx.vtu_status === 'success' || tx.vtu_status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
+                              tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                              tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'bg-amber-100 text-amber-700 animate-pulse' :
                               'bg-slate-100 text-slate-500'
                             }`}>
-                              {tx.vtu_status || 'PENDING'}
+                              {tx.delivery_status === 'delivered' || tx.vtu_status === 'delivered' || tx.vtu_status === 'success' ? 'DELIVERED' : 
+                               tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'FAILED' : 
+                               tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'PROCESSING' : 
+                               tx.vtu_status || 'PENDING'}
                             </span>
                           </td>
                           <td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">
@@ -1439,13 +1582,23 @@ export default function AdminDashboard() {
                               >
                                 <RefreshCw size={14} className={isRetryingVTU === tx.id ? 'animate-spin' : ''} />
                               </button>
-                              <button 
-                                onClick={() => resendSMS(tx)}
-                                className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                                title="Resend SMS"
-                              >
-                                <MessageSquare size={14} />
-                              </button>
+                              {tx.sms_status === 'failed' ? (
+                                <button 
+                                  onClick={() => retrySMSAction(tx.id)}
+                                  className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                                  title="Retry Failed SMS"
+                                >
+                                  <AlertCircle size={14} className={isRetryingSMS === tx.id ? 'animate-pulse' : ''} />
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={() => resendSMS(tx)}
+                                  className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                                  title="Resend SMS"
+                                >
+                                  <MessageSquare size={14} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1625,16 +1778,16 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                tx.vtu_status === 'success' || tx.vtu_status === 'delivered' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
-                                tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
-                                tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700' :
+                                tx.delivery_status === 'delivered' || tx.vtu_status === 'success' || tx.vtu_status === 'delivered' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
+                                tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700' :
                                 tx.vtu_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
                                 'bg-slate-100 text-slate-700'
                               }`}>
-                                {tx.vtu_status === 'processing' && <RefreshCw size={10} className="animate-spin mr-1" />}
-                                {tx.vtu_status === 'delivered' || tx.vtu_status === 'success' ? 'Delivered' : 
-                                 tx.vtu_status === 'failed' ? 'Failed' : 
-                                 tx.vtu_status === 'processing' ? 'Processing' : 
+                                {(tx.delivery_status === 'delivering' || tx.vtu_status === 'processing') && <RefreshCw size={10} className="animate-spin mr-1" />}
+                                {tx.delivery_status === 'delivered' || tx.vtu_status === 'delivered' || tx.vtu_status === 'success' ? 'Delivered' : 
+                                 tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'Failed' : 
+                                 tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'Processing' : 
                                  tx.vtu_status || 'N/A'}
                               </span>
                             </td>
@@ -1648,7 +1801,7 @@ export default function AdminDashboard() {
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center text-slate-600 font-medium font-mono text-xs">
-                              {tx.retry_count || 0}
+                              {tx.delivery_attempts || 0}
                             </td>
                             <td className="px-6 py-4 text-center">
                               <div className="flex items-center justify-center gap-2">
@@ -1659,7 +1812,7 @@ export default function AdminDashboard() {
                                 >
                                   <Search size={16} />
                                 </button>
-                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || stuck) && (
+                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || tx.delivery_status === 'failed' || stuck) && (
                                   <button 
                                     onClick={() => retryVTU(tx.id)}
                                     disabled={isRetryingVTU === tx.id}
@@ -1669,14 +1822,34 @@ export default function AdminDashboard() {
                                     <RefreshCw size={16} />
                                   </button>
                                 )}
-                                {tx.vtu_status === 'success' && (
-                                  <button 
-                                    onClick={() => resendSMS(tx)}
-                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                    title="Resend Delivery SMS"
+                                {(tx.delivery_status !== 'delivered' && tx.vtu_status !== 'success' && tx.vtu_status !== 'delivered') && (
+                                  <button
+                                    onClick={() => markDelivered(tx.id)}
+                                    className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                    title="Mark as Delivered"
                                   >
-                                    <MessageSquare size={16} />
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                                   </button>
+                                )}
+                                {(tx.vtu_status === 'success' || tx.delivery_status === 'delivered') && (
+                                  <div className="flex gap-1">
+                                    <button 
+                                      onClick={() => resendSMS(tx)}
+                                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                      title="Resend Delivery SMS"
+                                    >
+                                      <MessageSquare size={16} />
+                                    </button>
+                                    {tx.sms_status === 'failed' && (
+                                      <button 
+                                        onClick={() => retrySMSAction(tx.id)}
+                                        className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-rose-100"
+                                        title="Retry Failed SMS"
+                                      >
+                                        <AlertCircle size={16} />
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
                                 <button 
                                   onClick={() => setTxToDelete(tx)}
@@ -2134,20 +2307,23 @@ export default function AdminDashboard() {
                             <div className="flex justify-between items-center pt-3 mt-3 border-t border-slate-50">
                               <div className="flex gap-2 items-center">
                                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
-                                  tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
-                                  tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                                  tx.delivery_status === 'delivered' || tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                  tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
+                                  tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' :
                                   'bg-slate-100 text-slate-700'
                                 }`}>
-                                  {tx.vtu_status || 'PENDING'}
+                                  {tx.delivery_status === 'delivered' || tx.vtu_status === 'delivered' || tx.vtu_status === 'success' ? 'DELIVERED' : 
+                                   tx.delivery_status === 'failed' || tx.vtu_status === 'failed' ? 'FAILED' : 
+                                   tx.delivery_status === 'delivering' || tx.vtu_status === 'processing' ? 'PROCESSING' : 
+                                   tx.vtu_status || 'PENDING'}
                                 </span>
                                 {stuck && (
-                                  <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold">STUCK</span>
+                                  <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2">STUCK</span>
                                 )}
                               </div>
 
                               <div className="flex gap-1.5 opacity-100 transition-opacity">
-                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || stuck) && (
+                                {(tx.vtu_status === 'failed' || tx.vtu_status === 'pending' || tx.delivery_status === 'failed' || stuck) && (
                                   <button 
                                     onClick={() => retryVTU(tx.id)}
                                     className="p-1.5 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors"
@@ -2156,14 +2332,34 @@ export default function AdminDashboard() {
                                     <RefreshCw size={14} className={isRetryingVTU === tx.id ? 'animate-spin' : ''} />
                                   </button>
                                 )}
-                                {tx.vtu_status === 'success' && (
-                                  <button 
-                                    onClick={() => resendSMS(tx)}
-                                    className="p-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
-                                    title="Resend SMS"
+                                {(tx.delivery_status !== 'delivered' && tx.vtu_status !== 'success' && tx.vtu_status !== 'delivered') && (
+                                  <button
+                                    onClick={() => markDelivered(tx.id)}
+                                    className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors"
+                                    title="Mark as Delivered"
                                   >
-                                    <MessageSquare size={14} />
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                                   </button>
+                                )}
+                                {(tx.vtu_status === 'success' || tx.delivery_status === 'delivered') && (
+                                  <div className="flex gap-1">
+                                    <button 
+                                      onClick={() => resendSMS(tx)}
+                                      className="p-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
+                                      title="Resend SMS"
+                                    >
+                                      <MessageSquare size={14} />
+                                    </button>
+                                    {tx.sms_status === 'failed' && (
+                                      <button 
+                                        onClick={() => retrySMSAction(tx.id)}
+                                        className="p-1.5 bg-rose-50 text-rose-700 rounded-lg hover:bg-rose-100 transition-colors"
+                                        title="Retry Failed SMS"
+                                      >
+                                        <AlertCircle size={14} />
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>
@@ -2479,7 +2675,7 @@ export default function AdminDashboard() {
                       <div className="sm:col-span-2 grid grid-cols-2 gap-4">
                         <button
                           type="button"
-                          onClick={() => refreshDataHubStatus()}
+                          onClick={() => syncWallet()}
                           disabled={isRefreshingDataHub}
                           className="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-indigo-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
                         >
@@ -3110,9 +3306,15 @@ export default function AdminDashboard() {
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">VTU Delivery Status</label>
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                      selectedTransaction.vtu_status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      selectedTransaction.delivery_status === 'delivered' || selectedTransaction.vtu_status === 'success' || selectedTransaction.vtu_status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
+                      selectedTransaction.delivery_status === 'failed' || selectedTransaction.vtu_status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                      selectedTransaction.delivery_status === 'delivering' || selectedTransaction.vtu_status === 'processing' ? 'bg-amber-100 text-amber-700 animate-pulse' :
+                      'bg-slate-100 text-slate-500'
                     }`}>
-                      {selectedTransaction.vtu_status.toUpperCase()}
+                      {selectedTransaction.delivery_status === 'delivered' || selectedTransaction.vtu_status === 'delivered' || selectedTransaction.vtu_status === 'success' ? 'DELIVERED' : 
+                       selectedTransaction.delivery_status === 'failed' || selectedTransaction.vtu_status === 'failed' ? 'FAILED' : 
+                       selectedTransaction.delivery_status === 'delivering' || selectedTransaction.vtu_status === 'processing' ? 'PROCESSING' : 
+                       selectedTransaction.vtu_status || 'PENDING'}
                     </span>
                   </div>
                 </div>

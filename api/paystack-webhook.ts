@@ -1,4 +1,4 @@
-import { supabase, sendSMS, purchaseData } from '../src/lib/server-utils';
+import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {

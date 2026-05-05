@@ -36,9 +36,13 @@ CREATE TABLE public.transactions (
     recipient_phone TEXT NOT NULL,
     status TEXT NOT NULL,
     vtu_status TEXT,
+    api_status TEXT,
+    delivery_status TEXT,
+    delivery_updated_at TIMESTAMP WITH TIME ZONE,
+    external_reference TEXT,
     datahub_network_key TEXT,
     datahub_capacity TEXT,
-    retry_count INTEGER DEFAULT 0,
+    delivery_attempts INTEGER DEFAULT 0,
     sms_status TEXT,
     sms_response JSONB,
     error_message TEXT,
@@ -55,6 +59,21 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     role TEXT DEFAULT 'user',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- 3.5 Create provider_settings table
+DROP TABLE IF EXISTS public.provider_settings CASCADE;
+CREATE TABLE public.provider_settings (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    provider_name TEXT NOT NULL UNIQUE,
+    wallet_balance NUMERIC,
+    status TEXT DEFAULT 'unknown',
+    last_synced_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+INSERT INTO public.provider_settings (provider_name) VALUES ('datahubgh') ON CONFLICT (provider_name) DO NOTHING;
+
 
 -- 4. Enable Row Level Security (RLS)
 ALTER TABLE public.bundles ENABLE ROW LEVEL SECURITY;
@@ -268,8 +287,8 @@ BEGIN
     SELECT
       COUNT(*)                           AS total_tx,
       COALESCE(SUM(amount), 0)           AS revenue,
-      COUNT(*) FILTER (WHERE vtu_status='success' OR vtu_status='delivered') AS success_count,
-      COUNT(*) FILTER (WHERE vtu_status='failed')  AS failed_count
+      COUNT(*) FILTER (WHERE delivery_status='delivered' OR vtu_status='success' OR vtu_status='delivered') AS success_count,
+      COUNT(*) FILTER (WHERE delivery_status='failed' OR vtu_status='failed')  AS failed_count
     FROM public.transactions
     WHERE created_at::date = CURRENT_DATE;
 END;

@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabase } from '../lib/supabase';
-import { callDataHubWithRetry } from '../lib/datahub';
+import { supabase } from '../lib/server-utils.js';
+import { callDataHubWithRetry } from '../lib/datahub.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -10,67 +10,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     console.log(`[RetryVTU] Triggered for ID: ${transactionId}`);
-    const { data: transaction, error: fetchErr } = await supabase
+    const { data: tx, error: fetchErr } = await supabase
       .from('transactions')
       .select('*')
       .eq('id', transactionId)
       .single();
 
-    if (fetchErr || !transaction) {
+    if (fetchErr || !tx) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
-    const networkMapping: Record<string, string> = {
-      'mtn': 'YELLO',
-      'telecel': 'TELECEL',
-      'vodafone': 'TELECEL',
-      'airteltigo': 'AT_PREMIUM',
-      'at': 'AT_PREMIUM'
-    };
+    // 🚫 Block invalid retries
+    if (tx.delivery_status === "delivered" || tx.vtu_status === "delivered" || tx.vtu_status === "success" || tx.delivery_status === "success") {
+      throw new Error("Already delivered — no retry allowed");
+    }
 
-    const rawNetwork = String(transaction.network || "").toLowerCase();
-    const networkKey = transaction.datahub_network_key || transaction.network_key || networkMapping[rawNetwork] || transaction.network;
-    const recipient = String(transaction.recipient_phone || "").replace(/\s+/g, '');
-    const capacity = String(transaction.datahub_capacity || transaction.capacity || "").toUpperCase().replace("GB", "").trim();
+    if (tx.delivery_status === "delivering" || tx.vtu_status === "processing" || tx.status === "processing") {
+      throw new Error("Still processing");
+    }
 
-    const datahubPayload = {
-      networkKey,
-      recipient,
-      capacity,
-      reference: String(transaction.id)
-    };
+    if (tx.delivery_status !== "failed" && tx.vtu_status !== "failed" && tx.status !== "failed") {
+      return res.json({ message: "Retry not allowed" });
+    }
 
-    console.log(`[RetryVTU] Calling DataHub (Retry) for ID: ${transaction.id}`);
-    
-    // Update status to processing first
     await supabase.from('transactions').update({
-        vtu_status: 'processing',
-        updated_at: new Date().toISOString(),
-        retry_count: (transaction.retry_count || 0) + 1
-    }).eq('id', transaction.id);
+       delivery_attempts: (tx.delivery_attempts || 0) + 1,
+       updated_at: new Date().toISOString()
+    }).eq('id', tx.id);
 
-    const vtuResult = await callDataHubWithRetry(datahubPayload);
+    // 🔁 Reuse same id → call purchase API again
+    const baseUrl = process.env.BASE_URL || `https://${process.env.VERCEL_URL}`;
+    const rawNetwork = String(tx.network || "").toLowerCase();
+    const capacity = String(tx.datahub_capacity || tx.capacity || "").toUpperCase().replace("GB", "").trim();
 
-    // Update with API response
-    await supabase.from('transactions').update({
-      api_response: vtuResult,
-      updated_at: new Date().toISOString()
-    }).eq('id', transaction.id);
-
-    return res.json({
-      success: true,
-      ...vtuResult,
-      message: "VTU Delivery Re-triggered Successfully"
+    return await fetch(`${baseUrl}/api/purchase-data`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        bundle: capacity,
+        phone: tx.recipient_phone,
+        network: rawNetwork,
+        transaction_id: tx.id, // 🔥 CRITICAL
+        payer_phone_number: tx.payer_phone_number
+      }),
+    }).then(async (response) => {
+      const respData = await response.json();
+      return res.status(response.status).json(respData);
+    }).catch((err) => {
+      console.error("Fetch purchase-data error:", err);
+      throw err;
     });
+
   } catch (err: any) {
     console.error(`[RetryVTU] FATAL ERROR for ${transactionId}:`, err);
-    
-    await supabase.from('transactions').update({
-        vtu_status: 'failed',
-        error_message: err.message,
-        updated_at: new Date().toISOString()
-    }).eq('id', transactionId);
-
-    return res.status(500).json({ success: false, error: err.message || "Internal Server Error" });
+    return res.status(500).json({ success: false, error: "Retry failed" });
   }
 }
