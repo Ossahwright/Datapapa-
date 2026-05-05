@@ -81,6 +81,12 @@ export default function AdminDashboard() {
   const [viewingCustomerTransactions, setViewingCustomerTransactions] = useState<any>(null);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
   
+  // Filters State
+  const [filterNetwork, setFilterNetwork] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterDelivery, setFilterDelivery] = useState('');
+  const [filterDate, setFilterDate] = useState('');
+  
   // App Settings State
   const [appSettings, setAppSettings] = useState({
     app_name: 'Datapapa',
@@ -976,12 +982,23 @@ export default function AdminDashboard() {
         .select('*', { count: 'exact' });
 
       if (searchQuery) {
-        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchQuery);
-        if (isUUID) {
-          query = query.eq('id', searchQuery);
-        } else {
-          query = query.or(`recipient_phone.ilike.%${searchQuery}%,network.ilike.%${searchQuery}%,status.ilike.%${searchQuery}%,paystack_receipt.ilike.%${searchQuery}%`);
-        }
+        query = query.or(`recipient_phone.ilike.%${searchQuery}%,payer_phone_number.ilike.%${searchQuery}%,id.ilike.%${searchQuery}%`);
+      }
+
+      if (filterNetwork) {
+        query = query.eq('network', filterNetwork);
+      }
+
+      if (filterStatus) {
+        query = query.eq('status', filterStatus);
+      }
+
+      if (filterDelivery) {
+        query = query.eq('vtu_status', filterDelivery);
+      }
+
+      if (filterDate) {
+        query = query.gte('created_at', filterDate);
       }
 
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -996,7 +1013,6 @@ export default function AdminDashboard() {
       }
         
       if (!error && data) {
-        console.log("FETCHED DATA:", data);
         setTransactions(data);
         if (count !== null) setTotalTransactions(count);
       }
@@ -1005,7 +1021,7 @@ export default function AdminDashboard() {
     } finally {
       setIsLoadingTransactions(false);
     }
-  }, [searchQuery, currentPage]);
+  }, [searchQuery, currentPage, filterNetwork, filterStatus, filterDelivery, filterDate]);
 
   useEffect(() => {
     const txChannel = supabase
@@ -1425,25 +1441,63 @@ export default function AdminDashboard() {
 
         {currentView === 'transactions' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-            <header className="mb-8 flex justify-between items-end">
+            <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
               <div>
-                <h1 className="text-2xl font-bold text-slate-900">Master Transactions Ledger</h1>
-                <p className="text-slate-500 mt-1">View and manage all customer data purchases.</p>
+                <h1 className="text-2xl font-bold text-slate-900">Transactions Dashboard</h1>
+                <p className="text-slate-500 mt-1">Monitor all purchases, delivery, and SMS status in real-time</p>
               </div>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Search size={18} />
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                <div className="relative flex-1 md:flex-none">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Search size={18} />
+                  </div>
+                  <input 
+                    type="text" 
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    placeholder="Search by phone..." 
+                    className="pl-10 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                  />
                 </div>
-                <input 
-                  type="text" 
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setCurrentPage(1);
+                
+                <select 
+                  value={filterNetwork}
+                  onChange={(e) => setFilterNetwork(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">All Networks</option>
+                  <option value="mtn">MTN</option>
+                  <option value="telecel">Telecel</option>
+                  <option value="at">AT</option>
+                </select>
+
+                <select 
+                  value={filterDelivery}
+                  onChange={(e) => setFilterDelivery(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">All Delivery Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="processing">Processing</option>
+                  <option value="delivered">Delivered</option>
+                  <option value="failed">Failed</option>
+                </select>
+                
+                <button 
+                  onClick={() => {
+                    setFilterNetwork('');
+                    setFilterStatus('');
+                    setFilterDelivery('');
+                    setSearchQuery('');
                   }}
-                  placeholder="Search transactions..." 
-                  className="pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                />
+                  className="p-2 text-slate-500 hover:text-indigo-600 transition-colors"
+                  title="Clear Filters"
+                >
+                  <RefreshCw size={18} />
+                </button>
               </div>
             </header>
 
@@ -1460,22 +1514,24 @@ export default function AdminDashboard() {
                       <th className="px-6 py-4">Payer</th>
                       <th className="px-6 py-4">Recipient</th>
                       <th className="px-6 py-4 text-right">Amount</th>
-                      <th className="px-6 py-4 text-center">VTU Status</th>
-                      <th className="px-6 py-4 text-center">Status</th>
+                      <th className="px-6 py-4 text-center">Payment</th>
+                      <th className="px-6 py-4 text-center">Delivery</th>
+                      <th className="px-6 py-4 text-center">SMS</th>
+                      <th className="px-6 py-4 text-center">Retries</th>
                       <th className="px-6 py-4 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {isLoadingTransactions ? (
                       <tr>
-                        <td colSpan={11} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={12} className="px-6 py-12 text-center text-slate-500">
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
                           <p>Loading transactions...</p>
                         </td>
                       </tr>
                     ) : transactions.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={12} className="px-6 py-12 text-center text-slate-500">
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
                           <p>No transactions found in the database.</p>
                         </td>
@@ -1529,32 +1585,40 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                tx.vtu_status === 'success' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' ? 'bg-green-100 text-green-700' :
+                                tx.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-slate-100 text-slate-700'
+                              }`}>
+                                {tx.status === 'success' || tx.status === 'paid' ? 'Success' : tx.status || 'N/A'}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                tx.vtu_status === 'success' || tx.vtu_status === 'delivered' || tx.vtu_status === 'completed' ? 'bg-green-100 text-green-700' :
                                 tx.vtu_status === 'failed' ? 'bg-red-100 text-red-700' :
                                 tx.vtu_status === 'processing' ? 'bg-blue-100 text-blue-700' :
                                 tx.vtu_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
                                 'bg-slate-100 text-slate-700'
                               }`}>
                                 {tx.vtu_status === 'processing' && <RefreshCw size={10} className="animate-spin mr-1" />}
-                                {tx.vtu_status === 'success' ? '✅ Delivered' : 
-                                 tx.vtu_status === 'failed' ? '❌ Failed' : 
-                                 tx.vtu_status === 'processing' ? '⏳ Processing' : 
+                                {tx.vtu_status === 'delivered' || tx.vtu_status === 'success' ? 'Delivered' : 
+                                 tx.vtu_status === 'failed' ? 'Failed' : 
+                                 tx.vtu_status === 'processing' ? 'Processing' : 
                                  tx.vtu_status || 'N/A'}
                               </span>
-                              {stuck && (
-                                <div className="text-[10px] text-amber-600 font-bold mt-1 uppercase">Stuck Detected</div>
-                              )}
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                tx.status === 'success' || tx.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                tx.status === 'paid' ? 'bg-blue-100 text-blue-700' :
-                                tx.status === 'failed' ? 'bg-red-100 text-red-700' :
-                                tx.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                                tx.sms_status === 'sent' ? 'bg-green-100 text-green-700' :
+                                tx.sms_status === 'failed' ? 'bg-red-100 text-red-700' :
                                 'bg-slate-100 text-slate-700'
                               }`}>
-                                {tx.status || 'N/A'}
+                                {tx.sms_status === 'sent' ? 'Sent' : tx.sms_status === 'failed' ? 'Failed' : 'N/A'}
                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-center text-slate-600 font-medium font-mono text-xs">
+                              {tx.retry_count || 0}
                             </td>
                             <td className="px-6 py-4 text-center">
                               <div className="flex items-center justify-center gap-2">

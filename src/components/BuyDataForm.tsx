@@ -183,6 +183,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const handlePaymentSuccess = async (paystackResponse: any) => {
     console.log("💰 PAYMENT SUCCESS CALLBACK");
     setPaymentStatus("success");
+    setSuccess(true); // Show the success component
     setIsLoading(false);
     
     try {
@@ -191,6 +192,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       setTransactionId(paystackResponse.reference);
 
       console.log("🚀 [API] TRIGGERING DATAHUB");
+      // Fire and forget backend call
       fetch("/api/purchase-data", {
         method: "POST",
         headers: {
@@ -205,13 +207,14 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }),
       }).catch(e => console.error("VTU trigger error:", e));
 
+      // Refresh homepage after 4 seconds to show success message first
       setTimeout(() => {
         window.location.href = '/'; 
-      }, 3000);
+      }, 4000);
 
     } catch (err: any) {
       console.error("Payment post-processing error:", err);
-      setTimeout(() => window.location.href = '/', 3000);
+      setTimeout(() => window.location.href = '/', 4000);
     }
   };
 

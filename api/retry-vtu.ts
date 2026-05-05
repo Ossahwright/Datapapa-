@@ -1,6 +1,8 @@
-import { purchaseData, supabase, sendSMS, buildSuccessSMS } from '../src/lib/server-utils';
+import { VercelRequest, VercelResponse } from '@vercel/node';
+import { supabase } from '../lib/supabase';
+import { callDataHubWithRetry } from '../lib/datahub';
 
-export default async function handler(req: any, res: any) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   const { transactionId } = req.body;
@@ -14,36 +16,61 @@ export default async function handler(req: any, res: any) {
       .eq('id', transactionId)
       .single();
 
-    if (fetchErr) {
-      console.error(`[RetryVTU] Fetch error for ${transactionId}:`, fetchErr);
-      return res.status(404).json({ success: false, error: `Transaction not found: ${fetchErr.message}` });
-    }
-
-    if (!transaction) {
-      console.error(`[RetryVTU] No transaction found for ${transactionId}`);
+    if (fetchErr || !transaction) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
-    console.log(`[RetryVTU] Found transaction: ${transaction.network} ${transaction.capacity} to ${transaction.recipient_phone}`);
-    const vtuResult = await purchaseData(transaction) || { success: false, error: "No response from VTU provider" };
-    console.log(`[RetryVTU] purchaseData result:`, JSON.stringify(vtuResult));
+    const networkMapping: Record<string, string> = {
+      'mtn': 'YELLO',
+      'telecel': 'TELECEL',
+      'vodafone': 'TELECEL',
+      'airteltigo': 'AT_PREMIUM',
+      'at': 'AT_PREMIUM'
+    };
+
+    const rawNetwork = String(transaction.network || "").toLowerCase();
+    const networkKey = transaction.datahub_network_key || transaction.network_key || networkMapping[rawNetwork] || transaction.network;
+    const recipient = String(transaction.recipient_phone || "").replace(/\s+/g, '');
+    const capacity = String(transaction.datahub_capacity || transaction.capacity || "").toUpperCase().replace("GB", "").trim();
+
+    const datahubPayload = {
+      networkKey,
+      recipient,
+      capacity,
+      reference: String(transaction.id)
+    };
+
+    console.log(`[RetryVTU] Calling DataHub (Retry) for ID: ${transaction.id}`);
     
-    // Delivery check - improved to handle various success strings
-    const isActuallyDelivered = !!(vtuResult && (vtuResult.success === true || (
-      vtuResult.status?.toUpperCase() === 'SUCCESSFUL' || 
-      vtuResult.status?.toUpperCase() === 'SUCCESS' ||
-      vtuResult.status?.toUpperCase() === 'DELIVERED' ||
-      vtuResult.status?.toUpperCase() === 'COMPLETED' ||
-      vtuResult.vtu_status === 'success' ||
-      vtuResult.vtu_status === 'delivered'
-    )));
+    // Update status to processing first
+    await supabase.from('transactions').update({
+        vtu_status: 'processing',
+        updated_at: new Date().toISOString(),
+        retry_count: (transaction.retry_count || 0) + 1
+    }).eq('id', transaction.id);
+
+    const vtuResult = await callDataHubWithRetry(datahubPayload);
+
+    // Update with API response
+    await supabase.from('transactions').update({
+      api_response: vtuResult,
+      updated_at: new Date().toISOString()
+    }).eq('id', transaction.id);
 
     return res.json({
+      success: true,
       ...vtuResult,
-      message: isActuallyDelivered ? "VTU Delivery Triggered Successfully" : `VTU Failed: ${vtuResult?.error || "Unknown Provider Error"}`
+      message: "VTU Delivery Re-triggered Successfully"
     });
   } catch (err: any) {
     console.error(`[RetryVTU] FATAL ERROR for ${transactionId}:`, err);
+    
+    await supabase.from('transactions').update({
+        vtu_status: 'failed',
+        error_message: err.message,
+        updated_at: new Date().toISOString()
+    }).eq('id', transactionId);
+
     return res.status(500).json({ success: false, error: err.message || "Internal Server Error" });
   }
 }
