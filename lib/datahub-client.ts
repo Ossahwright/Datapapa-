@@ -1,4 +1,4 @@
-import { supabase } from './server-utils.js';
+import { supabase, getDataHubConfig } from './server-utils.js';
 
 /**
  * Standardized DataHub API Client
@@ -8,46 +8,56 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-  const cleanEndpoint = endpoint.replace(/^\/+/, "");
-  const url = `https://datahubgh.com/api/${cleanEndpoint}`;
+  const config = await getDataHubConfig();
+  const apiKey = config.apiKey;
+  const baseUrl = config.baseUrl || "https://app.datahubgh.com/api/external";
 
-  console.log("CALLING:", url);
+  const cleanEndpoint = endpoint.replace(/^\/+/, "");
+  const url = `${baseUrl.replace(/\/+$/, "")}/${cleanEndpoint}`;
+
+  console.log("CALLING DATAHUB:", url);
 
   try {
     const response = await fetch(url, {
       method: options.method || "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Token ${process.env.DATAHUB_API_KEY}`,
+        "X-API-Key": apiKey || "",
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
 
     const text = await response.text();
-    console.log("RAW RESPONSE:", text);
+    const isHtml = text.trim().toLowerCase().startsWith("<!doctype html>") || text.trim().toLowerCase().startsWith("<html>");
+    
+    if (isHtml) {
+       console.log("📡 [DataHub] Received HTML instead of JSON. Possible 404 or maintenance page.");
+    }
 
     let data;
     try {
       data = JSON.parse(text);
     } catch {
-      data = { raw: text };
+      data = { raw: isHtml ? "HTML ERROR PAGE" : text };
     }
 
-    // 📝 Log to api_logs as requested
+    // 📝 Log to api_logs
     try {
       await supabase.from("api_logs").insert({
         endpoint: cleanEndpoint,
         request: options.body,
         response: data,
         status: response.ok ? "success" : "failed",
+        created_at: new Date().toISOString()
       });
     } catch (logErr) {
       console.error("Log error:", logErr);
     }
 
     if (!response.ok) {
-      throw new Error(`${response.status} - ${data?.message || text}`);
+      const errorMsg = data?.message || (isHtml ? `Service Unavailable (HTML ${response.status})` : text);
+      throw new Error(`${response.status} - ${errorMsg}`);
     }
 
     return { success: true, data };

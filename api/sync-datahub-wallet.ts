@@ -11,7 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log("🔄 [Sync] DataHub Wallet Sync Triggered");
 
-    const result = await callDataHubAPI("balance", { method: 'GET' });
+    const result = await callDataHubAPI("user", { method: 'GET' });
 
     if (!result.success) {
       throw new Error(result.error);

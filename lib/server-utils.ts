@@ -245,35 +245,32 @@ export async function purchaseData(transaction: any) {
     recipient = '0' + recipient;
   }
 
-  const networkMapping: Record<string, string> = {
-    'mtn': 'YELLO',
-    'telecel': 'TELECEL',
-    'vodafone': 'TELECEL',
-    'airteltigo': 'AT_PREMIUM',
-    'at': 'AT_PREMIUM'
+  const NETWORK_MAP: Record<string, string> = {
+    'MTN': 'YELLO',
+    'TELECEL': 'TELECEL',
+    'AIRTELTIGO': 'AT',
+    'AT': 'AT'
   };
 
-  const rawNetwork = String(transaction.network || "").toLowerCase();
-  const networkKey = transaction.datahub_network_key || 
-                    transaction.network_key || 
-                    networkMapping[rawNetwork] || 
-                    transaction.network;
+  const PLAN_MAP: Record<string, string> = {
+    '1GB': '1',
+    '2GB': '2',
+    '5GB': '5',
+    '10GB': '10',
+    '20GB': '20'
+  };
 
-  const capacity = transaction.datahub_capacity || transaction.capacity || "";
-  let finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
+  const rawNetwork = String(transaction.network || "").toUpperCase();
+  const rawPlan = String(transaction.capacity || "").toUpperCase();
   
-  if (finalCapacity.includes("MB")) {
-    finalCapacity = finalCapacity.replace("MB", "").trim();
-  }
+  const networkKey = NETWORK_MAP[rawNetwork] || transaction.network_key || transaction.network;
+  const capacity = PLAN_MAP[rawPlan] || rawPlan.replace("GB", "").trim();
+  recipient = String(transaction.recipient_phone || "").replace(/\s+/g, '');
 
-  const planId = transaction.datahub_plan_id || transaction.vtu_plan || transaction.capacity;
-  
   const payload = {
-    network: transaction.network?.toUpperCase(),
-    mobile_number: String(transaction.recipient_phone || "").replace(/\s+/g, ''),
-    plan: planId,
-    Ported_number: true,
-    reference: transaction.id
+    networkKey,
+    recipient,
+    capacity,
   };
 
   console.log("📝 [DataHub] PURCHASING VIA CLIENT:", JSON.stringify(payload));
@@ -294,7 +291,7 @@ export async function purchaseData(transaction: any) {
         })
         .eq("id", transaction.id);
 
-      const apiResponse = await callDataHubAPI("data", {
+      const apiResponse = await callDataHubAPI("data-purchase", {
         method: "POST",
         body: payload
       });

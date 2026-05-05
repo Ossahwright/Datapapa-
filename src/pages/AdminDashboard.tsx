@@ -156,7 +156,7 @@ export default function AdminDashboard() {
         }
       }
     } catch(err) {
-      console.error(err);
+      console.error("❌ [Admin] Fetch provider settings error:", err);
     }
   };
 
@@ -184,7 +184,7 @@ export default function AdminDashboard() {
         alert(data.error || "Failed to sync");
       }
     } catch (error) {
-      console.error(error);
+      console.error("❌ [Admin] Sync wallet error:", error);
       alert("Error syncing wallet");
     } finally {
       setIsRefreshingDataHub(false);
@@ -419,7 +419,7 @@ export default function AdminDashboard() {
          setDashboardStats(prev => ({ ...prev, users: usersCount }));
       }
     } catch (err) {
-      console.error(err);
+      console.error("❌ [Admin] Fetch dashboard stats error:", err);
     }
   }, []);
 
