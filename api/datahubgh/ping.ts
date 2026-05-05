@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getDataHubConfig } from '../../src/lib/server-utils';
+import { getDataHubConfig } from '../../lib/server-utils.js';
 
 export default async function handler(req: any, res: any) {
   const start = Date.now();
