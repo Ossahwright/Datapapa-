@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { supabase, getDataHubConfig } from '../lib/server-utils.js';
+import { supabase } from '../lib/server-utils.js';
+import { callDataHubAPI } from '../lib/datahub-client.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -8,29 +9,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    console.log("SYNC ROUTE HIT");
+    console.log("🔄 [Sync] DataHub Wallet Sync Triggered");
 
-    const { apiKey } = await getDataHubConfig();
+    const result = await callDataHubAPI("balance", { method: 'GET' });
 
-    if (!apiKey) {
-      throw new Error("DataHub API key not configured");
+    if (!result.success) {
+      throw new Error(result.error);
     }
 
-    const response = await fetch("https://datahubgh.com/api/balance", {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-
-    const result = await response.json();
-    console.log("DATAHUB RESPONSE:", result);
-
+    const data = result.data;
     // Flexible parsing (DataHubGH responses vary)
     const balance =
-      result?.balance ??
-      result?.data?.balance ??
-      result?.wallet ??
+      data?.wallet_balance ??
+      data?.balance ??
+      data?.user?.wallet_balance ??
+      data?.user?.balance ??
       0;
 
     const { error } = await supabase
@@ -42,20 +35,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
       .eq("provider_name", "datahubgh");
 
-    if (error) {
-      console.error("DB UPDATE ERROR:", error);
-      throw error;
-    }
+    if (error) throw error;
 
     return res.status(200).json({ success: true, balance });
   } catch (err: any) {
-    console.error("SYNC ERROR:", err);
+    console.error("❌ [Sync] Fatal Error:", err.message);
 
     await supabase
       .from("provider_settings")
       .update({ status: "offline" })
       .eq("provider_name", "datahubgh");
 
-    return res.status(500).json({ success: false, error: "Sync failed" });
+    return res.status(200).json({ success: false, error: "Sync failed", message: err.message });
   }
 }

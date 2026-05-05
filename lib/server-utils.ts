@@ -266,12 +266,13 @@ export async function purchaseData(transaction: any) {
     finalCapacity = finalCapacity.replace("MB", "").trim();
   }
 
+  const planId = transaction.datahub_plan_id || transaction.vtu_plan || transaction.capacity;
+  
   const payload = {
-    network_id: networkKey,
-    network_key: networkKey,
-    recipient,
-    plan: finalCapacity,
-    capacity: finalCapacity,
+    network: transaction.network?.toUpperCase(),
+    mobile_number: String(transaction.recipient_phone || "").replace(/\s+/g, ''),
+    plan: planId,
+    Ported_number: true,
     reference: transaction.id
   };
 
@@ -293,7 +294,8 @@ export async function purchaseData(transaction: any) {
         })
         .eq("id", transaction.id);
 
-      const apiResponse = await callDataHubAPI("data-purchase", {
+      const apiResponse = await callDataHubAPI("data", {
+        method: "POST",
         body: payload
       });
 
@@ -303,8 +305,10 @@ export async function purchaseData(transaction: any) {
         await supabase
           .from("transactions")
           .update({
-            vtu_status: 'processing',
-            delivery_status: 'delivering',
+            vtu_status: 'success',
+            status: 'success',
+            api_status: 'success',
+            delivery_status: 'delivered',
             api_response: result,
             updated_at: new Date().toISOString()
           })
@@ -312,8 +316,7 @@ export async function purchaseData(transaction: any) {
 
         return { 
           success: true, 
-          status: apiResponse.status,
-          vtu_status: 'processing',
+          vtu_status: 'success',
           ...result 
         };
       }

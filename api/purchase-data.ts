@@ -27,6 +27,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
+    if (txData.status === "processing") {
+      return res.json({ message: "Already processing" });
+    }
+
+    if (txData.status === "success") {
+      return res.json({ message: "Already completed" });
+    }
+
     // Update payer phone if provided
     if (payer_phone_number) {
       await supabase.from('transactions').update({ payer_phone_number }).eq('id', txData.id);

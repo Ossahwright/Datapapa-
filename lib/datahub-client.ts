@@ -8,24 +8,24 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-  const start = Date.now();
-  const apiKey = process.env.DATAHUB_API_KEY;
-  const baseUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api";
+  const cleanEndpoint = endpoint.replace(/^\/+/, "");
+  const url = `https://datahubgh.com/api/${cleanEndpoint}`;
+
+  console.log("CALLING:", url);
 
   try {
-    const response = await fetch(`${baseUrl}/${endpoint}`, {
+    const response = await fetch(url, {
       method: options.method || "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": apiKey || "",
-        "Accept": "application/json"
+        "Authorization": `Token ${process.env.DATAHUB_API_KEY}`,
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
 
-    const duration = Date.now() - start;
     const text = await response.text();
+    console.log("RAW RESPONSE:", text);
 
     let data;
     try {
@@ -34,41 +34,30 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
       data = { raw: text };
     }
 
-    console.log("📡 [DataHub Client] Response:", {
-      endpoint,
-      status: response.status,
-      duration: `${duration}ms`,
-      data,
-    });
-
-    // 📝 Log to api_logs
+    // 📝 Log to api_logs as requested
     try {
       await supabase.from("api_logs").insert({
-        endpoint,
+        endpoint: cleanEndpoint,
         request: options.body,
         response: data,
         status: response.ok ? "success" : "failed",
-        http_status: response.status,
-        duration_ms: duration,
-        created_at: new Date().toISOString()
       });
     } catch (logErr) {
-      console.error("[DataHub Client] Log error:", logErr);
+      console.error("Log error:", logErr);
     }
 
     if (!response.ok) {
-      throw new Error(`DataHub error: ${response.status} - ${data.message || data.error || 'Unknown error'}`);
+      throw new Error(`${response.status} - ${data?.message || text}`);
     }
 
-    return { success: true, data, status: response.status, duration };
+    return { success: true, data };
 
   } catch (error: any) {
-    console.error("❌ [DataHub Client] Call Failed:", error.message);
+    console.error("❌ DataHub Call Failed:", error.message);
 
     return {
       success: false,
       error: error.message,
-      duration: Date.now() - start
     };
   } finally {
     clearTimeout(timeout);
