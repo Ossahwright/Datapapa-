@@ -45,6 +45,25 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalTransactions, setTotalTransactions] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const syncTransactions = async () => {
+    try {
+      setIsSyncing(true);
+      const res = await axios.post("/api/sync-transactions");
+      if (res.data.success) {
+        alert(`Synced ${res.data.results?.length || 0} transactions`);
+        fetchTransactions();
+      } else {
+        alert(res.data.message || "No transactions needed syncing");
+      }
+    } catch (err) {
+      console.error("Sync Error:", err);
+      alert("Failed to sync transactions");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
   const [lastBundlesSync, setLastBundlesSync] = useState<string>(new Date().toLocaleTimeString());
@@ -1486,6 +1505,17 @@ export default function AdminDashboard() {
                   <option value="failed">Failed</option>
                 </select>
                 
+                <button 
+                  onClick={syncTransactions}
+                  disabled={isSyncing}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
+                    isSyncing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-100'
+                  }`}
+                >
+                  {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : <Database size={16} />}
+                  <span>Sync Status</span>
+                </button>
+
                 <button 
                   onClick={() => {
                     setFilterNetwork('');

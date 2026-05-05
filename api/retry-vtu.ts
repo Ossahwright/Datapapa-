@@ -57,6 +57,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       updated_at: new Date().toISOString()
     }).eq('id', transaction.id);
 
+    // SMS if successful
+    const isSuccess = vtuResult.status?.toUpperCase() === 'SUCCESSFUL' || 
+                      vtuResult.status?.toUpperCase() === 'DELIVERED' ||
+                      vtuResult.success === true;
+
+    if (isSuccess) {
+      try {
+        await supabase.from('transactions').update({ vtu_status: 'delivered' }).eq('id', transaction.id);
+        
+        const { sendSMS, buildSuccessSMS } = await import('../src/lib/server-utils');
+        const message = buildSuccessSMS({
+          volume: transaction.capacity,
+          network: transaction.network,
+          phone: transaction.recipient_phone,
+          transactionId: transaction.id
+        });
+
+        const smsRes = await sendSMS(transaction.recipient_phone, message);
+        const smsSuccess = smsRes && (smsRes.status === 'success' || String(smsRes).includes('1000'));
+        
+        await supabase.from('transactions').update({
+          sms_status: smsSuccess ? 'sent' : 'failed'
+        }).eq('id', transaction.id);
+      } catch (e) {
+        console.error("Retry SMS Error:", e);
+      }
+    }
+
     return res.json({
       success: true,
       ...vtuResult,

@@ -79,6 +79,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       updated_at: new Date().toISOString()
     }).eq('id', txData.id);
 
+    // If instantly successful/delivered, send SMS
+    const isInstantSuccess = dhResult.status?.toUpperCase() === 'SUCCESSFUL' || 
+                            dhResult.status?.toUpperCase() === 'DELIVERED' ||
+                            dhResult.success === true;
+
+    if (isInstantSuccess) {
+      try {
+        console.log(`✅ [API] Instant success! Sending SMS for ${txData.id}`);
+        // Update DB first to delivered
+        await supabase.from('transactions').update({ vtu_status: 'delivered' }).eq('id', txData.id);
+
+        const { sendSMS, buildSuccessSMS } = await import('../src/lib/server-utils');
+        const message = buildSuccessSMS({
+          volume: txData.capacity,
+          network: txData.network,
+          phone: txData.recipient_phone,
+          transactionId: txData.id
+        });
+
+        const smsRes = await sendSMS(txData.recipient_phone, message);
+        const smsSuccess = smsRes && (smsRes.status === 'success' || String(smsRes).includes('1000'));
+        
+        await supabase.from('transactions').update({
+          sms_status: smsSuccess ? 'sent' : 'failed'
+        }).eq('id', txData.id);
+      } catch (smsErr) {
+        console.error("❌ [API] SMS Error:", smsErr);
+      }
+    }
+
     return res.status(200).json({ success: true, ...dhResult });
   } catch (err: any) {
     console.error("❌ [API] ERROR:", err.message);

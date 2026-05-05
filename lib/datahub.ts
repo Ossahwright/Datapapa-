@@ -105,15 +105,57 @@ export async function callDataHub(payload: any) {
 }
 
 /**
+ * Queries DataHub for the status of a transaction
+ */
+export async function queryDataHubStatus(reference: string) {
+  const { apiKey, baseUrl } = await getDataHubConfig();
+  if (!apiKey) throw new Error("DATAHUB_API_KEY is missing");
+
+  console.log(`🔍 [DataHub] Checking Status for Ref: ${reference}`);
+
+  // Many DataHub APIs use GET /data-purchase/{reference} or similar
+  // We will try to find the status using the common pattern
+  const response = await axios.get(`${baseUrl}/data-purchase/${reference}`, {
+    headers: {
+      "X-API-Key": apiKey,
+      "Accept": "application/json"
+    },
+    timeout: 10000,
+    validateStatus: () => true
+  });
+
+  // If that doesn't work, we try the query param approach which is also common
+  if (response.status === 404 || response.status === 405) {
+    const altResponse = await axios.get(`${baseUrl}/data-purchase?reference=${reference}`, {
+      headers: { "X-API-Key": apiKey },
+      timeout: 10000,
+      validateStatus: () => true
+    });
+    if (altResponse.status === 200) return altResponse.data;
+  }
+
+  return response.data;
+}
+
+/**
  * Wrapper with Exponential Backoff/Retry
  */
 export async function callDataHubWithRetry(payload: any, retries: number = 3): Promise<any> {
   try {
     return await callDataHub(payload);
   } catch (err: any) {
-    console.error(`❌ [DataHub] Attempt failed: ${err.message}`);
+    const errorMsg = err.message || "";
+    console.error(`❌ [DataHub] Attempt failed: ${errorMsg}`);
 
-    if (retries <= 0) {
+    // Check for fatal errors that shouldn't be retried
+    const isFatal = errorMsg.toLowerCase().includes("balance") || 
+                    errorMsg.toLowerCase().includes("api key") ||
+                    errorMsg.toLowerCase().includes("unauthorized") ||
+                    errorMsg.toLowerCase().includes("invalid network") ||
+                    errorMsg.toLowerCase().includes("invalid phone");
+
+    if (retries <= 0 || isFatal) {
+      if (isFatal) console.warn(`🛑 [DataHub] Stopping retries due to fatal error: ${errorMsg}`);
       throw err;
     }
 

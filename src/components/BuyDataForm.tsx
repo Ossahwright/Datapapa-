@@ -39,9 +39,32 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const [supabaseReady] = useState(isSupabaseConfigured);
   
+  const adminWhatsApp = "233244014207"; // Admin's native WhatsApp
+
   const appName = settings?.app_name || "Datapapa";
   const currency = settings?.currency || "GHS";
   const supportEmail = settings?.support_email || "support@datapapa.com";
+
+  const sendWhatsAppNotification = (tx: any) => {
+    try {
+      const message = `💰 *NEW TRANSACTION ON ${appName.toUpperCase()}*\n\n` +
+        `👤 *Payer:* ${tx.payer_phone_number}\n` +
+        `📱 *Recipient:* ${tx.recipient_phone}\n` +
+        `📦 *Bundle:* ${tx.capacity}\n` +
+        `🌐 *Network:* ${tx.network.toUpperCase()}\n` +
+        `💵 *Amount:* GHS ${Number(tx.amount).toFixed(2)}\n` +
+        `🆔 *Ref:* ${tx.id}\n` +
+        `📅 *Time:* ${new Date().toLocaleString()}`;
+      
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=${adminWhatsApp}&text=${encodeURIComponent(message)}`;
+      
+      // We open this in background or a hidden way if possible, but standard is window.open
+      // For non-intrusive, we logic it so it happens only on success
+      window.open(whatsappUrl, '_blank');
+    } catch (e) {
+      console.error("WhatsApp Error:", e);
+    }
+  };
 
   const fetchBundles = async () => {
     if (supabaseReady) {
@@ -183,16 +206,15 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const handlePaymentSuccess = async (paystackResponse: any) => {
     console.log("💰 PAYMENT SUCCESS CALLBACK");
     setPaymentStatus("success");
-    setSuccess(true); // Show the success component
+    setSuccess(true); 
     setIsLoading(false);
     
     try {
-      const currentPayerPhone = paystackResponse?.customer?.phone || paystackResponse?.phone || 'N/A';
-      setPayerPhone(currentPayerPhone);
-      setTransactionId(paystackResponse.reference);
+      const currentPaystackRef = paystackResponse.reference;
+      setTransactionId(currentPaystackRef);
 
+      // Trigger Backend VTU
       console.log("🚀 [API] TRIGGERING DATAHUB");
-      // Fire and forget backend call
       fetch("/api/purchase-data", {
         method: "POST",
         headers: {
@@ -201,20 +223,24 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         body: JSON.stringify({
           bundle, 
           phone, 
-          paystack_ref: paystackResponse.reference,
+          paystack_ref: currentPaystackRef,
           transaction_id: currentTxId, 
-          payer_phone_number: currentPayerPhone
+          payer_phone_number: payerPhone || phone // Fallback to recipient if empty
         }),
       }).catch(e => console.error("VTU trigger error:", e));
 
-      // Refresh homepage after 4 seconds to show success message first
-      setTimeout(() => {
-        window.location.href = '/'; 
-      }, 4000);
+      // Trigger Admin WhatsApp Notification
+      sendWhatsAppNotification({
+        id: currentTxId,
+        payer_phone_number: payerPhone || phone,
+        recipient_phone: phone,
+        capacity: selectedBundleObj?.volume,
+        network: network,
+        amount: selectedBundleObj?.price
+      });
 
     } catch (err: any) {
       console.error("Payment post-processing error:", err);
-      setTimeout(() => window.location.href = '/', 4000);
     }
   };
 
@@ -246,7 +272,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       const costPrice = parseFloat(selectedBundleObj?.original?.cost_price || '0') || 0;
       const profit = Math.max(0, sellingPrice - costPrice);
 
-      const { data, error: txError } = await supabase
+          const { data, error: txError } = await supabase
         .from("transactions")
         .insert({
           user_id: userData?.user?.id || null,
@@ -254,6 +280,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           profit: profit,
           network: network,
           recipient_phone: phone,
+          payer_phone_number: payerPhone || phone, // Store payer phone
           status: "pending",
           capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
           network_key: selectedBundleObj?.original?.network_key || network,
@@ -280,94 +307,81 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     const selectedNetwork = NETWORKS.find(n => n.id === network);
     return (
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-3xl shadow-2xl shadow-slate-200/60 p-8 md:p-12 border border-slate-100 text-center max-w-2xl mx-auto w-full relative overflow-hidden"
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white rounded-[2.5rem] shadow-2xl p-6 md:p-8 border border-slate-100 max-w-lg mx-auto w-full relative overflow-hidden"
       >
-        {/* Success Background Decorative Elements */}
-        <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-green-50 rounded-full blur-3xl opacity-60" />
-        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-indigo-50 rounded-full blur-3xl opacity-60" />
-
-        <div className="relative z-10">
-          <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-green-100 mb-8 border-8 border-green-50">
-            <CheckCircle2 className="h-12 w-12 text-green-600" aria-hidden="true" />
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
+        
+        <div className="flex flex-col items-center">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+            <CheckCircle2 className="w-8 h-8 text-green-600" />
           </div>
           
-          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">Payment Successful!</h2>
-          <p className="mt-4 text-xl text-slate-600 max-w-md mx-auto">
-            Your {selectedBundleObj?.volume} {selectedNetwork?.name} data is being processed and will be delivered to:
-          </p>
-          <div className="mt-3 inline-block bg-indigo-50 px-4 py-2 rounded-full border border-indigo-100">
-            <span className="text-2xl font-bold text-indigo-700">{phone}</span>
-          </div>
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight">PAYMENT SUCCESS</h2>
+          <p className="text-slate-500 text-sm font-medium mt-1 uppercase tracking-widest">Transaction Receipt</p>
           
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-slate-50 rounded-2xl p-5 text-left border border-slate-200 shadow-sm transition-hover hover:border-slate-300">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Order Details</h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-500">Network</span>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${selectedNetwork?.color}`} />
-                    <span className="text-sm font-bold text-slate-900">{selectedNetwork?.name}</span>
-                  </div>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-500">Data Bundle</span>
-                  <span className="text-sm font-bold text-slate-900">{selectedBundleObj?.volume}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-500">Amount Paid</span>
-                  <span className="text-sm font-extrabold text-indigo-600">₵{selectedBundleObj?.price.toFixed(2)}</span>
-                </div>
+          {/* Main Receipt Content */}
+          <div className="w-full mt-8 bg-slate-50 rounded-3xl p-6 border border-slate-200/60 relative">
+            {/* Cut-out circles for receipt look */}
+            <div className="absolute top-1/2 -left-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
+            <div className="absolute top-1/2 -right-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
+            
+            <div className="space-y-4 font-mono text-xs text-slate-600 uppercase">
+              <div className="flex justify-between">
+                <span>Date</span>
+                <span className="text-slate-900 font-bold">{new Date().toLocaleDateString()}</span>
               </div>
-            </div>
-
-            <div className="bg-slate-50 rounded-2xl p-5 text-left border border-slate-200 shadow-sm transition-hover hover:border-slate-300">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Reference Info</h3>
-              <div className="space-y-3">
-                <div className="flex flex-col">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Transaction ID</span>
-                  <span className="text-sm font-mono text-slate-700 break-all">{transactionId}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-500">Payer Phone</span>
-                  <span className="text-sm font-semibold text-slate-900">{payerPhone}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-500">Delivery Status</span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-bold text-indigo-700">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Processing
-                  </span>
+              <div className="flex justify-between">
+                <span>Network</span>
+                <span className="text-slate-900 font-bold">{selectedNetwork?.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Bundle</span>
+                <span className="text-slate-900 font-bold">{selectedBundleObj?.volume}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Recipient</span>
+                <span className="text-slate-900 font-bold text-sm tracking-tighter">{phone}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Payer</span>
+                <span className="text-slate-900 font-bold">{payerPhone || phone}</span>
+              </div>
+              
+              <div className="pt-4 border-t border-dashed border-slate-300">
+                <div className="flex justify-between text-base">
+                  <span className="font-bold text-slate-400">Total</span>
+                  <span className="text-indigo-600 font-black">GHS {selectedBundleObj?.price.toFixed(2)}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="mt-8 p-4 bg-amber-50 rounded-2xl border border-amber-100 text-amber-800 text-sm font-medium flex items-center gap-3 justify-center">
-            <ShieldCheck className="h-5 w-5 text-amber-600 shrink-0" />
-            <span>It may take 1-5 minutes for data to arrive. Please contact support if it delays longer.</span>
+          <div className="mt-6 flex flex-col items-center gap-2">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Reference ID</div>
+            <div className="text-[10px] font-mono text-slate-300 break-all text-center px-4">{transactionId}</div>
           </div>
 
-          <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
             <button
               onClick={() => {
                 setSuccess(false);
                 setNetwork('');
                 setBundle('');
                 setPhone('');
+                setPayerPhone('');
                 setTransactionId('');
               }}
-              className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-10 py-4 text-base font-bold text-white shadow-xl hover:bg-slate-800 transition-all active:scale-95"
+              className="px-6 py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-lg shadow-slate-200"
             >
-              Buy Another Bundle
+              Done
             </button>
             <button
               onClick={() => window.open(`https://wa.me/233244014207?text=${encodeURIComponent(`Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})`)}`, '_blank')}
-              className="inline-flex items-center justify-center rounded-2xl bg-white px-10 py-4 text-base font-bold text-slate-900 border-2 border-slate-200 hover:border-slate-400 transition-all active:scale-95"
+              className="px-6 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95"
             >
-              Contact Support
+              Support
             </button>
           </div>
         </div>
@@ -520,23 +534,42 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
             </div>
 
             <div className="pl-0 sm:pl-12">
-               <div className="mb-6">
-                  <label htmlFor="phone" className="block text-sm font-semibold leading-6 text-slate-900 mb-2">
-                    Recipient Phone Number
-                  </label>
-                  <div className="relative rounded-md shadow-sm">
-                     <input
-                      type="tel"
-                      name="phone"
-                      id="phone"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                      className={`block w-full rounded-xl border-0 py-4 px-5 text-slate-900 font-medium text-lg ring-1 ring-inset ${error ? 'ring-red-300 focus:ring-red-500' : 'ring-slate-300 focus:ring-indigo-600'} placeholder:text-slate-400 focus:ring-2 focus:ring-inset`}
-                      placeholder="e.g. 0244123456"
-                    />
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <label htmlFor="payer_phone" className="block text-sm font-semibold leading-6 text-slate-900 mb-2">
+                      Payer Phone Number (Wallet)
+                    </label>
+                    <div className="relative rounded-md shadow-sm">
+                      <input
+                        type="tel"
+                        name="payer_phone"
+                        id="payer_phone"
+                        value={payerPhone}
+                        onChange={(e) => setPayerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        className="block w-full rounded-xl border-0 py-4 px-5 text-slate-900 font-medium text-lg ring-1 ring-inset ring-slate-300 focus:ring-indigo-600 placeholder:text-slate-400 focus:ring-2 focus:ring-inset"
+                        placeholder="e.g. 0244112233"
+                      />
+                    </div>
                   </div>
-                  {error && <p className="mt-2 text-sm text-red-600 font-medium">{error}</p>}
+
+                  <div>
+                    <label htmlFor="phone" className="block text-sm font-semibold leading-6 text-slate-900 mb-2">
+                      Recipient Phone Number
+                    </label>
+                    <div className="relative rounded-md shadow-sm">
+                      <input
+                        type="tel"
+                        name="phone"
+                        id="phone"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        className={`block w-full rounded-xl border-0 py-4 px-5 text-slate-900 font-medium text-lg ring-1 ring-inset ${error ? 'ring-red-300 focus:ring-red-500' : 'ring-slate-300 focus:ring-indigo-600'} placeholder:text-slate-400 focus:ring-2 focus:ring-inset`}
+                        placeholder="e.g. 0244123456"
+                      />
+                    </div>
+                  </div>
                 </div>
+                {error && <p className="mb-4 text-sm text-red-600 font-medium">{error}</p>}
 
                 <div className="pt-4 border-t border-slate-100">
                   <div className="flex justify-between items-center mb-6">
