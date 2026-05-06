@@ -58,7 +58,7 @@ export default function App() {
 
   const isFetchingRole = useRef(false);
 
-  const fetchUserRole = useCallback(async (existingUser?: any) => {
+  const fetchUserRole = useCallback(async (existingUser?: any, retryCount = 0) => {
     if (isFetchingRole.current) return;
     isFetchingRole.current = true;
 
@@ -83,9 +83,12 @@ export default function App() {
         setUserRole(null);
       }
     } catch (err: any) {
-      if (err.message?.includes('Lock') || err.message?.includes('stole')) {
-        // Silently fail for lock errors as they usually mean another request succeeded
-        console.warn('User role fetch lock conflict, skipping...');
+      if ((err.message?.includes('Lock') || err.message?.includes('stole')) && retryCount < 3) {
+        // Retry silently
+        console.warn(`User role fetch lock conflict, retrying (${retryCount + 1}/3)...`);
+        isFetchingRole.current = false;
+        setTimeout(() => fetchUserRole(existingUser, retryCount + 1), 500);
+        return;
       } else {
         console.error('Error fetching user role:', err);
         setUserRole(null);

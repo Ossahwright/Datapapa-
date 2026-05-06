@@ -13,6 +13,21 @@ export default async function handler(req: any, res: any) {
     const result = await callDataHubAPI("user", { method: 'GET' });
 
     if (!result.success) {
+      if (result.error && result.error.includes("404")) {
+        console.warn("⚠️ [Sync] User endpoint 404. Falling back to DB balance.");
+        // Try to fetch existing balance from DB to prevent fatal UI errors
+        const { data: ps } = await supabase
+          .from("provider_settings")
+          .select("wallet_balance")
+          .eq("provider_name", "datahubgh")
+          .single();
+        
+        return res.status(200).json({ 
+          success: true, 
+          balance: ps?.wallet_balance || 0,
+          warning: "API endpoint unavailable, showing cached balance"
+        });
+      }
       throw new Error(result.error);
     }
 

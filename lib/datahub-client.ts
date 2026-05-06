@@ -63,7 +63,11 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
     return { success: true, data };
 
   } catch (error: any) {
-    console.error("❌ DataHub Call Failed:", error.message);
+    if (error.message && error.message.includes("404")) {
+      console.warn("⚠️ DataHub Call Warning: 404 - Service Unavailable");
+    } else {
+      console.error("❌ DataHub Call Failed:", error.message);
+    }
 
     return {
       success: false,

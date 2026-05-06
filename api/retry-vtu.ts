@@ -21,15 +21,15 @@ export default async function handler(req: any, res: any) {
 
     // 🚫 Block invalid retries
     if (tx.delivery_status === "delivered" || tx.vtu_status === "delivered" || tx.vtu_status === "success" || tx.delivery_status === "success") {
-      throw new Error("Already delivered — no retry allowed");
+      return res.json({ success: false, message: "Already delivered — no retry allowed" });
     }
 
     if (tx.delivery_status === "delivering" || tx.vtu_status === "processing" || tx.status === "processing") {
-      throw new Error("Still processing");
+      return res.json({ success: false, message: "Transaction is still being processed" });
     }
 
     if (tx.delivery_status !== "failed" && tx.vtu_status !== "failed" && tx.status !== "failed") {
-      return res.json({ message: "Retry not allowed" });
+      return res.json({ success: false, message: `Retry not allowed (Status: ${tx.delivery_status || tx.status})` });
     }
 
     await supabase.from('transactions').update({
@@ -42,28 +42,30 @@ export default async function handler(req: any, res: any) {
     const rawNetwork = String(tx.network || "").toLowerCase();
     const capacity = String(tx.datahub_capacity || tx.capacity || "").toUpperCase().replace("GB", "").trim();
 
-    return await fetch(`${baseUrl}/api/purchase-data`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        bundle: capacity,
-        phone: tx.recipient_phone,
-        network: rawNetwork,
-        transaction_id: tx.id, // 🔥 CRITICAL
-        payer_phone_number: tx.payer_phone_number
-      }),
-    }).then(async (response) => {
+    try {
+      const response = await fetch(`${baseUrl}/api/purchase-data`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          bundle: capacity,
+          phone: tx.recipient_phone,
+          network: rawNetwork,
+          transaction_id: tx.id, // 🔥 CRITICAL
+          payer_phone_number: tx.payer_phone_number
+        }),
+      });
+
       const respData = await response.json();
       return res.status(response.status).json(respData);
-    }).catch((err) => {
-      console.error("Fetch purchase-data error:", err);
-      throw err;
-    });
+    } catch (fetchErr: any) {
+      console.error("Fetch purchase-data error:", fetchErr);
+      return res.status(500).json({ success: false, error: `Internal communication error: ${fetchErr.message}` });
+    }
 
   } catch (err: any) {
-    console.error(`[RetryVTU] FATAL ERROR for ${transactionId}:`, err);
-    return res.status(500).json({ success: false, error: "Retry failed" });
+    console.error(`[RetryVTU] SYSTEM ERROR for ${transactionId || 'unknown'}:`, err);
+    return res.status(500).json({ success: false, error: "Retry failed due to a system error" });
   }
 }

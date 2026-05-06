@@ -4,6 +4,7 @@ import { usePaystackPayment } from 'react-paystack';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw } from 'lucide-react';
 import axios from 'axios';
+import { openWhatsApp } from '../lib/whatsapp';
 
 const NETWORKS = [
   { id: 'mtn', name: 'MTN', color: 'bg-yellow-500', text: 'text-yellow-950', logo: 'https://i.postimg.cc/BvS8nyGS/download.jpg' },
@@ -56,25 +57,24 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         `🆔 *Ref:* ${tx.id}\n` +
         `📅 *Time:* ${new Date().toLocaleString()}`;
       
-      const whatsappUrl = `https://api.whatsapp.com/send?phone=${adminWhatsApp}&text=${encodeURIComponent(message)}`;
-      
-      // We open this in background or a hidden way if possible, but standard is window.open
-      // For non-intrusive, we logic it so it happens only on success
-      window.open(whatsappUrl, '_blank');
+      // We open this in background or a hidden way if possible
+      // Using the central whatsapp utility fallback mechanism
+      openWhatsApp({ phone: adminWhatsApp, message });
     } catch (e) {
       console.error("WhatsApp Error:", e);
     }
   };
 
-  const fetchBundles = async () => {
+  const fetchBundles = async (retryCount = 0) => {
     if (supabaseReady) {
-      setIsLoadingBundles(true);
+      if (retryCount === 0) setIsLoadingBundles(true);
       setLoadError('');
       try {
         const { data, error } = await supabase.from('bundles').select('*').order('capacity', { ascending: true });
         if (error) {
-          if (error.message?.includes('Lock broken') || error.message?.includes('steal')) {
-            console.warn("Harmless Supabase lock error ignored.");
+          if ((error.message?.includes('Lock broken') || error.message?.includes('steal')) && retryCount < 3) {
+            console.warn(`Supabase lock error, retrying (${retryCount + 1}/3)...`);
+            setTimeout(() => fetchBundles(retryCount + 1), 500);
             return;
           }
           console.error("Supabase error fetching bundles:", error.message);
@@ -84,8 +84,9 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }
       } catch (err: any) {
         let msg = err.message || 'Unknown error occurred';
-        if (msg.includes('Lock broken') || msg.includes('steal')) {
-          console.warn("Harmless Supabase lock abort error ignored.");
+        if ((msg.includes('Lock broken') || msg.includes('steal')) && retryCount < 3) {
+          console.warn(`Supabase lock abort error, retrying (${retryCount + 1}/3)...`);
+          setTimeout(() => fetchBundles(retryCount + 1), 500);
           return;
         }
         console.error("Failed to fetch bundles:", err);
@@ -94,6 +95,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }
         setLoadError(msg);
       } finally {
+        // If we didn't return early to retry, then we are done loading
+        // For clarity, we'll just check if it's not retrying. But since we 'return' on retry, reaching here means we finished!
         setIsLoadingBundles(false);
       }
     } else {
@@ -399,7 +402,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
               Done
             </button>
             <button
-              onClick={() => window.open(`https://wa.me/233244014207?text=${encodeURIComponent(`Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})`)}`, '_blank')}
+              onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
               className="px-6 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95"
             >
               Support

@@ -42,6 +42,7 @@ export default async function handler(req: any, res: any) {
 
     if (isInvalidKey) {
       return res.status(401).json({
+        success: false,
         status: "down",
         online: false,
         providerStatus: response.status,
@@ -67,6 +68,7 @@ export default async function handler(req: any, res: any) {
       }
 
       return res.status(200).json({
+        success: true,
         status: "online",
         online: true,
         providerStatus: response.status,
@@ -80,6 +82,7 @@ export default async function handler(req: any, res: any) {
     }
 
     return res.status(500).json({
+      success: false,
       status: "down",
       online: false,
       providerStatus: response.status,
@@ -89,6 +92,7 @@ export default async function handler(req: any, res: any) {
 
   } catch (error: any) {
     return res.status(500).json({
+      success: false,
       status: "down",
       online: false,
       providerStatus: 500,

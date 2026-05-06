@@ -2,6 +2,10 @@ import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/serv
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
+  console.log("=== PAYSTACK WEBHOOK HIT ===");
+  console.log("Method:", req.method);
+  console.log("Timestamp:", new Date().toISOString());
+
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
   }
@@ -25,12 +29,16 @@ export default async function handler(req: any, res: any) {
       .update(JSON.stringify(req.body))
       .digest("hex");
 
-    if (hash !== signature) {
+    const isValidSignature = hash === signature;
+    console.log("Signature Valid:", isValidSignature);
+
+    if (!isValidSignature) {
       console.error("❌ [Webhook] Invalid signature");
       return res.status(401).send("invalid signature");
     }
 
     const event = req.body;
+    console.log("Webhook Event:", event);
     if (event.event !== "charge.success") {
       return res.status(200).send("ignored");
     }
@@ -57,9 +65,12 @@ export default async function handler(req: any, res: any) {
       .eq("id", transactionId)
       .single();
 
-    console.log("Transaction lookup result", {
-      tx: transaction,
-      findError
+    const tx = transaction;
+    console.log("Transaction Lookup Result:", {
+      transactionId: tx?.id,
+      reference: tx?.reference,
+      phone: tx?.phone,
+      error: findError
     });
 
     if (findError || !transaction) {
@@ -90,11 +101,12 @@ export default async function handler(req: any, res: any) {
     );
 
     // TRIGGER VTU
-    console.log("Triggering DataHub purchase", {
-      transactionId: transaction.id,
-      network: transaction.network,
-      phone: transaction.phone_number || transaction.recipient_phone, // fallback to avoid undefined
-      bundle: transaction.bundle || transaction.capacity
+    console.log("=== ABOUT TO TRIGGER DATAHUB PURCHASE ===");
+    console.log({
+      transactionId: tx?.id,
+      network: tx?.network,
+      phone: tx?.phone || tx?.recipient_phone,
+      bundle: tx?.plan_name || tx?.capacity
     });
 
     try {

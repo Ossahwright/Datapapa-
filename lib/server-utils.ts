@@ -43,6 +43,11 @@ export async function syncWalletSilently() {
       },
     });
 
+    if (response.status === 404) {
+      console.warn("⚠️ [Silent Sync] User endpoint 404. Skipping sync.");
+      return;
+    }
+
     const result = await response.json();
     console.log("DATAHUB BALANCE RESPONSE:", result);
 
