@@ -1,5 +1,4 @@
-import { supabase } from '../lib/server-utils.js';
-import { callDataHubWithRetry } from '../lib/datahub.js';
+import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -37,31 +36,27 @@ export default async function handler(req: any, res: any) {
        updated_at: new Date().toISOString()
     }).eq('id', tx.id);
 
-    // 🔁 Reuse same id → call purchase API again
-    const baseUrl = process.env.BASE_URL || `https://${process.env.VERCEL_URL}`;
-    const rawNetwork = String(tx.network || "").toLowerCase();
-    const capacity = String(tx.datahub_capacity || tx.capacity || "").toUpperCase().replace("GB", "").trim();
-
+    // 🔁 Use purchaseData directly
     try {
-      const response = await fetch(`${baseUrl}/api/purchase-data`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          bundle: capacity,
-          phone: tx.recipient_phone,
-          network: rawNetwork,
-          transaction_id: tx.id, // 🔥 CRITICAL
-          payer_phone_number: tx.payer_phone_number
-        }),
-      });
+      const result = await purchaseData(tx);
+      
+      // Update transaction status if successful (purchaseData handles failed state updates internally)
+      if (result.success) {
+        const providerReference = result.data?.reference || result.data?.id || result.reference;
+        await supabase.from("transactions").update({
+          api_status: "success",
+          delivery_status: "processing",
+          external_reference: providerReference || tx.external_reference
+        }).eq("id", tx.id);
+      }
 
-      const respData = await response.json();
-      return res.status(response.status).json(respData);
-    } catch (fetchErr: any) {
-      console.error("Fetch purchase-data error:", fetchErr);
-      return res.status(500).json({ success: false, error: `Internal communication error: ${fetchErr.message}` });
+      // Sync wallet in background
+      syncWalletSilently().catch(console.error);
+
+      return res.status(result.success ? 200 : 400).json(result);
+    } catch (processErr: any) {
+      console.error("[RetryVTU] Processing error:", processErr);
+      return res.status(500).json({ success: false, error: `Internal processing error: ${processErr.message}` });
     }
 
   } catch (err: any) {

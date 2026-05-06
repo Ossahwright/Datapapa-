@@ -99,13 +99,19 @@ export function formatPhone(phone: string): string {
  * Centralized DataHub Config Helper
  */
 export async function getDataHubConfig() {
+  const defaultUrl = "https://app.datahubgh.com/api/external";
   const envKey = process.env.DATAHUB_API_KEY;
-  const envUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api/external";
+  let envUrl = process.env.DATAHUB_BASE_URL;
+
+  // 🛡️ Sanitize: If envUrl is literally "undefined" or empty, use default
+  if (!envUrl || envUrl === "undefined" || envUrl === "null") {
+    envUrl = defaultUrl;
+  }
 
   if (envKey) {
     return {
       apiKey: envKey.trim(),
-      baseUrl: envUrl
+      baseUrl: envUrl.trim()
     };
   }
 
@@ -117,16 +123,17 @@ export async function getDataHubConfig() {
       .maybeSingle();
     
     if (dhData?.value?.api_key) {
+      const dbUrl = dhData.value.base_url;
       return {
         apiKey: dhData.value.api_key.trim(),
-        baseUrl: dhData.value.base_url || envUrl
+        baseUrl: (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl.trim() : dbUrl.trim()
       };
     }
   } catch (err) {
     console.error("[DataHub Config] Error:", err);
   }
 
-  return { apiKey: "", baseUrl: envUrl };
+  return { apiKey: "", baseUrl: envUrl.trim() };
 }
 
 /**
@@ -290,6 +297,17 @@ export async function purchaseData(transaction: any) {
     finalCapacity = finalCapacity.replace("MB", "").trim();
   }
 
+  console.log("📝 [DataHub] Preparing for purchase:", transaction.id);
+
+  // Set processing status once before retries begin
+  await supabase
+    .from("transactions")
+    .update({ 
+      vtu_status: 'processing',
+      updated_at: new Date().toISOString() 
+    })
+    .eq("id", transaction.id);
+
   const payload = {
     network_id: networkKey,
     network_key: networkKey,
@@ -299,8 +317,6 @@ export async function purchaseData(transaction: any) {
     reference: transaction.id
   };
 
-  console.log("📝 [DataHub] SENDING DATAHUB REQUEST:", JSON.stringify(payload));
-
   const maxRetries = 3;
   let attempts = 0;
   let lastError = null;
@@ -309,43 +325,58 @@ export async function purchaseData(transaction: any) {
     try {
       attempts++;
       if (attempts > 1) {
-        console.log(`🔄 [DataHub] RETRY ATTEMPT ${attempts - 1} for ${transaction.id}`);
+        console.log(`🔄 [DataHub Retry Attempt ${attempts}]`, {
+          transactionId: transaction.id,
+          network: networkKey,
+          recipient,
+          bundle: finalCapacity
+        });
         await new Promise(r => setTimeout(r, 1500));
       }
-
-      await supabase
-        .from("transactions")
-        .update({ 
-          vtu_status: 'processing',
-          updated_at: new Date().toISOString() 
-        })
-        .eq("id", transaction.id);
 
       const { apiKey, baseUrl } = await getDataHubConfig();
       
       if (!apiKey) {
-        throw new Error("DataHub API key missing");
+        throw new Error("DataHub API key is missing in settings");
       }
 
-      const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
+      const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
+      
+      console.log("=== DATAHUB REQUEST ===");
+      console.log({
+        endpoint,
+        payload,
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey ? "PRESENT (REDACTED)" : "MISSING",
+          "Accept": "application/json"
+        }
+      });
+
+      const response = await axios.post(endpoint, payload, {
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
           "Accept": "application/json"
         },
-        timeout: 10000, 
+        timeout: 15000, 
         validateStatus: () => true
       });
 
       const result = response.data;
-      console.log(`📡 [DataHub] DATAHUB RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
+      console.log("=== DATAHUB RESPONSE ===");
+      console.log({
+        status: response.status,
+        data: result,
+        headers: response.headers
+      });
       
       const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
 
       // Log to database
       try {
         await supabase.from("datahub_logs").insert({
-          endpoint: `${baseUrl}/data-purchase`,
+          endpoint,
           status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
           http_status: response.status,
           payload: payload,
@@ -386,18 +417,37 @@ export async function purchaseData(transaction: any) {
       }
 
       // If not successful and we have retries left, continue
-      lastError = result.message || result.error || "Unknown API Error";
-      console.warn(`⚠️ [DataHub] Attempt ${attempts} failed: ${lastError}`);
+      lastError = result.message || result.error || JSON.stringify(result);
+      console.warn(`⚠️ [DataHub] Attempt ${attempts} failed with provider error: ${lastError}`);
       
     } catch (err: any) {
-      lastError = err.message;
-      console.error(`❌ [DataHub] Attempt ${attempts} Exception:`, err.message);
+      console.error("=== DATAHUB FULL ERROR ===");
+      if (err.response) {
+        console.error({
+          status: err.response.status,
+          data: err.response.data,
+          headers: err.response.headers
+        });
+        lastError = `HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}`;
+      } else if (err.request) {
+        console.error("No response received from DataHub");
+        console.error(err.request);
+        lastError = "No response from DataHub server (Timeout/Network)";
+      } else {
+        console.error("Axios setup error:", err.message);
+        lastError = err.message;
+      }
+      
       if (attempts >= maxRetries) break;
     }
   }
 
   // If we reach here, retries exhausted
-  console.error(`❌ [DataHub] ALL RETRIES EXHAUSTED for ${transaction.id}: ${lastError}`);
+  console.error("=== DATAHUB RETRIES EXHAUSTED ===");
+  console.error({
+    transactionId: transaction.id,
+    finalError: lastError
+  });
   await supabase.from("transactions").update({ 
     vtu_status: 'failed', 
     status: 'failed', 

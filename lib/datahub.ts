@@ -40,13 +40,19 @@ async function checkApiHealth(baseUrl: string, apiKey: string) {
 }
 
 export async function getDataHubConfig() {
+  const defaultUrl = "https://app.datahubgh.com/api/external";
   const envKey = process.env.DATAHUB_API_KEY;
-  const envUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api/external";
+  let envUrl = process.env.DATAHUB_BASE_URL;
+
+  // 🛡️ Sanitize: If envUrl is literally "undefined" or empty, use default
+  if (!envUrl || envUrl === "undefined" || envUrl === "null") {
+    envUrl = defaultUrl;
+  }
 
   if (envKey) {
     return {
       apiKey: envKey.trim(),
-      baseUrl: envUrl
+      baseUrl: envUrl.trim()
     };
   }
 
@@ -58,16 +64,17 @@ export async function getDataHubConfig() {
       .maybeSingle();
     
     if (dhData?.value?.api_key) {
+      const dbUrl = dhData.value.base_url;
       return {
         apiKey: dhData.value.api_key.trim(),
-        baseUrl: dhData.value.base_url || envUrl
+        baseUrl: (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl.trim() : dbUrl.trim()
       };
     }
   } catch (err) {
     console.error("[DataHub Config] Error:", err);
   }
 
-  return { apiKey: "", baseUrl: envUrl };
+  return { apiKey: "", baseUrl: envUrl.trim() };
 }
 
 /**
