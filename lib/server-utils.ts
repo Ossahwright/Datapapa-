@@ -108,10 +108,20 @@ export async function getDataHubConfig() {
     envUrl = defaultUrl;
   }
 
+  // 🛡️ Forensic Clean: Ensure baseUrl is the ROOT and does not already contain the endpoint path
+  // If the user pasted the full endpoint into settings, we strip it to prevent duplication.
+  const sanitizeUrl = (url: string) => {
+    let clean = url.trim().replace(/\/+$/, "");
+    if (clean.endsWith("/data-purchase")) {
+      clean = clean.replace("/data-purchase", "");
+    }
+    return clean;
+  };
+
   if (envKey) {
     return {
       apiKey: envKey.trim(),
-      baseUrl: envUrl.trim()
+      baseUrl: sanitizeUrl(envUrl)
     };
   }
 
@@ -124,16 +134,17 @@ export async function getDataHubConfig() {
     
     if (dhData?.value?.api_key) {
       const dbUrl = dhData.value.base_url;
+      const finalUrl = (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl : dbUrl;
       return {
         apiKey: dhData.value.api_key.trim(),
-        baseUrl: (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl.trim() : dbUrl.trim()
+        baseUrl: sanitizeUrl(finalUrl)
       };
     }
   } catch (err) {
     console.error("[DataHub Config] Error:", err);
   }
 
-  return { apiKey: "", baseUrl: envUrl.trim() };
+  return { apiKey: "", baseUrl: sanitizeUrl(envUrl) };
 }
 
 /**
@@ -267,8 +278,8 @@ export async function purchaseData(transaction: any) {
      return { success: true, message: "Processing in progress", vtu_status: 'processing' };
   }
 
-  console.log("🚀 [DataHub] Purchasing for:", transaction.id);
-
+  console.log("📝 [DataHub] Initializing purchase sequence for:", transaction.id);
+  
   let recipient = transaction.recipient_phone;
   if (recipient && recipient.startsWith('233') && recipient.length > 10) {
     recipient = '0' + recipient.slice(3);
@@ -276,28 +287,28 @@ export async function purchaseData(transaction: any) {
     recipient = '0' + recipient;
   }
 
+  // 🗺️ Network Normalization
   const networkMapping: Record<string, string> = {
     'mtn': 'YELLO',
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
-    'airteltigo': 'AT',
-    'at': 'AT'
+    'airteltigo': 'AT_PREMIUM',
+    'at': 'AT_PREMIUM'
   };
 
   const rawNetwork = String(transaction.network || "").toLowerCase();
   const networkKey = transaction.datahub_network_key || 
                     transaction.network_key || 
                     networkMapping[rawNetwork] || 
-                    transaction.network;
+                    transaction.network?.toUpperCase();
 
+  // 📦 Payload Preparation
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
   let finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
   
   if (finalCapacity.includes("MB")) {
     finalCapacity = finalCapacity.replace("MB", "").trim();
   }
-
-  console.log("📝 [DataHub] Preparing for purchase:", transaction.id);
 
   // Set processing status once before retries begin
   await supabase
@@ -308,11 +319,10 @@ export async function purchaseData(transaction: any) {
     })
     .eq("id", transaction.id);
 
+  // Official Documented Payload Structure ONLY
   const payload = {
-    network_id: networkKey,
-    network_key: networkKey,
+    networkKey: networkKey,
     recipient,
-    plan: finalCapacity,
     capacity: finalCapacity,
     reference: transaction.id
   };
@@ -324,34 +334,36 @@ export async function purchaseData(transaction: any) {
   while (attempts < maxRetries) {
     try {
       attempts++;
-      if (attempts > 1) {
-        console.log(`🔄 [DataHub Retry Attempt ${attempts}]`, {
-          transactionId: transaction.id,
-          network: networkKey,
-          recipient,
-          bundle: finalCapacity
-        });
-        await new Promise(r => setTimeout(r, 1500));
-      }
-
       const { apiKey, baseUrl } = await getDataHubConfig();
       
       if (!apiKey) {
         throw new Error("DataHub API key is missing in settings");
       }
 
-      const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
+      // 🛡️ Final URL Construction (Double Guarded)
+      const base = baseUrl.replace(/\/+$/, "");
+      const endpoint = `${base}/data-purchase`;
       
-      console.log("=== DATAHUB REQUEST ===");
+      console.log("=== FINAL DATAHUB URL ===");
+      console.log(endpoint);
+      
+      console.log("=== DATAHUB REQUEST PAYLOAD ===");
+      console.log(payload);
+
+      console.log("=== DATAHUB REQUEST HEADERS ===");
       console.log({
-        endpoint,
-        payload,
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey ? "PRESENT (REDACTED)" : "MISSING",
-          "Accept": "application/json"
-        }
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey ? "PRESENT (REDACTED)" : "MISSING",
+        "Accept": "application/json"
       });
+
+      if (attempts > 1) {
+        console.log(`🔄 [DataHub Retry Attempt ${attempts}]`, {
+          transactionId: transaction.id,
+          url: endpoint
+        });
+        await new Promise(r => setTimeout(r, 2000));
+      }
 
       const response = await axios.post(endpoint, payload, {
         headers: {
@@ -364,11 +376,21 @@ export async function purchaseData(transaction: any) {
       });
 
       const result = response.data;
-      console.log("=== DATAHUB RESPONSE ===");
+      
+      // 🛡️ Handle HTML 404 responses
+      if (typeof result === 'string' && result.includes('<!DOCTYPE html>')) {
+        console.error("=== DATAHUB HTML ERROR DETECTED ===");
+        console.error(`Status ${response.status} from ${endpoint}`);
+        console.error("The provider's web server returned a Page Not Found (HTML) instead of JSON.");
+        lastError = `HTTP ${response.status}: Endpoint returned HTML 404. Malformed URL suspected: ${endpoint}`;
+        if (attempts >= maxRetries) break;
+        continue; 
+      }
+
+      console.log("=== DATAHUB RAW RESPONSE ===");
       console.log({
         status: response.status,
-        data: result,
-        headers: response.headers
+        data: result
       });
       
       const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;

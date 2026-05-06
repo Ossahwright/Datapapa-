@@ -49,10 +49,19 @@ export async function getDataHubConfig() {
     envUrl = defaultUrl;
   }
 
+  // 🛡️ Forensic Clean: Ensure baseUrl is the ROOT and does not already contain the endpoint path
+  const sanitizeUrl = (url: string) => {
+    let clean = url.trim().replace(/\/+$/, "");
+    if (clean.endsWith("/data-purchase")) {
+      clean = clean.replace("/data-purchase", "");
+    }
+    return clean;
+  };
+
   if (envKey) {
     return {
       apiKey: envKey.trim(),
-      baseUrl: envUrl.trim()
+      baseUrl: sanitizeUrl(envUrl)
     };
   }
 
@@ -65,16 +74,17 @@ export async function getDataHubConfig() {
     
     if (dhData?.value?.api_key) {
       const dbUrl = dhData.value.base_url;
+      const finalUrl = (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl : dbUrl;
       return {
         apiKey: dhData.value.api_key.trim(),
-        baseUrl: (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl.trim() : dbUrl.trim()
+        baseUrl: sanitizeUrl(finalUrl)
       };
     }
   } catch (err) {
     console.error("[DataHub Config] Error:", err);
   }
 
-  return { apiKey: "", baseUrl: envUrl.trim() };
+  return { apiKey: "", baseUrl: sanitizeUrl(envUrl) };
 }
 
 /**
@@ -88,9 +98,15 @@ export async function callDataHub(payload: any) {
   // Input Validation
   validateDataHubPayload(payload);
 
-  console.log("🚀 [DataHub] Sending Payload:", JSON.stringify(payload));
+  const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
+  
+  console.log("=== FINAL DATAHUB URL (callDataHub) ===");
+  console.log(endpoint);
 
-  const response = await axios.post(`${baseUrl}/data-purchase`, payload, {
+  console.log("=== DATAHUB REQUEST PAYLOAD ===");
+  console.log(payload);
+
+  const response = await axios.post(endpoint, payload, {
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": apiKey,
@@ -101,7 +117,19 @@ export async function callDataHub(payload: any) {
   });
 
   const data = response.data;
-  console.log("📡 [DataHub] Response:", JSON.stringify(data));
+  
+  // 🛡️ Handle HTML 404 responses
+  if (typeof data === 'string' && data.includes('<!DOCTYPE html>')) {
+    console.error("=== DATAHUB HTML ERROR DETECTED ===");
+    console.error(`Status ${response.status} from ${endpoint}`);
+    throw new Error(`HTTP ${response.status}: Provider returned HTML (Malformed URL: ${endpoint})`);
+  }
+
+  console.log("=== DATAHUB RAW RESPONSE ===");
+  console.log({
+    status: response.status,
+    data: data
+  });
 
   // Log to database
   await supabase.from("datahub_logs").insert({
@@ -135,9 +163,12 @@ export async function queryDataHubStatus(reference: string) {
 
   console.log(`🔍 [DataHub] Checking Status for Ref: ${reference}`);
 
+  const base = baseUrl.replace(/\/+$/, "");
+  const endpoint = `${base}/data-purchase`;
+
   // Many DataHub APIs use GET /data-purchase/{reference} or similar
   // We will try to find the status using the common pattern
-  const response = await axios.get(`${baseUrl}/data-purchase/${reference}`, {
+  const response = await axios.get(`${endpoint}/${reference}`, {
     headers: {
       "X-API-Key": apiKey,
       "Accept": "application/json"
@@ -148,7 +179,7 @@ export async function queryDataHubStatus(reference: string) {
 
   // If that doesn't work, we try the query param approach which is also common
   if (response.status === 404 || response.status === 405) {
-    const altResponse = await axios.get(`${baseUrl}/data-purchase?reference=${reference}`, {
+    const altResponse = await axios.get(`${endpoint}?reference=${reference}`, {
       headers: { "X-API-Key": apiKey },
       timeout: 10000,
       validateStatus: () => true

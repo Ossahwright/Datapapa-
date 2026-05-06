@@ -1,9 +1,10 @@
-import { supabase } from '../lib/server-utils.js';
+import { supabase, getDataHubConfig } from '../lib/server-utils.js';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
   try {
-    const apiKey = process.env.DATAHUB_API_KEY || '';
+    const { apiKey, baseUrl } = await getDataHubConfig();
+    const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
 
     // FALLBACK APPROACH: Minimal authenticated request to the purchase endpoint.
     // We send an empty body `{}`.
@@ -12,18 +13,33 @@ export default async function handler(req: any, res: any) {
     // This allows us to verify connectivity AND authentication without placing an actual order
     // nor deducting any wallet balance.
     const response = await fetch(
-      "https://app.datahubgh.com/api/external/data-purchase",
+      endpoint,
       {
         method: "POST",
         headers: {
           "X-API-Key": apiKey,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({}) // Deliberately empty
+        body: JSON.stringify({
+          networkKey: "YELLO",
+          recipient: "0000000000",
+          capacity: "1",
+          reference: "ping_" + Date.now()
+        }) 
       }
     );
 
     const text = await response.text();
+    
+    // 🛡️ Handle HTML response
+    if (text.includes('<!DOCTYPE html>')) {
+      return res.status(500).json({
+        success: false,
+        error: "Provider returned HTML (likely 404). Check API URL.",
+        status: "down"
+      });
+    }
+
     let data;
     try {
       data = JSON.parse(text);

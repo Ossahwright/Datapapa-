@@ -13,9 +13,21 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
   const baseUrl = config.baseUrl || "https://app.datahubgh.com/api/external";
 
   const cleanEndpoint = endpoint.replace(/^\/+/, "");
-  const url = `${baseUrl.replace(/\/+$/, "")}/${cleanEndpoint}`;
+  
+  // 🛡️ Guard against double-concatenation
+  const base = baseUrl.replace(/\/+$/, "");
+  let url = `${base}/${cleanEndpoint}`;
+  
+  if (base.toLowerCase().endsWith(cleanEndpoint.toLowerCase())) {
+     url = base; 
+  }
 
-  console.log("CALLING DATAHUB:", url);
+  console.log("=== DATAHUB API CALL ===");
+  console.log("FINAL URL:", url);
+  console.log("METHOD:", options.method || "POST");
+  if (options.body) {
+    console.log("PAYLOAD:", options.body);
+  }
 
   try {
     const response = await fetch(url, {
@@ -23,6 +35,7 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": apiKey || "",
+        "Accept": "application/json"
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
@@ -32,7 +45,8 @@ export async function callDataHubAPI(endpoint: string, options: any = {}) {
     const isHtml = text.trim().toLowerCase().startsWith("<!doctype html>") || text.trim().toLowerCase().startsWith("<html>");
     
     if (isHtml) {
-       console.log("📡 [DataHub] Received HTML instead of JSON. Possible 404 or maintenance page.");
+       console.error("📡 [DataHub] HTML PAGE DETECTED! Likely 404 or malformed URL.");
+       console.error("URL CALLED:", url);
     }
 
     let data;
