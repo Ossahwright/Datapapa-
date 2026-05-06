@@ -42,9 +42,19 @@ export default async function handler(req: any, res: any) {
     // Use the unified logic from server-utils.ts
     const result = await purchaseData(txData);
 
+    console.log("DataHub purchase result", result);
+
     if (result.success) {
+      if (!finalTransactionId) {
+        console.error("Missing finalTransactionId");
+      }
+
       const providerReference = result.data?.reference || result.data?.id || result.reference;
       
+      if (!providerReference) {
+        console.error("Missing providerReference");
+      }
+
       const updatePayload: any = {
         api_status: "success",
         delivery_status: "processing"
@@ -55,10 +65,22 @@ export default async function handler(req: any, res: any) {
         updatePayload.external_reference = providerReference;
       }
 
-      await supabase
+      console.log("Updating transaction with SERVICE ROLE permissions", {
+        transaction_id: txData.id,
+        providerReference,
+        updatePayload
+      });
+
+      const { data: updatedTx, error: updateError } = await supabase
         .from("transactions")
         .update(updatePayload)
-        .eq("id", finalTransactionId);
+        .eq("id", txData.id)
+        .select();
+
+      console.log("Transaction update result", {
+        updatedTx,
+        updateError
+      });
     }
 
     // Sync wallet in background
