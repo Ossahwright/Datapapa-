@@ -1,8 +1,7 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabase } from '../lib/server-utils.js';
 import { callDataHubAPI } from '../lib/datahub-client.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   try {
     // Allow GET (for quick browser test) and POST
     if (!["GET", "POST"].includes(req.method || "")) {

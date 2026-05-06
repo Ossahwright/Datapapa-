@@ -1,7 +1,6 @@
-import { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabase, sendSMS, buildSuccessSMS, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   const payload = req.body;
   const data = payload?.data || payload; 
   const providerRef = data.reference || data.orderNumber || data.external_reference;

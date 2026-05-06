@@ -1,6 +1,4 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   const apiKey = process.env.DATAHUB_API_KEY;
   const testUrls = [
     "https://app.datahubgh.com/api/external/user",
