@@ -7,7 +7,7 @@ import { supabase } from "./supabase.js";
 function validateDataHubPayload(payload: any) {
   const { networkKey, recipient, capacity } = payload;
 
-  const validNetworks = ["YELLO", "TELECEL", "AT_PREMIUM", "AT_BIGTIME"];
+  const validNetworks = ["YELLO", "TELECEL", "AT", "AT_PREMIUM", "AT_BIGTIME"];
   if (!validNetworks.includes(networkKey)) {
     throw new Error(`Invalid networkKey: ${networkKey}. Must be one of ${validNetworks.join(", ")}`);
   }
@@ -40,19 +40,34 @@ async function checkApiHealth(baseUrl: string, apiKey: string) {
 }
 
 export async function getDataHubConfig() {
-  const { data, error } = await supabase
-    .from("settings")
-    .select("value")
-    .eq("key", "general")
-    .maybeSingle();
+  const envKey = process.env.DATAHUB_API_KEY;
+  const envUrl = process.env.DATAHUB_BASE_URL || "https://app.datahubgh.com/api/external";
 
-  if (error) throw error;
-  
-  const settings = data?.value || {};
-  return {
-    apiKey: process.env.DATAHUB_API_KEY || settings.datahub_api_key,
-    baseUrl: settings.datahub_base_url || "https://app.datahubgh.com/api/external"
-  };
+  if (envKey) {
+    return {
+      apiKey: envKey.trim(),
+      baseUrl: envUrl
+    };
+  }
+
+  try {
+    const { data: dhData } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'datahubgh')
+      .maybeSingle();
+    
+    if (dhData?.value?.api_key) {
+      return {
+        apiKey: dhData.value.api_key.trim(),
+        baseUrl: dhData.value.base_url || envUrl
+      };
+    }
+  } catch (err) {
+    console.error("[DataHub Config] Error:", err);
+  }
+
+  return { apiKey: "", baseUrl: envUrl };
 }
 
 /**

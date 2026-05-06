@@ -27,25 +27,28 @@ export async function syncWalletSilently() {
       return; // skip silently
     }
 
-    const { apiKey } = await getDataHubConfig();
+    const { apiKey, baseUrl } = await getDataHubConfig();
 
     // 🌐 Call DataHubGH API
-    const response = await fetch("https://datahubgh.com/api/balance", {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/user`, {
+      method: "GET",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        "X-API-Key": apiKey,
       },
     });
 
     const result = await response.json();
-    console.log("DATAHUB RESPONSE:", result);
+    console.log("DATAHUB BALANCE RESPONSE:", result);
 
+    const walletData = result?.data || result;
     const balance =
-      result?.balance ??
-      result?.data?.balance ??
-      result?.wallet ??
+      walletData?.wallet_balance ??
+      walletData?.balance ??
+      walletData?.user?.wallet_balance ??
+      walletData?.user?.balance ??
       0;
 
-    if (!response.ok) throw new Error("Balance fetch failed");
+    if (!response.ok) throw new Error(`Balance fetch failed: ${response.status}`);
 
     // 💾 Update DB
     await supabase
@@ -259,8 +262,8 @@ export async function purchaseData(transaction: any) {
     'mtn': 'YELLO',
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
-    'airteltigo': 'AT_PREMIUM',
-    'at': 'AT_PREMIUM'
+    'airteltigo': 'AT',
+    'at': 'AT'
   };
 
   const rawNetwork = String(transaction.network || "").toLowerCase();
@@ -326,14 +329,16 @@ export async function purchaseData(transaction: any) {
       const result = response.data;
       console.log(`📡 [DataHub] DATAHUB RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
       
+      const orderId = result.order_id || result.order_number || result.data?.order_id || result.data?.id;
+
       // Log to database
       try {
         await supabase.from("datahub_logs").insert({
           endpoint: `${baseUrl}/data-purchase`,
           status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
           http_status: response.status,
-          payload: payload, // Renamed from request_payload to payload for consistency
-          response: result, // Renamed from response_data to response for consistency
+          payload: payload,
+          response: result,
           created_at: new Date().toISOString()
         });
       } catch (logErr) {
@@ -345,7 +350,9 @@ export async function purchaseData(transaction: any) {
         result.status === true ||
         result.status?.toUpperCase() === 'SUCCESSFUL' || 
         result.status?.toUpperCase() === 'PROCESSING' ||
-        result.status?.toUpperCase() === 'SUCCESS'
+        result.status?.toUpperCase() === 'SUCCESS' ||
+        result.code === 200 ||
+        result.code === '200'
       );
 
       if (isActuallySuccess) {
@@ -353,6 +360,7 @@ export async function purchaseData(transaction: any) {
           .from("transactions")
           .update({
             vtu_status: 'processing',
+            external_reference: orderId || null,
             api_response: result,
             updated_at: new Date().toISOString()
           })

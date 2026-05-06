@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabase, sendSMS, buildSuccessSMS } from '../lib/server-utils.js';
-import { queryDataHubStatus } from '../lib/datahub';
+import { queryDataHubStatus } from '../lib/datahub.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {

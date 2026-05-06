@@ -1,7 +1,8 @@
+import { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 
-export default async function handler(req: any, res: any) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
   }
@@ -81,10 +82,18 @@ export default async function handler(req: any, res: any) {
     
     if (result?.success) {
       // 📩 CUSTOMER SMS: SUCCESS
-      await sendSMS(
-        transaction.recipient_phone,
-        `Datapapa: ${transaction.capacity} ${transaction.network} data sent to ${transaction.recipient_phone}. Ref: ${transaction.id}`
-      );
+      const successMsg = `Datapapa: ${transaction.capacity} ${transaction.network} data sent to ${transaction.recipient_phone}. Ref: ${transaction.id}`;
+      const smsResponse = await sendSMS(transaction.recipient_phone, successMsg);
+      
+      // Update transaction to show SMS was sent
+      await supabase
+        .from("transactions")
+        .update({ 
+          sms_status: "sent",
+          sms_response: smsResponse,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transaction.id);
     }
 
     return res.status(200).send("ok");

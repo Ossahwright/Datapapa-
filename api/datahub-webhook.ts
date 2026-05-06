@@ -14,12 +14,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ message: "No reference, ignored" });
     }
 
-    // 🔍 Find transaction
-    const { data: tx, error: findError } = await supabase
+    // 🔍 Find transaction (try external_reference then id)
+    let { data: tx, error: findError } = await supabase
       .from("transactions")
       .select("*")
       .eq("external_reference", providerRef)
       .maybeSingle();
+
+    if (!tx && !findError) {
+       // Try matching by internal ID if provider sends it back in reference
+       const { data: txById, error: findByIdError } = await supabase
+         .from("transactions")
+         .select("*")
+         .eq("id", providerRef)
+         .maybeSingle();
+       
+       tx = txById;
+       findError = findByIdError;
+    }
 
     if (findError) throw findError;
 
