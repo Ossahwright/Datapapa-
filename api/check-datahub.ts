@@ -1,16 +1,33 @@
-import { callDataHubAPI } from '../lib/datahub-client.js';
-
 export default async function handler(req: any, res: any) {
   try {
-    const result = await callDataHubAPI("user", { method: 'GET' });
+    const response = await fetch(
+      "https://app.datahubgh.com/api/external/data-purchase",
+      {
+        method: "POST",
+        headers: {
+          "X-API-Key": process.env.DATAHUB_API_KEY || '',
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          networkKey: "YELLO",
+          recipient: "0240000000",
+          capacity: "1"
+        })
+      }
+    );
 
-    return res.json({
-      status: result.success ? "healthy" : "down",
-      online: result.success,
-      timestamp: new Date().toISOString(),
-      data: result.data || {}
+    const text = await response.text();
+
+    return res.status(200).json({
+      ok: response.ok,
+      providerStatus: response.status,
+      providerResponse: text
     });
-  } catch (err: any) {
-     return res.status(200).json({ status: "down", online: false, error: err.message });
+
+  } catch (error: any) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
   }
 }
