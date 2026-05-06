@@ -45,25 +45,7 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalTransactions, setTotalTransactions] = useState(0);
-  const [isSyncing, setIsSyncing] = useState(false);
 
-  const syncTransactions = async () => {
-    try {
-      setIsSyncing(true);
-      const res = await axios.post("/api/sync-transactions");
-      if (res.data.success) {
-        alert(`Synced ${res.data.results?.length || 0} transactions`);
-        fetchTransactions();
-      } else {
-        alert(res.data.message || "No transactions needed syncing");
-      }
-    } catch (err) {
-      console.error("Sync Error:", err);
-      alert("Failed to sync transactions");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
   const [lastBundlesSync, setLastBundlesSync] = useState<string>(new Date().toLocaleTimeString());
@@ -135,7 +117,6 @@ export default function AdminDashboard() {
   const [dataHubBalance, setDataHubBalance] = useState<number | null>(null);
   const [dataHubPing, setDataHubPing] = useState<number | null>(null);
   const [isRefreshingDataHub, setIsRefreshingDataHub] = useState(false);
-  const [isTestingDataHub, setIsTestingDataHub] = useState(false);
   const [dataHubLogs, setDataHubLogs] = useState<any[]>([]);
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
 
@@ -936,12 +917,10 @@ export default function AdminDashboard() {
     }
   };
 
+  const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [txToDelete, setTxToDelete] = useState<any>(null);
   const [isDeletingTx, setIsDeletingTx] = useState(false);
-  const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
-  const [isRetryingSMS, setIsRetryingSMS] = useState<string | null>(null);
-  const [isRecoveringStuck, setIsRecoveringStuck] = useState(false);
 
   const resendSMS = async (tx: any) => {
     try {
@@ -950,38 +929,6 @@ export default function AdminDashboard() {
     } catch (err: any) {
       console.error("Resend SMS failed:", err);
       alert("Failed to resend SMS: " + (err.response?.data?.error || err.message || String(err)));
-    }
-  };
-
-  const retrySMSAction = async (transactionId: string) => {
-    if (isRetryingSMS) return;
-    setIsRetryingSMS(transactionId);
-    try {
-      const response = await axios.post('/api/retry-sms', { transactionId });
-      if (response.data.success) {
-        alert("SMS Sent Successfully!");
-      } else {
-        alert(`SMS failed: ${response.data.error || 'Unknown error'}`);
-      }
-    } catch (err: any) {
-      alert(`Error: ${err.response?.data?.error || err.message}`);
-    } finally {
-      setIsRetryingSMS(null);
-    }
-  };
-
-  const triggerStuckRecovery = async () => {
-    if (isRecoveringStuck) return;
-    setIsRecoveringStuck(true);
-    try {
-      const response = await axios.post('/api/stuck-recovery');
-      const { summary } = response.data;
-      alert(`Recovery complete!\nDetected: ${summary.detected}\nFixed (Marked failed for retry): ${summary.fixed}\nErrors: ${summary.errors}`);
-      fetchTransactions();
-    } catch (err: any) {
-      alert(`Recovery failed: ${err.message}`);
-    } finally {
-      setIsRecoveringStuck(false);
     }
   };
 
@@ -1087,28 +1034,6 @@ export default function AdminDashboard() {
     } finally {
       setIsRefreshingDataHub(false);
       fetchDataHubLogs();
-    }
-  };
-
-  const handleTestDataHub = async () => {
-    setIsTestingDataHub(true);
-    try {
-      const resp = await axios.post('/api/datahubgh/ping');
-      const result = resp.data;
-      if (result.online) {
-        alert(`✅ DataHub Connection Success!\n\nStatus: ${result.status}\nHTTP: ${result.httpStatus}\nLatency: ${result.responseTimeMs}ms\nBase: ${result.baseUrl}\nKey: ${result.hasApiKey ? 'PRESENT' : 'MISSING'}`);
-      } else {
-        alert(`❌ DataHub Connection Failed\n\nError: ${result.error || 'Unknown error'}\nBase: ${result.baseUrl}`);
-      }
-    } catch (err: any) {
-      let errMsg = err.message || String(err);
-      if (err.code === 'ERR_NETWORK') {
-        errMsg = "Network error: The backend may be offline or restarting. Please try again.";
-      }
-      alert(`Test command failed: ${errMsg}`);
-    } finally {
-      setIsTestingDataHub(false);
-      refreshDataHubStatus();
     }
   };
 
@@ -1447,31 +1372,6 @@ export default function AdminDashboard() {
                </div>
             </div>
 
-            {/* Stuck Alerts */}
-            {rows.filter(isStuck).length > 0 && (
-              <div className="bg-rose-50 border border-rose-200 text-rose-700 px-6 py-4 rounded-2xl mb-8 flex items-center justify-between animate-pulse">
-                <div className="flex items-center gap-3">
-                  <AlertCircle className="text-rose-600" />
-                  <span className="font-bold uppercase tracking-tight">🚨 CRITICAL: {rows.filter(isStuck).length} transactions appear stuck !</span>
-                </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={triggerStuckRecovery}
-                    disabled={isRecoveringStuck}
-                    className="bg-white text-rose-600 px-4 py-1.5 border border-rose-200 rounded-xl font-bold text-xs hover:bg-rose-50 transition-colors uppercase tracking-widest"
-                  >
-                    {isRecoveringStuck ? 'Recovering...' : 'Auto-Fix Stuck'}
-                  </button>
-                  <button 
-                    onClick={() => setCurrentView('transactions')}
-                    className="bg-rose-600 text-white px-4 py-1.5 rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors uppercase tracking-widest shadow-lg shadow-rose-200"
-                  >
-                    Review Stalled Orders
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* KPI Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
@@ -1582,23 +1482,13 @@ export default function AdminDashboard() {
                               >
                                 <RefreshCw size={14} className={isRetryingVTU === tx.id ? 'animate-spin' : ''} />
                               </button>
-                              {tx.sms_status === 'failed' ? (
-                                <button 
-                                  onClick={() => retrySMSAction(tx.id)}
-                                  className="p-1.5 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-600 hover:text-white transition-all shadow-sm"
-                                  title="Retry Failed SMS"
-                                >
-                                  <AlertCircle size={14} className={isRetryingSMS === tx.id ? 'animate-pulse' : ''} />
-                                </button>
-                              ) : (
-                                <button 
-                                  onClick={() => resendSMS(tx)}
-                                  className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                                  title="Resend SMS"
-                                >
-                                  <MessageSquare size={14} />
-                                </button>
-                              )}
+                              <button 
+                                onClick={() => resendSMS(tx)}
+                                className="p-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                                title="Resend SMS"
+                              >
+                                <MessageSquare size={14} />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -1658,17 +1548,6 @@ export default function AdminDashboard() {
                   <option value="failed">Failed</option>
                 </select>
                 
-                <button 
-                  onClick={syncTransactions}
-                  disabled={isSyncing}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                    isSyncing ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-100'
-                  }`}
-                >
-                  {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : <Database size={16} />}
-                  <span>Sync Status</span>
-                </button>
-
                 <button 
                   onClick={() => {
                     setFilterNetwork('');
@@ -1840,15 +1719,6 @@ export default function AdminDashboard() {
                                     >
                                       <MessageSquare size={16} />
                                     </button>
-                                    {tx.sms_status === 'failed' && (
-                                      <button 
-                                        onClick={() => retrySMSAction(tx.id)}
-                                        className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-rose-100"
-                                        title="Retry Failed SMS"
-                                      >
-                                        <AlertCircle size={16} />
-                                      </button>
-                                    )}
                                   </div>
                                 )}
                                 <button 
@@ -2350,15 +2220,6 @@ export default function AdminDashboard() {
                                     >
                                       <MessageSquare size={14} />
                                     </button>
-                                    {tx.sms_status === 'failed' && (
-                                      <button 
-                                        onClick={() => retrySMSAction(tx.id)}
-                                        className="p-1.5 bg-rose-50 text-rose-700 rounded-lg hover:bg-rose-100 transition-colors"
-                                        title="Retry Failed SMS"
-                                      >
-                                        <AlertCircle size={14} />
-                                      </button>
-                                    )}
                                   </div>
                                 )}
                               </div>
@@ -2672,25 +2533,15 @@ export default function AdminDashboard() {
                         </div>
                       </div>
                       
-                      <div className="sm:col-span-2 grid grid-cols-2 gap-4">
+                      <div className="sm:col-span-2">
                         <button
                           type="button"
                           onClick={() => syncWallet()}
                           disabled={isRefreshingDataHub}
-                          className="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-indigo-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
+                          className="w-full flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-indigo-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
                         >
                           <RefreshCw className={`mb-2 text-slate-400 group-hover:text-indigo-600 ${isRefreshingDataHub ? 'animate-spin' : ''}`} size={20} />
-                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Sync Status</span>
-                        </button>
-                        
-                        <button
-                          type="button"
-                          onClick={handleTestDataHub}
-                          disabled={isTestingDataHub || !dataHubSettings.api_key}
-                          className="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-white hover:border-emerald-300 hover:shadow-md transition-all group active:scale-95 disabled:opacity-50"
-                        >
-                          <CheckCircle2 className="mb-2 text-slate-400 group-hover:text-emerald-600" size={20} />
-                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Test Connection</span>
+                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Sync Balance</span>
                         </button>
                       </div>
                     </div>
