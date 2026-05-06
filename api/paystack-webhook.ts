@@ -13,6 +13,11 @@ export default async function handler(req: any, res: any) {
       return res.status(200).send("env missing");
     }
 
+    console.log("Paystack webhook received", {
+      event: req.body?.event,
+      reference: req.body?.data?.reference
+    });
+
     // SIGNATURE VERIFICATION
     const signature = req.headers["x-paystack-signature"];
     const hash = crypto
@@ -30,6 +35,8 @@ export default async function handler(req: any, res: any) {
       return res.status(200).send("ignored");
     }
 
+    console.log("Paystack payment verified successfully");
+
     const paystackReference = event.data?.reference;
     const customerPhone = event.data?.customer?.phone;
     let metadata = event.data?.metadata;
@@ -39,22 +46,29 @@ export default async function handler(req: any, res: any) {
 
     const transactionId = metadata?.transaction_id;
     if (!transactionId) {
+      console.log("No transaction ID in metadata");
       return res.status(200).send("no transaction id");
     }
 
     // FETCH TRANSACTION
-    const { data: transaction, error: fetchErr } = await supabase
+    const { data: transaction, error: findError } = await supabase
       .from("transactions")
       .select("*")
       .eq("id", transactionId)
       .single();
 
-    if (fetchErr || !transaction) {
+    console.log("Transaction lookup result", {
+      tx: transaction,
+      findError
+    });
+
+    if (findError || !transaction) {
       return res.status(200).send("transaction not found");
     }
 
     // IDEMPOTENCY CHECK
     if (transaction.status === "paid" || transaction.vtu_status === "success") {
+      console.log("Transaction already processed");
       return res.status(200).send("already processed");
     }
 
@@ -76,23 +90,34 @@ export default async function handler(req: any, res: any) {
     );
 
     // TRIGGER VTU
-    console.log("🚀 [Webhook] Triggering purchaseData for:", transactionId);
-    const result = await purchaseData(transaction);
-    
-    if (result?.success) {
-      // 📩 CUSTOMER SMS: SUCCESS
-      const successMsg = `Datapapa: ${transaction.capacity} ${transaction.network} data sent to ${transaction.recipient_phone}. Ref: ${transaction.id}`;
-      const smsResponse = await sendSMS(transaction.recipient_phone, successMsg);
+    console.log("Triggering DataHub purchase", {
+      transactionId: transaction.id,
+      network: transaction.network,
+      phone: transaction.phone_number || transaction.recipient_phone, // fallback to avoid undefined
+      bundle: transaction.bundle || transaction.capacity
+    });
+
+    try {
+      const result = await purchaseData(transaction);
+      console.log("DataHub purchase response", result);
       
-      // Update transaction to show SMS was sent
-      await supabase
-        .from("transactions")
-        .update({ 
-          sms_status: "sent",
-          sms_response: smsResponse,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", transaction.id);
+      if (result?.success) {
+        // 📩 CUSTOMER SMS: SUCCESS
+        const successMsg = `Datapapa: ${transaction.capacity} ${transaction.network} data sent to ${transaction.recipient_phone}. Ref: ${transaction.id}`;
+        const smsResponse = await sendSMS(transaction.recipient_phone, successMsg);
+        
+        // Update transaction to show SMS was sent
+        await supabase
+          .from("transactions")
+          .update({ 
+            sms_status: "sent",
+            sms_response: smsResponse,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", transaction.id);
+      }
+    } catch (error) {
+       console.error("DataHub purchase trigger failed", error);
     }
 
     return res.status(200).send("ok");

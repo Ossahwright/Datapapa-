@@ -221,7 +221,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       const currentPaystackRef = paystackResponse.reference;
       setTransactionId(currentPaystackRef);
 
-      // Trigger Backend VTU
+      // Webhook will handle actual VTU processing, but we can do a background trigger.
       console.log("🚀 [API] TRIGGERING DATAHUB");
       fetch("/api/purchase-data", {
         method: "POST",
@@ -247,8 +247,21 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         amount: selectedBundleObj?.price
       });
 
+      // Clear the form
+      setPhone('');
+      setPayerPhone('');
+      setBundle('');
+      
+      // Delay so customer can see the success message before refresh
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+
     } catch (err: any) {
       console.error("Payment post-processing error:", err);
+    } finally {
+      setIsLoading(false);
+      setCurrentTxId(null);
     }
   };
 
@@ -260,7 +273,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   useEffect(() => {
     if (currentTxId) {
       // @ts-ignore
-      initializePayment(handlePaymentSuccess, handlePaymentClose);
+      initializePayment({ onSuccess: handlePaymentSuccess, onClose: handlePaymentClose });
     }
   }, [currentTxId]);
 
