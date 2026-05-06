@@ -329,7 +329,7 @@ export async function purchaseData(transaction: any) {
       const result = response.data;
       console.log(`📡 [DataHub] DATAHUB RESPONSE (Attempt ${attempts}):`, JSON.stringify(result));
       
-      const orderId = result.order_id || result.order_number || result.data?.order_id || result.data?.id;
+      const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
 
       // Log to database
       try {

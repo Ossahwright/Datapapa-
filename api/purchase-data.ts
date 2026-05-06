@@ -42,6 +42,25 @@ export default async function handler(req: any, res: any) {
     // Use the unified logic from server-utils.ts
     const result = await purchaseData(txData);
 
+    if (result.success) {
+      const providerReference = result.data?.reference || result.data?.id || result.reference;
+      
+      const updatePayload: any = {
+        api_status: "success",
+        delivery_status: "processing"
+      };
+
+      // Only set external_reference if we received one AND we don't already have one
+      if (providerReference && !txData.external_reference) {
+        updatePayload.external_reference = providerReference;
+      }
+
+      await supabase
+        .from("transactions")
+        .update(updatePayload)
+        .eq("id", finalTransactionId);
+    }
+
     // Sync wallet in background
     syncWalletSilently().catch(console.error);
 
