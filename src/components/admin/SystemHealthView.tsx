@@ -80,8 +80,11 @@ export function SystemHealthView() {
   const fetchSystemState = useCallback(async () => {
     setIsLoading(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
       // 1. Fetch API Health
-      const { data: healthData } = await axios.get("/api/health");
+      const { data: healthData } = await axios.get("/api/health", { headers });
       setHealth(healthData);
 
       // 2. Fetch Stuck Transactions
@@ -134,7 +137,10 @@ export function SystemHealthView() {
   const handleManualRetry = async (txId: string) => {
     setIsRetrying(txId);
     try {
-      const res = await axios.post("/api/retry-vtu", { transactionId: txId });
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      
+      const res = await axios.post("/api/retry-vtu", { transactionId: txId }, { headers });
       if (res.data.success) {
         alert("Retry triggered successfully! Monitoring delivery status...");
         fetchSystemState();

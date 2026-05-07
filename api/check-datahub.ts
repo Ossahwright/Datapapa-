@@ -1,3 +1,11 @@
+/**
+ * ⚠️ PRODUCTION-CRITICAL FILE
+ * DataHub Connectivity and Status Monitoring.
+ * 
+ * 🛡️ BLOCK RULE: NEVER use this file to simulate purchases or send POST payloads.
+ * Strictly checks connectivity via GET /status only.
+ */
+
 import { supabase, getDataHubConfig } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside check-datahub");
@@ -123,15 +131,15 @@ export default async function handler(req: any, res: any) {
       responseTime,
       error: data?.error || "Provider unavailable"
     });
-
   } catch (error: any) {
+    console.error("❌ [API] DataHub Check Error:", error);
     return res.status(500).json({
       success: false,
       status: "down",
       online: false,
       providerStatus: 500,
-      responseTime: Date.now() - startTime,
-      error: error.message || "Provider unavailable"
+      responseTime: 0,
+      error: error instanceof Error ? error.message : "Unknown server error"
     });
   }
 }

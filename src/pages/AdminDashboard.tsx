@@ -181,8 +181,12 @@ export default function AdminDashboard() {
 
     setIsRefreshingDataHub(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
       const res = await fetch("/api/sync-datahub-wallet", {
         method: "POST",
+        headers: headers as any
       });
 
       const data = await res.json();
@@ -209,8 +213,12 @@ export default function AdminDashboard() {
           return;
         }
       }
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
       const res = await fetch("/api/sync-datahub-wallet", {
         method: "POST",
+        headers: headers as any
       });
       const data = await res.json();
       if (data.success) {
@@ -233,8 +241,11 @@ export default function AdminDashboard() {
 
   const loadHealth = async () => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
       const [dhRes] = await Promise.allSettled([
-        axios.get("/api/check-datahub"),
+        axios.get("/api/check-datahub", { headers }),
       ]);
 
       const dh =
@@ -1647,13 +1658,25 @@ export default function AdminDashboard() {
 
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                 <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">
-                  Stuck Orders
+                  Provider Sync
                 </div>
-                <div className="text-3xl font-black text-amber-600">
-                  {rows.filter(isStuck).length}
+                <div className="text-3xl font-black text-indigo-600">
+                  {providerMetrics.success}
                 </div>
                 <p className="text-[10px] text-slate-400 mt-2">
-                  Locked over 5 mins
+                   Webhook wins today
+                </p>
+              </div>
+
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                <div className="text-slate-500 font-bold text-[10px] uppercase tracking-widest mb-2">
+                  Blocked Calls
+                </div>
+                <div className="text-3xl font-black text-rose-600">
+                  {providerMetrics.blocked}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-2">
+                  Unauthorized attempts
                 </p>
               </div>
             </div>

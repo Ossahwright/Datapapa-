@@ -1,3 +1,9 @@
+/**
+ * ⚠️ PRODUCTION-CRITICAL FILE
+ * DataHub API client implementation.
+ * Unauthorized modifications may break live purchases.
+ */
+
 import axios from "axios";
 import { supabase } from "./supabase.js";
 

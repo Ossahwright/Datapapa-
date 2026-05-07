@@ -1,4 +1,10 @@
-import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
+/**
+ * ⚠️ PRODUCTION-CRITICAL FILE
+ * Handles Manual VTU Retries for failed or stuck transactions.
+ * Unauthorized modifications may break live purchases.
+ */
+
+import { supabase, purchaseData, syncWalletSilently, isAdminAuth } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside retry-vtu");
 
@@ -7,6 +13,13 @@ const globalRateLimit = new Map<string, number[]>();
 export default async function handler(req: any, res: any) {
   console.log("retry-vtu handler booted");
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
+  // 🛡️ Admin Auth Enforcement
+  const isAuthorized = await isAdminAuth(req);
+  if (!isAuthorized) {
+    console.warn("🔐 [Unauthorized Access] Blocked manual retry attempt.");
+    return res.status(401).json({ success: false, error: 'Unauthorized: Admin access required' });
+  }
 
   // Rate Limiting: Max 5 retries per minute per IP
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';

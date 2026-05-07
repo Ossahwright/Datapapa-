@@ -1,4 +1,4 @@
-import { supabase } from '../lib/server-utils.js';
+import { supabase, isAdminAuth } from '../lib/server-utils.js';
 import { callDataHubAPI } from '../lib/datahub-client.js';
 
 console.log("server-utils loaded successfully inside sync-datahub-wallet");
@@ -6,6 +6,13 @@ console.log("server-utils loaded successfully inside sync-datahub-wallet");
 export default async function handler(req: any, res: any) {
   console.log("sync-datahub-wallet handler booted");
   try {
+    // 🛡️ Admin Auth Enforcement
+    const isAuthorized = await isAdminAuth(req);
+    if (!isAuthorized) {
+      console.warn("🔐 [Unauthorized Access] Blocked sync attempt.");
+      return res.status(401).json({ success: false, error: 'Unauthorized: Admin access required' });
+    }
+
     // Allow GET (for quick browser test) and POST
     if (!["GET", "POST"].includes(req.method || "")) {
       return res.status(405).json({ error: "Method not allowed" });

@@ -1,3 +1,11 @@
+/**
+ * ⚠️ PRODUCTION-CRITICAL FILE
+ * Handles transactional execution pipeline for Paystack Webhooks.
+ * Unauthorized modifications may break live purchases.
+ * 
+ * Flow: Paystack -> verification -> status update -> DataHub purchase -> delivery update
+ */
+
 import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 

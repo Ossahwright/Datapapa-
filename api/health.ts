@@ -1,4 +1,4 @@
-import { supabase } from '../lib/server-utils.js';
+import { supabase, validateEnv } from '../lib/server-utils.js';
 import axios from 'axios';
 
 console.log("server-utils loaded successfully inside health");
@@ -6,10 +6,14 @@ console.log("server-utils loaded successfully inside health");
 export default async function handler(req: any, res: any) {
   console.log("health handler booted");
   try {
+    // 🛡️ STEP 4: STARTUP ENV VALIDATION
+    const envCheck = validateEnv();
+
     const healthData: any = {
       success: true,
-      status: "ok",
+      status: envCheck.valid ? "ok" : "degraded",
       time: new Date().toISOString(),
+      env: envCheck,
       services: {
         database: { status: "checking" },
         datahub: { status: "checking" },
@@ -67,8 +71,12 @@ export default async function handler(req: any, res: any) {
       healthData.services.webhooks.status = "error";
     }
 
-    res.status(200).json(healthData);
+    return res.status(200).json(healthData);
   } catch (error: any) {
-    res.status(500).json({ status: "error", error: error.message });
+    console.error("❌ [API] Health Check Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown server error"
+    });
   }
 }

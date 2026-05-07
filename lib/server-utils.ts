@@ -1,3 +1,9 @@
+/**
+ * ⚠️ PRODUCTION-CRITICAL FILE
+ * Core server utilities for Supabase, DataHub, and SMS operations.
+ * Unauthorized modifications may break live purchases.
+ */
+
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
@@ -7,16 +13,15 @@ let supabaseClient: any = null;
 export const getSupabase = () => {
   if (supabaseClient) return supabaseClient;
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseKey) {
     console.error("❌ CRITICAL: Missing SUPABASE_SERVICE_ROLE_KEY environment variable.");
-    // We don't throw here to avoid crashing the whole module load
-    // But we will throw when any database operation is attempted
+    // We handle this more strictly in startup validation now
   }
 
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-  supabaseClient = createClient(supabaseUrl, supabaseKey, {
+  supabaseClient = createClient(supabaseUrl, supabaseKey || "", {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -25,6 +30,53 @@ export const getSupabase = () => {
   });
   return supabaseClient;
 };
+
+/**
+ * 🚀 STEP 4: STARTUP ENV VALIDATION
+ * Ensures all production-critical variables are present.
+ */
+export function validateEnv() {
+  const critical = [
+    'PAYSTACK_SECRET_KEY',
+    'DATAHUB_API_KEY',
+    'VITE_SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY'
+  ];
+  const missing = critical.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.error(`❌ CRITICAL STARTUP ERROR: Missing Environment Variables: ${missing.join(', ')}`);
+    return { valid: false, missing };
+  }
+  return { valid: true };
+}
+
+/**
+ * 🔐 STEP 11: ADMIN AUTH ENFORCEMENT
+ * Verifies if the request is from an authenticated admin.
+ */
+export async function isAdminAuth(req: any) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return false;
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error || !user) return false;
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    return profile?.role === 'admin';
+  } catch (err) {
+    console.error("Admin Auth Check failed:", err);
+    return false;
+  }
+}
 
 // For backward compatibility while we transition
 export const supabase = createClient(
@@ -304,9 +356,10 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     timestamp: new Date().toISOString()
   });
   
-  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api"];
+  // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
+  const allowedSources = ["paystack_webhook", "manual_retry"];
   if (!allowedSources.includes(source)) {
-    const errObj = { error: `Unauthorized purchase source: ${source}` };
+    const errObj = { error: `Unauthorized purchase execution source: ${source}` };
     console.error(`❌ ${errObj.error}`);
     try {
       await supabase.from("datahub_logs").insert({
@@ -320,50 +373,34 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(errObj.error);
   }
 
-  console.log("ID:", transaction.id);
+  // 🛡️ STEP 6: STRICT TRANSACTION SAFETY GATES
   console.log("INITIAL STATE:", {
     status: transaction.status,
     vtu_status: transaction.vtu_status,
     external_reference: transaction.external_reference
   });
 
-  // 🛡️ Idempotency: Don't process if already successful
-  if (transaction.vtu_status === 'success' || transaction.vtu_status === 'completed' || transaction.status === 'completed' || transaction.vtu_status === 'delivered') {
-    console.log("✅ [Safety Gate] Transaction already marked successful. Skipping.");
-    return { success: true, message: "Already processed", vtu_status: 'success' };
-  }
-
-  // 🛡️ Prevent concurrent processing if called within seconds
-  if (transaction.vtu_status === 'processing' && transaction.updated_at && (Date.now() - new Date(transaction.updated_at).getTime() < 30000)) {
-     console.log("⏳ [Safety Gate] Transaction already being processed recursively. Skipping.");
-     return { success: true, message: "Processing in progress", vtu_status: 'processing' };
-  }
-
-  // 🛡️ STRICT IDEMPOTENCY LOCKS
-  console.log("CHECKING PAYMENT STATUS:", transaction.status);
-  // Support multiple valid success states (Step 6)
+  // Support multiple valid success states
   const isPaid = 
     transaction.status === "paid" || 
     transaction.status === "success" || 
-    transaction.status === "completed" ||
     transaction.payment_status === "paid" || 
     transaction.payment_status === "success";
 
   if (!isPaid) {
     console.error("❌ [Safety Reject] Payment not verified. Status:", transaction.status);
-    throw new Error(`Payment not verified: Current status is ${transaction.status}`);
+    throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
-  console.log("CHECKING external_reference:", transaction.external_reference);
   if (transaction.external_reference) {
     console.warn("🛑 [Idempotency Block] Transaction already has external_reference:", transaction.external_reference);
     return { success: true, message: "Already processed at provider level", external_reference: transaction.external_reference };
   }
 
-  console.log("CHECKING delivery_status:", transaction.vtu_status);
-  if (transaction.vtu_status === "success" || transaction.vtu_status === "completed") {
-    console.warn("🛑 [Idempotency Block] Delivery already completed:", transaction.vtu_status);
-    return { success: true, message: "Delivery already completed", vtu_status: transaction.vtu_status };
+  const isLockedStatus = ["success", "completed", "delivered", "processing"].includes(transaction.vtu_status);
+  if (isLockedStatus) {
+    console.log("✅ [Safety Gate] Transaction already processing or completed. Skipping.");
+    return { success: true, message: `Already ${transaction.vtu_status}`, vtu_status: transaction.vtu_status };
   }
 
   if (transaction.status === "cancelled") {
@@ -371,60 +408,37 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error("Cancelled transaction blocked from purchase execution");
   }
 
-  // STEP 7: PRODUCTION SAFETY LOGGING
-  console.log("=== ALL SAFETY CHECKS PASSED ===");
-  console.log({
-    transactionId: transaction.id,
-    recipient: transaction.recipient_phone,
-    payment_status: transaction.status,
-    delivery_status: transaction.vtu_status,
-    external_reference: transaction.external_reference,
-    retry_count: transaction.retry_count || 0
-  });
-
-  console.log("📝 [DataHub] Initializing purchase sequence for:", transaction.id);
-
-  let recipient = transaction.recipient_phone;
+  // 🛡️ STEP 8: RECIPIENT NORMALIZATION (REGEX /^0\d{9}$/)
+  let recipient = (transaction.recipient_phone || "").trim().replace(/\D/g, "");
   
-  // 🛡️ HARD RECIPIENT VALIDATION (STRICT GHANA FORMAT)
-  console.log("CHECKING recipient validation:", recipient);
-  const normalizedRecipient = (recipient || "").trim().replace(/\D/g, "");
-  let finalRecipient = normalizedRecipient;
-  
-  if (finalRecipient.startsWith("233") && finalRecipient.length > 10) {
-    finalRecipient = "0" + finalRecipient.slice(3);
-  } else if (finalRecipient.length === 9 && !finalRecipient.startsWith("0")) {
-    finalRecipient = "0" + finalRecipient;
+  if (recipient.startsWith("233") && recipient.length > 10) {
+    recipient = "0" + recipient.slice(3);
+  } else if (recipient.length === 9 && !recipient.startsWith("0")) {
+    recipient = "0" + recipient;
   }
   
-  if (!/^0\d{9}$/.test(finalRecipient)) {
-     console.error(`❌ [Safety Reject] Invalid recipient format: ${recipient} -> ${finalRecipient}`);
+  if (!/^0\d{9}$/.test(recipient)) {
+     console.error(`❌ [Safety Reject] Invalid recipient format: ${transaction.recipient_phone} -> ${recipient}`);
      await supabase.from("transactions").update({
        vtu_status: 'failed',
-       status: 'failed',
-       error_message: `Invalid recipient format: ${recipient}`
+       error_message: `Recipient normalization failed: ${recipient}`
      }).eq("id", transaction.id);
      
-     throw new Error(`Invalid recipient number: ${finalRecipient}`);
+     throw new Error(`Invalid recipient number: ${recipient}. Must match 0XXXXXXXXX.`);
   }
-  
-  recipient = finalRecipient;
-  console.log("RECIPIENT VALIDATED:", recipient);
 
-  // 🗺️ Network Normalization
+  // 🛡️ STEP 7: LOCK PROVIDER NETWORK NORMALIZATION
   const networkMapping: Record<string, string> = {
     'mtn': 'YELLO',
+    'airteltigo-ishare': 'AT_PREMIUM',
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
-    'airteltigo': 'AT_PREMIUM',
+    'airteltigo-bigtime': 'AT_BIGTIME',
     'at': 'AT_PREMIUM'
   };
 
   const rawNetwork = String(transaction.network || "").toLowerCase();
-  const networkKey = transaction.datahub_network_key || 
-                    transaction.network_key || 
-                    networkMapping[rawNetwork] || 
-                    transaction.network?.toUpperCase();
+  const networkKey = networkMapping[rawNetwork] || transaction.network?.toUpperCase();
   
   console.log("NETWORK MAPPED:", networkKey);
 
@@ -436,7 +450,6 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     finalCapacity = finalCapacity.replace("MB", "").trim();
   }
 
-  // Official Documented Payload Structure ONLY
   const payload = {
     networkKey: networkKey,
     recipient,
