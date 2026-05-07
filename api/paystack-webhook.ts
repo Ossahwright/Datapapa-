@@ -77,10 +77,25 @@ export default async function handler(req: any, res: any) {
       return res.status(200).send("transaction not found");
     }
 
-    // IDEMPOTENCY CHECK
-    if (transaction.status === "paid" || transaction.vtu_status === "success" || transaction.vtu_status === "processing" || transaction.external_reference) {
-      console.log("♻️ [Webhook] Transaction already processed or being processed. Skipping duplication.");
-      return res.status(200).send("already processed");
+    // 🛡️ HARDENED WEBHOOK IDEMPOTENCY (STEP 5)
+    if (
+      transaction.status === "paid" || 
+      transaction.status === "success" ||
+      transaction.vtu_status === "success" || 
+      transaction.vtu_status === "completed" ||
+      transaction.vtu_status === "processing" || 
+      transaction.external_reference
+    ) {
+      console.log("♻️ [Webhook] Duplicate webhook or already processed transaction ignored:", {
+        id: transaction.id,
+        status: transaction.status,
+        vtu_status: transaction.vtu_status,
+        external_reference: transaction.external_reference
+      });
+      return res.status(200).json({ 
+        ignored: true, 
+        message: "Duplicate or already processed" 
+      });
     }
 
     // UPDATE STATUS TO PAID

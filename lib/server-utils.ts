@@ -294,42 +294,42 @@ export async function purchaseData(transaction: any) {
   }
 
   // 🛡️ STRICT IDEMPOTENCY LOCKS
-  if (
-    transaction.status !== "paid" || 
-    transaction.external_reference || 
-    transaction.vtu_status === "success" || 
-    transaction.vtu_status === "completed" ||
-    transaction.vtu_status === "processing"
-  ) {
-    console.warn("⚠️ [Safety Check failed] Transaction already processed or invalid state:", {
-      id: transaction.id,
-      status: transaction.status,
-      vtu_status: transaction.vtu_status,
-      ref: transaction.external_reference
-    });
-    return { success: false, error: "Transaction already processed or in invalid state for purchase" };
+  // STEP 3: IMPLEMENT STRICT IDEMPOTENCY LOCKS
+  if (transaction.status !== "paid" && transaction.status !== "success") {
+    throw new Error(`Payment not verified: Current status is ${transaction.status}`);
   }
 
+  if (transaction.external_reference) {
+    console.warn("🛑 [Idempotency Block] Transaction already has external_reference:", transaction.external_reference);
+    return { success: true, message: "Already processed at provider level", external_reference: transaction.external_reference };
+  }
+
+  if (transaction.vtu_status === "processing" || transaction.vtu_status === "success" || transaction.vtu_status === "completed") {
+    console.warn("🛑 [Idempotency Block] Delivery already in progress or completed:", transaction.vtu_status);
+    return { success: true, message: "Delivery already started", vtu_status: transaction.vtu_status };
+  }
+
+  if (transaction.status === "cancelled") {
+    throw new Error("Cancelled transaction blocked from purchase execution");
+  }
+
+  // STEP 7: PRODUCTION SAFETY LOGGING
   console.log("=== PURCHASE SAFETY CHECK PASSED ===");
   console.log({
     transactionId: transaction.id,
     recipient: transaction.recipient_phone,
     payment_status: transaction.status,
     delivery_status: transaction.vtu_status,
-    external_reference: transaction.external_reference
+    external_reference: transaction.external_reference,
+    retry_count: transaction.retry_count || 0
   });
 
   console.log("📝 [DataHub] Initializing purchase sequence for:", transaction.id);
 
-  // 🚨 EMERGENCY PRODUCTION STABILIZATION BLOCK 🚨
-  return {
-    success: false,
-    error: "Purchases temporarily disabled for safety audit"
-  };
-  
   let recipient = transaction.recipient_phone;
   
   // 🛡️ HARD RECIPIENT VALIDATION (STRICT GHANA FORMAT)
+  // STEP 2: KEEP STRICT RECIPIENT VALIDATION
   const normalizedRecipient = (recipient || "").trim().replace(/\D/g, "");
   let finalRecipient = normalizedRecipient;
   
@@ -347,7 +347,7 @@ export async function purchaseData(transaction: any) {
        error_message: `Invalid recipient format: ${recipient}`
      }).eq("id", transaction.id);
      
-     return { success: false, error: `Invalid recipient format: ${recipient}` };
+     throw new Error(`Invalid recipient number: ${finalRecipient}`);
   }
   
   recipient = finalRecipient;

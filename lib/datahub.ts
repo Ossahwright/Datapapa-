@@ -98,9 +98,6 @@ export async function callDataHub(payload: any) {
   // Input Validation
   validateDataHubPayload(payload);
 
-  // 🚨 EMERGENCY PRODUCTION STABILIZATION BLOCK 🚨
-  throw new Error("Purchases temporarily disabled for safety audit");
-
   const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
   
   console.log("=== FINAL DATAHUB URL (callDataHub) ===");
