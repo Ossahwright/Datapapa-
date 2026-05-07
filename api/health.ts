@@ -1,4 +1,4 @@
-import { supabase } from '../lib/server-utils';
+import { supabase } from '../lib/server-utils.js';
 import axios from 'axios';
 
 console.log("server-utils loaded successfully inside health");

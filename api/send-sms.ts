@@ -1,4 +1,4 @@
-import { sendSMS } from '../lib/server-utils';
+import { sendSMS } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside send-sms");
 

@@ -1,4 +1,4 @@
-import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
+import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside purchase-data");
 

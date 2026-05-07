@@ -1,5 +1,5 @@
 import axios from "axios";
-import { supabase } from "./supabase";
+import { supabase } from "./supabase.js";
 
 /**
  * Validates the payload before sending to DataHub

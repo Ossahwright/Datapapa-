@@ -1,5 +1,5 @@
-import { supabase } from '../lib/server-utils';
-import { callDataHubAPI } from '../lib/datahub-client';
+import { supabase } from '../lib/server-utils.js';
+import { callDataHubAPI } from '../lib/datahub-client.js';
 
 console.log("server-utils loaded successfully inside sync-datahub-wallet");
 

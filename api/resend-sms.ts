@@ -1,4 +1,4 @@
-import { supabase, sendSMS, buildSuccessSMS } from '../lib/server-utils';
+import { supabase, sendSMS, buildSuccessSMS } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside resend-sms");
 

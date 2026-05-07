@@ -1,4 +1,4 @@
-import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
+import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside retry-vtu");
 
@@ -19,8 +19,10 @@ export default async function handler(req: any, res: any) {
   calls.push(now);
   globalRateLimit.set(ip, calls);
 
+  let transactionId = null;
   try {
-    const { transactionId } = req.body;
+    const body = req.body || {};
+    transactionId = body.transactionId;
     if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
 
     console.log("=== RETRY ATTEMPT START ===");

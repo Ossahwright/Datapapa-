@@ -1,4 +1,4 @@
-import { supabase, getDataHubConfig } from '../lib/server-utils';
+import { supabase, getDataHubConfig } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside check-datahub");
 
