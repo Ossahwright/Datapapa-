@@ -1,26 +1,46 @@
 import { supabase, getDataHubConfig } from '../lib/server-utils';
 
+// Simple in-memory global rate limiter since we run in a long-lived process
+const globalRateLimit = new Map<string, number>();
+
 export default async function handler(req: any, res: any) {
+  if (req.method !== "GET") {
+    return res.status(405).json({
+      success: false,
+      error: "Method Not Allowed. This endpoint only accepts GET requests."
+    });
+  }
+  
+  // Rate limits: 1 request per 30 seconds per IP
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  const lastCall = globalRateLimit.get(ip) || 0;
+  if (now - lastCall < 30000) {
+    return res.status(429).json({
+      success: false,
+      error: "Too Many Requests. Health ping limited to 1 per 30 seconds."
+    });
+  }
+  globalRateLimit.set(ip, now);
+
   const startTime = Date.now();
   try {
     const { apiKey, baseUrl } = await getDataHubConfig();
-    const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
+    const endpoint = `${baseUrl.replace(/\/+$/, "")}/status`;
 
-    // FALLBACK APPROACH: Minimal authenticated request to the purchase endpoint.
-    // We send an empty body `{}`.
-    // - If API Key is valid, DataHub returns a validation error (e.g. "networkKey is required").
-    // - If API Key is invalid, DataHub returns "Invalid or inactive API key".
-    // This allows us to verify connectivity AND authentication without placing an actual order
-    // nor deducting any wallet balance.
+    // 🛡️ Production Safety: We MUST use the /status endpoint.
+    // NEVER use the /data-purchase endpoint for health checks, as it counts 
+    // against the provider's API limits and can accidentally trigger logic.
+    
+    // Attempt to GET the status/ping endpoint first
     const response = await fetch(
       endpoint,
       {
-        method: "POST",
+        method: "GET",
         headers: {
-          "X-API-Key": apiKey,
+          "X-API-Key": apiKey || "",
           "Content-Type": "application/json"
-        },
-        body: JSON.stringify({}) // 🛡️ EMERGENCY: Removed placeholder 0000000000 payload to prevent unintended purchases
+        }
       }
     );
 

@@ -8,7 +8,8 @@ import {
   RefreshCw,
   AlertCircle,
   FileText,
-  Calendar
+  Calendar,
+  ShieldAlert
 } from "lucide-react";
 import { SummaryCards } from "./SummaryCards";
 import { AnalyticsCharts } from "./AnalyticsCharts";
@@ -18,20 +19,21 @@ import { format, subDays, startOfDay, endOfDay, isWithinInterval } from "date-fn
 
 export function ReportsView() {
   const [data, setData] = useState<any[]>([]);
+  const [logs, setLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      // Fetch ALL transactions for comprehensive reporting
-      // In a real production app, we might use optimized summary RPCs or paginated aggregation
-      const { data: transactions, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const [txRes, logsRes] = await Promise.all([
+        supabase.from("transactions").select("*").order("created_at", { ascending: false }),
+        // fetch execution logs for firewall/provider stats
+        supabase.from("datahub_logs").select("*").order("created_at", { ascending: false }).limit(2000)
+      ]);
 
-      if (error) throw error;
-      setData(transactions || []);
+      if (txRes.error) throw txRes.error;
+      setData(txRes.data || []);
+      setLogs(logsRes.data || []);
     } catch (err) {
       console.error("❌ Failed to fetch report data:", err);
     } finally {
@@ -124,6 +126,34 @@ export function ReportsView() {
       deliveryStatus
     };
   }, [data]);
+
+  // Provider Execution Statistics
+  const providerStats = useMemo(() => {
+    const defaultStats = {
+      healthChecks: 0,
+      blockedSources: 0,
+      successfulPurchases: 0,
+      failedPurchases: 0,
+      other: 0,
+    };
+    
+    logs.forEach(log => {
+      // endpoints starting with /api/external/status are health checks
+      if (log.endpoint?.includes("/status")) {
+        defaultStats.healthChecks++;
+      } else if (log.status === "blocked_source") {
+        defaultStats.blockedSources++;
+      } else if (log.status === "success" && log.endpoint?.includes("data-purchase")) {
+        defaultStats.successfulPurchases++;
+      } else if (log.status === "failed" && log.endpoint?.includes("data-purchase")) {
+        defaultStats.failedPurchases++;
+      } else {
+        defaultStats.other++;
+      }
+    });
+
+    return defaultStats;
+  }, [logs]);
 
   return (
     <div className="space-y-10">
@@ -222,6 +252,64 @@ export function ReportsView() {
             <div className="flex gap-3">
               <div className="w-1.5 h-1.5 rounded-full bg-indigo-300 mt-1.5"></div>
               <p>Verified all incoming webhook signatures from Paystack.</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-slate-900 p-8 rounded-3xl text-white col-span-1 lg:col-span-3 relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-12 opacity-10">
+            <ShieldAlert size={120} strokeWidth={1} />
+          </div>
+          
+          <h4 className="text-xl font-bold mb-2 relative z-10">Provider Execution Audit</h4>
+          <p className="text-slate-400 text-sm mb-8 max-w-xl relative z-10">
+            Real-time tracking of DataHub API calls and blocked execution attempts (Firewall).
+          </p>
+
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-8 relative z-10">
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Purchases OK</p>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-emerald-400">
+                  {providerStats.successfulPurchases}
+                </span>
+                <span className="text-xs text-slate-500 mb-1.5 pb-0.5">OK</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Purchases Fail</p>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-rose-400">
+                  {providerStats.failedPurchases}
+                </span>
+                <span className="text-xs text-slate-500 mb-1.5 pb-0.5">ERR</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Health Checks</p>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-indigo-400">
+                  {providerStats.healthChecks}
+                </span>
+                <span className="text-xs text-slate-500 mb-1.5 pb-0.5">PINGS</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Blocked Calls</p>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-amber-400">
+                  {providerStats.blockedSources}
+                </span>
+                <span className="text-xs text-slate-500 mb-1.5 pb-0.5">BLOCKED</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1">Other API Calls</p>
+              <div className="flex items-end gap-2">
+                <span className="text-3xl font-black text-slate-400">
+                  {providerStats.other}
+                </span>
+                <span className="text-xs text-slate-500 mb-1.5 pb-0.5">CALLS</span>
+              </div>
             </div>
           </div>
         </div>

@@ -221,9 +221,12 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchProviderSettings();
+    // SAFE POLLING ARCHITECTURE
     const interval = setInterval(() => {
-      fetchProviderSettings();
-    }, 30000); // every 30s
+      if (document.visibilityState === 'visible') {
+        fetchProviderSettings();
+      }
+    }, 300000); // every 5m
 
     return () => clearInterval(interval);
   }, []);
@@ -249,9 +252,15 @@ export default function AdminDashboard() {
   // Health check effect
   useEffect(() => {
     loadHealth();
-    const t = setInterval(loadHealth, 30000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadHealth();
+      }
+    }, 300000); // 5m
     return () => clearInterval(t);
   }, []);
+
+  const [providerMetrics, setProviderMetrics] = useState({ success: 0, failed: 0, blocked: 0 });
 
   // Today metrics effect
   useEffect(() => {
@@ -291,6 +300,21 @@ export default function AdminDashboard() {
           ).length;
           setKpi({ total, revenue, success, failed });
         }
+      }
+
+      // 🚀 Step 10: Provider execution metrics from datahub_logs
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0);
+      const { data: logsData } = await supabase
+        .from("datahub_logs")
+        .select("status")
+        .gte("created_at", todayDate.toISOString());
+
+      if (logsData) {
+        const success = logsData.filter(log => log.status === "success").length;
+        const failed = logsData.filter(log => log.status === "failed").length;
+        const blocked = logsData.filter(log => log.status === "blocked_source").length;
+        setProviderMetrics({ success, failed, blocked });
       }
     };
     fetchKPI();
@@ -968,7 +992,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     // 💓 Heartbeat to keep DataHub status fresh
     const heartbeat = setInterval(() => {
-      if (dataHubSettings.api_key) {
+      if (document.visibilityState === 'visible' && dataHubSettings.api_key) {
         refreshDataHubStatus();
       }
     }, 60000 * 5); // Every 5 minutes

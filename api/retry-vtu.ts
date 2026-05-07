@@ -1,7 +1,20 @@
 import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
 
+const globalRateLimit = new Map<string, number[]>();
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
+  // Rate Limiting: Max 5 retries per minute per IP
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  let calls = globalRateLimit.get(ip) || [];
+  calls = calls.filter(t => now - t < 60000);
+  if (calls.length >= 5) {
+    return res.status(429).json({ success: false, error: 'Too many retry attempts. Please wait 1 minute.' });
+  }
+  calls.push(now);
+  globalRateLimit.set(ip, calls);
 
   const { transactionId } = req.body;
   if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
@@ -34,12 +47,12 @@ export default async function handler(req: any, res: any) {
       return res.json({ success: false, message: "Already delivered or has provider reference — no retry allowed" });
     }
 
-    // ⏳ Block if still processing recently
+    // ⏳ Block if still processing recently or retried too soon
     const lastUpdate = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
-    const isRecentlyProcessed = tx.vtu_status === "processing" && (Date.now() - lastUpdate < 30000);
+    const isRecentlyProcessed = (Date.now() - lastUpdate < 60000); // 1 minute cooldown
     if (isRecentlyProcessed) {
-      console.log("⏳ [Retry Blocked] Still processing recently.");
-      return res.json({ success: false, message: "Transaction is still being processed. Please wait 30 seconds." });
+      console.log("⏳ [Retry Blocked] Retried too recently.");
+      return res.status(429).json({ success: false, message: "Please wait 60 seconds between retry attempts." });
     }
 
     // ✅ ALLOW RETRY IF:
@@ -69,7 +82,7 @@ export default async function handler(req: any, res: any) {
       const retryObject = { ...tx };
       if (isStuck) retryObject.status = "paid";
 
-      const result = await purchaseData(retryObject);
+      const result = await purchaseData(retryObject, "manual_retry");
       console.log("=== RETRY EXECUTION RESULT ===");
       console.log(JSON.stringify(result, null, 2));
       

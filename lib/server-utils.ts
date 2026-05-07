@@ -277,9 +277,36 @@ export async function logWebhook({
   }
 }
 
-export async function purchaseData(transaction: any) {
+export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
+
+export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
   // 🚀 FORENSIC TRACING: START
   console.log("=== PURCHASE EXECUTION START ===");
+  console.log({
+    source,
+    transaction_id: transaction.id,
+    recipient: transaction.recipient_phone,
+    networkKey: transaction.network,
+    capacity: transaction.capacity,
+    timestamp: new Date().toISOString()
+  });
+  
+  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api"];
+  if (!allowedSources.includes(source)) {
+    const errObj = { error: `Unauthorized purchase source: ${source}` };
+    console.error(`❌ ${errObj.error}`);
+    try {
+      await supabase.from("datahub_logs").insert({
+        endpoint: "/data-purchase (blocked)",
+        status: "blocked_source",
+        http_status: 403,
+        payload: { transaction_id: transaction.id, source },
+        response: errObj
+      });
+    } catch(e) {}
+    throw new Error(errObj.error);
+  }
+
   console.log("ID:", transaction.id);
   console.log("INITIAL STATE:", {
     status: transaction.status,

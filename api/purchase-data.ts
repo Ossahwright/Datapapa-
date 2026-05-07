@@ -65,7 +65,7 @@ export default async function handler(req: any, res: any) {
     }
 
     console.log("=== API TRIGGERING purchaseData ===");
-    const result = await purchaseData(finalTxData);
+    const result = await purchaseData(finalTxData, "direct_api");
 
     console.log("DataHub purchase result", result);
 

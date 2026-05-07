@@ -152,7 +152,7 @@ export default async function handler(req: any, res: any) {
     // TRIGGER VTU
     console.log("=== TRIGGERING DATAHUB PURCHASE ===");
     try {
-      const result = await purchaseData(updatedTransaction);
+      const result = await purchaseData(updatedTransaction, "paystack_webhook");
       console.log("=== PURCHASE EXECUTION RESULT ===");
       console.log(JSON.stringify(result, null, 2));
       

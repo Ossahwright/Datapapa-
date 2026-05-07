@@ -118,7 +118,16 @@ export function SystemHealthView() {
 
   useEffect(() => {
     fetchSystemState();
-    const interval = setInterval(fetchSystemState, 60000); // 60s heartbeats
+    
+    // SAFE POLLING ARCHITECTURE (Step 6 & 7)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchSystemState();
+      } else {
+        console.log("Tab suspended. Skipping health polling.");
+      }
+    }, 300000); // 5 minutes minimum
+    
     return () => clearInterval(interval);
   }, [fetchSystemState]);
 
