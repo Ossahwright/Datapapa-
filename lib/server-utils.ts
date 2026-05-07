@@ -65,6 +65,9 @@ export async function isAdminAuth(req: any) {
     
     if (error || !user) return false;
 
+    // 🛡️ Owner Fallback
+    if (user.email === 'wrightossah@gmail.com') return true;
+
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
@@ -331,10 +334,11 @@ export async function logWebhook({
   status: 'processed' | 'ignored' | 'error';
 }) {
   try {
-    await supabase.from("webhook_logs").insert({
-      reference,
-      payload,
-      status,
+    // 🛡️ Log to datahub_logs as it's the more robust table we have defined
+    await supabase.from("datahub_logs").insert({
+      endpoint: "/webhook/datahub",
+      status: `webhook_${status}`,
+      payload: { reference, ...payload },
       created_at: new Date().toISOString()
     });
   } catch (err) {
@@ -357,7 +361,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   });
   
   // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
-  const allowedSources = ["paystack_webhook", "manual_retry"];
+  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api"];
   if (!allowedSources.includes(source)) {
     const errObj = { error: `Unauthorized purchase execution source: ${source}` };
     console.error(`❌ ${errObj.error}`);
@@ -367,7 +371,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         status: "blocked_source",
         http_status: 403,
         payload: { transaction_id: transaction.id, source },
-        response: errObj
+        response: errObj,
+        created_at: new Date().toISOString()
       });
     } catch(e) {}
     throw new Error(errObj.error);
@@ -392,14 +397,18 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
-  if (transaction.external_reference) {
+  // Idempotency: Don't re-run if we already have a provider ref, UNLESS it's a manual retry 
+  // and we suspect the previous call failed or was lost
+  if (transaction.external_reference && source !== "manual_retry") {
     console.warn("🛑 [Idempotency Block] Transaction already has external_reference:", transaction.external_reference);
     return { success: true, message: "Already processed at provider level", external_reference: transaction.external_reference };
   }
 
-  const isLockedStatus = ["success", "completed", "delivered", "processing"].includes(transaction.vtu_status);
-  if (isLockedStatus) {
-    console.log("✅ [Safety Gate] Transaction already processing or completed. Skipping.");
+  const isLockedStatus = ["success", "completed", "delivered"].includes(transaction.vtu_status);
+  
+  // Only lock "processing" if it's NOT a manual retry. 
+  if (isLockedStatus || (transaction.vtu_status === "processing" && source !== "manual_retry")) {
+    console.log(`✅ [Safety Gate] Transaction already ${transaction.vtu_status}. Skipping.`);
     return { success: true, message: `Already ${transaction.vtu_status}`, vtu_status: transaction.vtu_status };
   }
 

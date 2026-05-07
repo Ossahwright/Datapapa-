@@ -10,9 +10,22 @@ export default async function handler(req: any, res: any) {
   try {
     payload = req.body;
     const data = payload?.data || payload; 
-    providerRef = data?.reference || data?.orderNumber || data?.external_reference || "unknown";
+    
+    // 🔍 Extract reference with extreme fallback logic
+    providerRef = data?.reference || data?.orderNumber || data?.external_reference || data?.client_reference || data?.request_id || payload?.reference || "unknown";
 
     console.log("WEBHOOK RECEIVED:", JSON.stringify(payload));
+
+    if (!providerRef || providerRef === "unknown") {
+      // Last ditch effort: scan entire payload for something that looks like our UUID
+      const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+      const payloadString = JSON.stringify(payload);
+      const match = payloadString.match(uuidRegex);
+      if (match) {
+        providerRef = match[0];
+        console.log("🧩 [Webhook] Extracted UUID from payload body:", providerRef);
+      }
+    }
 
     if (!providerRef) {
       await logWebhook({ reference: "unknown", payload, status: 'ignored' });
