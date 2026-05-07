@@ -7,7 +7,9 @@ export default async function handler(req: any, res: any) {
   if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
 
   try {
-    console.log(`[RetryVTU] Triggered for ID: ${transactionId}`);
+    console.log("=== RETRY ATTEMPT START ===");
+    console.log("TRANSACTION ID:", transactionId);
+
     const { data: tx, error: fetchErr } = await supabase
       .from('transactions')
       .select('*')
@@ -15,38 +17,70 @@ export default async function handler(req: any, res: any) {
       .single();
 
     if (fetchErr || !tx) {
+      console.error("❌ Transaction not found for retry:", transactionId);
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
-    // 🚫 Block invalid retries
-    if (tx.delivery_status === "delivered" || tx.vtu_status === "delivered" || tx.vtu_status === "success" || tx.delivery_status === "success") {
-      return res.json({ success: false, message: "Already delivered — no retry allowed" });
+    console.log("CURRENT STATE:", {
+      status: tx.status,
+      vtu_status: tx.vtu_status,
+      ext_ref: tx.external_reference
+    });
+
+    // 🚫 Block invalid retries (Already successful)
+    const isAlreadyDelivered = tx.vtu_status === "success" || tx.vtu_status === "completed" || tx.vtu_status === "delivered";
+    if (isAlreadyDelivered || tx.external_reference) {
+      console.log("✅ [Retry Blocked] Already delivered/has reference.");
+      return res.json({ success: false, message: "Already delivered or has provider reference — no retry allowed" });
     }
 
-    if (tx.delivery_status === "delivering" || tx.vtu_status === "processing" || tx.status === "processing") {
-      return res.json({ success: false, message: "Transaction is still being processed" });
+    // ⏳ Block if still processing recently
+    const lastUpdate = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
+    const isRecentlyProcessed = tx.vtu_status === "processing" && (Date.now() - lastUpdate < 30000);
+    if (isRecentlyProcessed) {
+      console.log("⏳ [Retry Blocked] Still processing recently.");
+      return res.json({ success: false, message: "Transaction is still being processed. Please wait 30 seconds." });
     }
 
-    if (tx.delivery_status !== "failed" && tx.vtu_status !== "failed" && tx.status !== "failed") {
-      return res.json({ success: false, message: `Retry not allowed (Status: ${tx.delivery_status || tx.status})` });
+    // ✅ ALLOW RETRY IF:
+    // 1. It explicitly failed
+    // 2. OR it is "stuck" (paid/success but not success/processing)
+    const isExplicitlyFailed = tx.status === "failed" || tx.vtu_status === "failed";
+    const isStuck = (tx.status === "paid" || tx.status === "success") && !tx.vtu_status;
+    
+    console.log("RETRY QUALIFICATION:", { isExplicitlyFailed, isStuck });
+
+    if (!isExplicitlyFailed && !isStuck && tx.vtu_status !== "processing") {
+      console.error("❌ [Retry Blocked] Not eligible for retry.");
+      return res.json({ success: false, message: `Retry not allowed (Current state: ${tx.vtu_status || tx.status})` });
     }
 
+    console.log("=== INCREMENTING RETRY ATTEMPTS ===");
     await supabase.from('transactions').update({
        delivery_attempts: (tx.delivery_attempts || 0) + 1,
        updated_at: new Date().toISOString()
     }).eq('id', tx.id);
 
     // 🔁 Use purchaseData directly
+    console.log("=== RE-EXECUTING purchaseData ===");
     try {
-      const result = await purchaseData(tx);
+      // 🛡️ CRITICAL: If we are retrying a "stuck" but "paid" transaction, 
+      // ensure we pass the correct object state
+      const retryObject = { ...tx };
+      if (isStuck) retryObject.status = "paid";
+
+      const result = await purchaseData(retryObject);
+      console.log("=== RETRY EXECUTION RESULT ===");
+      console.log(JSON.stringify(result, null, 2));
       
-      // Update transaction status if successful (purchaseData handles failed state updates internally)
+      // Update transaction status if successful
       if (result.success) {
-        const providerReference = result.data?.reference || result.data?.id || result.reference;
+        const providerReference = result.external_reference || result.data?.reference || result.data?.id || result.reference;
         await supabase.from("transactions").update({
           api_status: "success",
-          delivery_status: "processing",
-          external_reference: providerReference || tx.external_reference
+          vtu_status: "processing",
+          external_reference: providerReference || tx.external_reference,
+          updated_at: new Date().toISOString()
         }).eq("id", tx.id);
       }
 

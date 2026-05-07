@@ -40,7 +40,32 @@ export default async function handler(req: any, res: any) {
     }
 
     // Use the unified logic from server-utils.ts
-    const result = await purchaseData(txData);
+    // 🛡️ RACE CONDITION PROTECTION: If status is still pending, wait a moment and re-fetch 
+    // to see if the webhook has finished processing.
+    let finalTxData = txData;
+    if (txData.status === "pending") {
+      console.log("⏳ [API] Transaction pending. Waiting for webhook sync...");
+      await new Promise(r => setTimeout(r, 2000));
+      const { data: refreshedTx } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('id', finalTransactionId)
+        .single();
+      if (refreshedTx) finalTxData = refreshedTx;
+    }
+
+    if (finalTxData.status === "pending") {
+      console.warn("⚠️ [API] Transaction still pending after wait. Webhook might be slow. Purchase will be handled by webhook once payment is confirmed.");
+      return res.status(200).json({ 
+        success: true, 
+        message: "Payment verification in progress. Orders are processed automatically once payment is confirmed.",
+        vtu_status: "pending",
+        trace_id: finalTransactionId
+      });
+    }
+
+    console.log("=== API TRIGGERING purchaseData ===");
+    const result = await purchaseData(finalTxData);
 
     console.log("DataHub purchase result", result);
 

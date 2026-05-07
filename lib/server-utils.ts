@@ -277,44 +277,62 @@ export async function logWebhook({
   }
 }
 
-/**
- * Core Data Purchase Logic
- */
 export async function purchaseData(transaction: any) {
+  // 🚀 FORENSIC TRACING: START
+  console.log("=== PURCHASE EXECUTION START ===");
+  console.log("ID:", transaction.id);
+  console.log("INITIAL STATE:", {
+    status: transaction.status,
+    vtu_status: transaction.vtu_status,
+    external_reference: transaction.external_reference
+  });
+
   // 🛡️ Idempotency: Don't process if already successful
   if (transaction.vtu_status === 'success' || transaction.vtu_status === 'completed' || transaction.status === 'completed' || transaction.vtu_status === 'delivered') {
-    console.log("♻️ [DataHub] Transaction already processed successfully:", transaction.id);
+    console.log("✅ [Safety Gate] Transaction already marked successful. Skipping.");
     return { success: true, message: "Already processed", vtu_status: 'success' };
   }
 
   // 🛡️ Prevent concurrent processing if called within seconds
-  if (transaction.vtu_status === 'processing' && (Date.now() - new Date(transaction.updated_at).getTime() < 30000)) {
-     console.log("⏳ [DataHub] Transaction already being processed:", transaction.id);
+  if (transaction.vtu_status === 'processing' && transaction.updated_at && (Date.now() - new Date(transaction.updated_at).getTime() < 30000)) {
+     console.log("⏳ [Safety Gate] Transaction already being processed recursively. Skipping.");
      return { success: true, message: "Processing in progress", vtu_status: 'processing' };
   }
 
   // 🛡️ STRICT IDEMPOTENCY LOCKS
-  // STEP 3: IMPLEMENT STRICT IDEMPOTENCY LOCKS
-  if (transaction.status !== "paid" && transaction.status !== "success") {
+  console.log("CHECKING PAYMENT STATUS:", transaction.status);
+  // Support multiple valid success states (Step 6)
+  const isPaid = 
+    transaction.status === "paid" || 
+    transaction.status === "success" || 
+    transaction.status === "completed" ||
+    transaction.payment_status === "paid" || 
+    transaction.payment_status === "success";
+
+  if (!isPaid) {
+    console.error("❌ [Safety Reject] Payment not verified. Status:", transaction.status);
     throw new Error(`Payment not verified: Current status is ${transaction.status}`);
   }
 
+  console.log("CHECKING external_reference:", transaction.external_reference);
   if (transaction.external_reference) {
     console.warn("🛑 [Idempotency Block] Transaction already has external_reference:", transaction.external_reference);
     return { success: true, message: "Already processed at provider level", external_reference: transaction.external_reference };
   }
 
-  if (transaction.vtu_status === "processing" || transaction.vtu_status === "success" || transaction.vtu_status === "completed") {
-    console.warn("🛑 [Idempotency Block] Delivery already in progress or completed:", transaction.vtu_status);
-    return { success: true, message: "Delivery already started", vtu_status: transaction.vtu_status };
+  console.log("CHECKING delivery_status:", transaction.vtu_status);
+  if (transaction.vtu_status === "success" || transaction.vtu_status === "completed") {
+    console.warn("🛑 [Idempotency Block] Delivery already completed:", transaction.vtu_status);
+    return { success: true, message: "Delivery already completed", vtu_status: transaction.vtu_status };
   }
 
   if (transaction.status === "cancelled") {
+    console.error("❌ [Safety Reject] Cancelled transaction blocked");
     throw new Error("Cancelled transaction blocked from purchase execution");
   }
 
   // STEP 7: PRODUCTION SAFETY LOGGING
-  console.log("=== PURCHASE SAFETY CHECK PASSED ===");
+  console.log("=== ALL SAFETY CHECKS PASSED ===");
   console.log({
     transactionId: transaction.id,
     recipient: transaction.recipient_phone,
@@ -329,7 +347,7 @@ export async function purchaseData(transaction: any) {
   let recipient = transaction.recipient_phone;
   
   // 🛡️ HARD RECIPIENT VALIDATION (STRICT GHANA FORMAT)
-  // STEP 2: KEEP STRICT RECIPIENT VALIDATION
+  console.log("CHECKING recipient validation:", recipient);
   const normalizedRecipient = (recipient || "").trim().replace(/\D/g, "");
   let finalRecipient = normalizedRecipient;
   
@@ -351,6 +369,7 @@ export async function purchaseData(transaction: any) {
   }
   
   recipient = finalRecipient;
+  console.log("RECIPIENT VALIDATED:", recipient);
 
   // 🗺️ Network Normalization
   const networkMapping: Record<string, string> = {
@@ -366,6 +385,8 @@ export async function purchaseData(transaction: any) {
                     transaction.network_key || 
                     networkMapping[rawNetwork] || 
                     transaction.network?.toUpperCase();
+  
+  console.log("NETWORK MAPPED:", networkKey);
 
   // 📦 Payload Preparation
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
@@ -375,15 +396,6 @@ export async function purchaseData(transaction: any) {
     finalCapacity = finalCapacity.replace("MB", "").trim();
   }
 
-  // Set processing status once before retries begin
-  await supabase
-    .from("transactions")
-    .update({ 
-      vtu_status: 'processing',
-      updated_at: new Date().toISOString() 
-    })
-    .eq("id", transaction.id);
-
   // Official Documented Payload Structure ONLY
   const payload = {
     networkKey: networkKey,
@@ -392,13 +404,15 @@ export async function purchaseData(transaction: any) {
     reference: transaction.id
   };
 
-  const maxRetries = 0; // 🚨 EMERGENCY: Disable all automatic retries
+  const maxAttempts = 1; // 🚀 User requested MAX_RETRIES = 0, so 1 attempt
   let attempts = 0;
   let lastError = null;
 
-  while (attempts < maxRetries) {
+  while (attempts < maxAttempts) {
     try {
       attempts++;
+      console.log(`=== ATTEMPT ${attempts}/${maxAttempts} ===`);
+      
       const { apiKey, baseUrl } = await getDataHubConfig();
       
       if (!apiKey) {
@@ -411,24 +425,18 @@ export async function purchaseData(transaction: any) {
       
       console.log("=== FINAL DATAHUB URL ===");
       console.log(endpoint);
-      
       console.log("=== DATAHUB REQUEST PAYLOAD ===");
       console.log(payload);
-
       console.log("=== DATAHUB REQUEST HEADERS ===");
       console.log({
         "Content-Type": "application/json",
-        "X-API-Key": apiKey ? "PRESENT (REDACTED)" : "MISSING",
+        "X-API-Key": apiKey ? "PRESENT" : "MISSING",
         "Accept": "application/json"
       });
 
-      if (attempts > 1) {
-        console.log(`🔄 [DataHub Retry Attempt ${attempts}]`, {
-          transactionId: transaction.id,
-          url: endpoint
-        });
-        await new Promise(r => setTimeout(r, 2000));
-      }
+      // 🛡️ STEP 7: DO NOT set "processing" before the call begins
+      // We will only update status to processing IF the provider accepts the request.
+      console.log("=== INITIATING PROVIDER CALL ===");
 
       const response = await axios.post(endpoint, payload, {
         headers: {
@@ -436,27 +444,25 @@ export async function purchaseData(transaction: any) {
           "X-API-Key": apiKey,
           "Accept": "application/json"
         },
-        timeout: 15000, 
+        timeout: 20000, 
         validateStatus: () => true
       });
 
       const result = response.data;
       
-      // 🛡️ Handle HTML 404 responses
-      if (typeof result === 'string' && result.includes('<!DOCTYPE html>')) {
-        console.error("=== DATAHUB HTML ERROR DETECTED ===");
-        console.error(`Status ${response.status} from ${endpoint}`);
-        console.error("The provider's web server returned a Page Not Found (HTML) instead of JSON.");
-        lastError = `HTTP ${response.status}: Endpoint returned HTML 404. Malformed URL suspected: ${endpoint}`;
-        if (attempts >= maxRetries) break;
-        continue; 
-      }
-
       console.log("=== DATAHUB RAW RESPONSE ===");
       console.log({
         status: response.status,
         data: result
       });
+
+      // 🛡️ Handle HTML 404 responses
+      if (typeof result === 'string' && result.includes('<!DOCTYPE html>')) {
+        console.error("=== DATAHUB HTML ERROR DETECTED ===");
+        lastError = `HTTP ${response.status}: Endpoint returned HTML (Malformed URL suspected: ${endpoint})`;
+        if (attempts >= maxAttempts) break;
+        continue; 
+      }
       
       const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
 
@@ -485,6 +491,7 @@ export async function purchaseData(transaction: any) {
       );
 
       if (isActuallySuccess) {
+        console.log("✅ DATAHUB EXECUTION SUCCESSFUL");
         await supabase
           .from("transactions")
           .update({
@@ -499,42 +506,30 @@ export async function purchaseData(transaction: any) {
           success: true, 
           status: response.status,
           vtu_status: 'processing',
+          external_reference: orderId,
           ...result 
         };
       }
 
       // If not successful and we have retries left, continue
       lastError = result.message || result.error || JSON.stringify(result);
-      console.warn(`⚠️ [DataHub] Attempt ${attempts} failed with provider error: ${lastError}`);
+      console.warn(`🛑 [DataHub] attempt failed: ${lastError}`);
       
     } catch (err: any) {
-      console.error("=== DATAHUB FULL ERROR ===");
+      console.error("=== DATAHUB REQUEST EXCEPTION ===");
       if (err.response) {
-        console.error({
-          status: err.response.status,
-          data: err.response.data,
-          headers: err.response.headers
-        });
         lastError = `HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}`;
-      } else if (err.request) {
-        console.error("No response received from DataHub");
-        console.error(err.request);
-        lastError = "No response from DataHub server (Timeout/Network)";
+        console.error("RESPONSE DATA:", err.response.data);
       } else {
-        console.error("Axios setup error:", err.message);
         lastError = err.message;
+        console.error("ERROR MESSAGE:", err.message);
       }
-      
-      if (attempts >= maxRetries) break;
+      if (attempts >= maxAttempts) break;
     }
   }
 
-  // If we reach here, retries exhausted
-  console.error("=== DATAHUB RETRIES EXHAUSTED ===");
-  console.error({
-    transactionId: transaction.id,
-    finalError: lastError
-  });
+  // If we reach here, attempts exhausted
+  console.error("=== FINAL FAILURE: ATTEMPTS EXHAUSTED ===");
   await supabase.from("transactions").update({ 
     vtu_status: 'failed', 
     status: 'failed', 

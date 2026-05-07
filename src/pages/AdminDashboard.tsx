@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { ReportsView } from "../components/reports/ReportsView";
+import { SystemHealthView } from "../components/admin/SystemHealthView";
 import {
   LogOut,
   LayoutDashboard,
@@ -41,7 +42,7 @@ export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [currentView, setCurrentView] = useState<
-    "dashboard" | "transactions" | "bundles" | "customers" | "settings" | "reports"
+    "dashboard" | "transactions" | "bundles" | "customers" | "settings" | "reports" | "system-health"
   >("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -1362,6 +1363,7 @@ export default function AdminDashboard() {
             {[
               { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
               { id: "reports", label: "Reports", icon: BarChart3 },
+              { id: "system-health", label: "System Health", icon: Activity },
               { id: "transactions", label: "Transactions", icon: CreditCard },
               { id: "bundles", label: "Bundles", icon: Database },
               { id: "customers", label: "Customers", icon: Users },
@@ -1792,6 +1794,16 @@ export default function AdminDashboard() {
             exit={{ opacity: 0, x: -20 }}
           >
             <ReportsView />
+          </motion.div>
+        )}
+
+        {currentView === "system-health" && (
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+          >
+            <SystemHealthView />
           </motion.div>
         )}
 
