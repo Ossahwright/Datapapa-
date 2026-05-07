@@ -19,9 +19,6 @@ interface HomeProps {
     currency: string;
     support_email: string;
     maintenance_mode: boolean;
-    sms_enabled: boolean;
-    sms_sender_id: string;
-    sms_template_success: string;
   } | null;
 }
 

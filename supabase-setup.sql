@@ -43,8 +43,6 @@ CREATE TABLE public.transactions (
     datahub_network_key TEXT,
     datahub_capacity TEXT,
     delivery_attempts INTEGER DEFAULT 0,
-    sms_status TEXT,
-    sms_response JSONB,
     error_message TEXT,
     api_response JSONB,
     profit NUMERIC,
@@ -191,7 +189,7 @@ WITH CHECK (public.is_admin());
 INSERT INTO public.settings (key, value)
 VALUES (
     'general',
-    '{"app_name": "Datapapa", "currency": "GHS", "support_email": "support@datapapa.com", "maintenance_mode": false, "sms_enabled": true, "sms_sender_id": "Datapapa", "sms_template_success": "Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}."}'::jsonb
+    '{"app_name": "Datapapa", "currency": "GHS", "support_email": "support@datapapa.com", "maintenance_mode": false}'::jsonb
 )
 ON CONFLICT (key) DO NOTHING;
 
@@ -294,21 +292,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 15. Create sms_logs table
-CREATE TABLE IF NOT EXISTS public.sms_logs (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    phone TEXT NOT NULL,
-    message TEXT NOT NULL,
-    status TEXT NOT NULL,           -- sent, failed
-    response JSONB,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-ALTER TABLE public.sms_logs ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Admins can manage sms_logs" ON public.sms_logs;
-CREATE POLICY "Admins can manage sms_logs"
-ON public.sms_logs
-FOR ALL
-USING (public.is_admin())
-WITH CHECK (public.is_admin());
+-- End of script

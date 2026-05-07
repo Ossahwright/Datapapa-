@@ -6,7 +6,7 @@
  * Flow: Paystack -> verification -> status update -> DataHub purchase -> delivery update
  */
 
-import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
+import { supabase, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
@@ -150,36 +150,12 @@ export default async function handler(req: any, res: any) {
       updated_at: updatedTransaction.updated_at
     });
 
-    // 📩 CUSTOMER SMS: PAYMENT RECEIVED
-    console.log("=== SENDING PAYMENT CONFIRMATION SMS ===");
-    await sendSMS(
-      updatedTransaction.recipient_phone,
-      `Datapapa: Your order is being processed for ${updatedTransaction.recipient_phone}.`
-    );
-
     // TRIGGER VTU
     console.log("=== TRIGGERING DATAHUB PURCHASE ===");
     try {
       const result = await purchaseData(updatedTransaction, "paystack_webhook");
       console.log("=== PURCHASE EXECUTION RESULT ===");
       console.log(JSON.stringify(result, null, 2));
-      
-      if (result?.success) {
-        // 📩 CUSTOMER SMS: SUCCESS
-        const successMsg = `Datapapa: ${updatedTransaction.capacity} ${updatedTransaction.network} data sent to ${updatedTransaction.recipient_phone}. Ref: ${updatedTransaction.id}`;
-        console.log("=== SENDING DELIVERY SUCCESS SMS ===");
-        const smsResponse = await sendSMS(updatedTransaction.recipient_phone, successMsg);
-        
-        // Update transaction to show SMS was sent
-        await supabase
-          .from("transactions")
-          .update({ 
-            sms_status: "sent",
-            sms_response: smsResponse,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", updatedTransaction.id);
-      }
     } catch (error: any) {
        console.error("=== DATAHUB PURCHASE FAILED ===");
        console.error(error.message);

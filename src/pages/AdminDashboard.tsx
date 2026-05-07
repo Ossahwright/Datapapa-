@@ -114,10 +114,6 @@ export default function AdminDashboard() {
     currency: "GHS",
     support_email: "support@datapapa.com",
     maintenance_mode: false,
-    sms_enabled: true,
-    sms_sender_id: "Datapapa",
-    sms_template_success:
-      "Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}.",
   });
   const [secureSettings, setSecureSettings] = useState({
     datahub_api_key: "",
@@ -391,7 +387,9 @@ export default function AdminDashboard() {
   useEffect(() => {
     const checkServer = async () => {
       try {
-        const res = await axios.get("/api/health");
+        const { data: { session } } = await supabase.auth.getSession();
+        const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+        const res = await axios.get("/api/health", { headers });
         if (res.status === 200) setServerStatus("up");
         else setServerStatus("down");
       } catch (e) {
@@ -1077,7 +1075,10 @@ export default function AdminDashboard() {
     setIsRetryingVTU(transactionId);
 
     try {
-      const res = await axios.post("/api/retry-vtu", { transactionId });
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
+      const res = await axios.post("/api/retry-vtu", { transactionId }, { headers });
       if (res.data.success === false) {
         alert(res.data.message || res.data.error || "Retry not allowed");
       } else {
@@ -1182,11 +1183,14 @@ export default function AdminDashboard() {
 
     setIsRefreshingDataHub(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
       // 1. Get Balance
       await syncWalletSilently();
 
       // 2. Get Ping/Status
-      const pingResp = await axios.get("/api/check-datahub");
+      const pingResp = await axios.get("/api/check-datahub", { headers });
       const isOnline = pingResp.status === 200 && pingResp.data.online;
 
       if (pingResp.status === 200) {

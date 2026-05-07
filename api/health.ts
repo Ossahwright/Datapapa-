@@ -1,4 +1,4 @@
-import { supabase, validateEnv } from '../lib/server-utils.js';
+import { supabase, validateEnv, isAdminAuth } from '../lib/server-utils.js';
 import axios from 'axios';
 
 console.log("server-utils loaded successfully inside health");
@@ -6,6 +6,12 @@ console.log("server-utils loaded successfully inside health");
 export default async function handler(req: any, res: any) {
   console.log("health handler booted");
   try {
+    // 🛡️ Admin Auth Enforcement
+    const isAuthorized = await isAdminAuth(req);
+    if (!isAuthorized) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     // 🛡️ STEP 4: STARTUP ENV VALIDATION
     const envCheck = validateEnv();
 

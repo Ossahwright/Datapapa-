@@ -1,4 +1,4 @@
-import { supabase, sendSMS, buildSuccessSMS, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
+import { supabase, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside datahub-webhook");
 
@@ -129,36 +129,6 @@ export default async function handler(req: any, res: any) {
     }).eq("id", tx.id);
 
     if (updateError) throw updateError;
-
-    // 🔥 Trigger SMS (only if delivered and not sent)
-    if (isSuccess && tx.sms_status !== "sent") {
-      try {
-        const message = buildSuccessSMS({
-          volume: tx.capacity || "data",
-          network: tx.network || "provider",
-          phone: tx.recipient_phone,
-          transactionId: tx.id
-        });
-
-        console.log("🚀 Sending SMS to:", tx.recipient_phone);
-        const smsResult = await sendSMS(tx.recipient_phone, message);
-
-        await supabase
-          .from("transactions")
-          .update({ 
-            sms_status: "sent",
-            sms_response: smsResult 
-          })
-          .eq("id", tx.id);
-
-      } catch (err: any) {
-        console.error("SMS ERROR:", err.message);
-        await supabase
-          .from("transactions")
-          .update({ sms_status: "failed" })
-          .eq("id", tx.id);
-      }
-    }
 
     await logWebhook({ reference: providerRef, payload, status: 'processed' });
 

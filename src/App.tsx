@@ -12,9 +12,6 @@ interface AppSettings {
   currency: string;
   support_email: string;
   maintenance_mode: boolean;
-  sms_enabled: boolean;
-  sms_sender_id: string;
-  sms_template_success: string;
 }
 
 export default function App() {
@@ -49,9 +46,6 @@ export default function App() {
         currency: 'GHS',
         support_email: 'support@datapapa.com',
         maintenance_mode: false,
-        sms_enabled: true,
-        sms_sender_id: 'Datapapa',
-        sms_template_success: 'Hello! You have successfully received {volume} data on your {network} line. Thank you for using {app_name}.'
       });
     }
   }, []);

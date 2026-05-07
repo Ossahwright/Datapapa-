@@ -6,7 +6,7 @@
  * Strictly checks connectivity via GET /status only.
  */
 
-import { supabase, getDataHubConfig } from '../lib/server-utils.js';
+import { supabase, getDataHubConfig, isAdminAuth } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside check-datahub");
 
@@ -15,6 +15,13 @@ const globalRateLimit = new Map<string, number>();
 
 export default async function handler(req: any, res: any) {
   console.log("check-datahub handler booted");
+
+  // 🛡️ Admin Auth Enforcement
+  const isAuthorized = await isAdminAuth(req);
+  if (!isAuthorized) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
   if (req.method !== "GET") {
     return res.status(405).json({
       success: false,

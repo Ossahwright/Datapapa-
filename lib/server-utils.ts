@@ -1,6 +1,6 @@
 /**
  * ⚠️ PRODUCTION-CRITICAL FILE
- * Core server utilities for Supabase, DataHub, and SMS operations.
+ * Core server utilities for Supabase and DataHub operations.
  * Unauthorized modifications may break live purchases.
  */
 
@@ -230,100 +230,6 @@ export async function getDataHubConfig() {
   return { apiKey: "", baseUrl: sanitizeUrl(envUrl) };
 }
 
-/**
- * Sends SMS via Arkesel V2
- */
-export async function sendSMS(to: string, message: string, senderId?: string) {
-  try {
-    const arkeselKey = process.env.ARKESEL_API_KEY?.trim();
-    if (!arkeselKey) {
-      console.error("❌ [SMS] Missing ARKESEL_API_KEY");
-      return { success: false, error: "SMS key missing" };
-    }
-
-    const formatted = formatPhone(to);
-    const finalSender = (senderId || process.env.ARKESEL_SENDER_ID || "Datapapa").slice(0, 11);
-
-    console.log("🚀 [SMS] Sending SMS to:", formatted, "| Msg:", message.substring(0, 50) + (message.length > 50 ? "..." : ""));
-    
-    const payload = {
-      sender: finalSender,
-      message: message,
-      recipients: [formatted]
-    };
-
-    const response = await axios.post("https://sms.arkesel.com/api/v2/sms/send", payload, {
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": arkeselKey,
-      },
-      timeout: 20000
-    });
-
-    const data = response.data;
-    console.log("📡 [SMS] SMS API response:", JSON.stringify(data));
-
-    // Log to database
-    try {
-      const isSuccess = data && (
-        String(data).includes('1000') || 
-        data.code === '1000' || 
-        data.code === 1000 || 
-        data.status === 'success'
-      );
-
-      await supabase.from("sms_logs").insert({
-        phone: formatted,
-        message: message,
-        status: isSuccess ? "sent" : "failed",
-        response: data,
-        created_at: new Date().toISOString()
-      });
-    } catch (logErr) {
-      console.error("[SMS] Log error:", logErr);
-    }
-
-    return data;
-  } catch (err: any) {
-    if (err.response) {
-      console.error("❌ [SMS] Error Response:", JSON.stringify(err.response.data));
-    }
-    console.error("❌ [SMS] Error:", err.message);
-    return { success: false, error: err.message };
-  }
-}
-
-/**
- * Builds the success message using a template from settings
- */
-export function buildSuccessSMS({
-  volume,
-  network,
-  phone,
-  transactionId,
-}: {
-  volume: string;
-  network: string;
-  phone: string;
-  transactionId: string;
-  template?: string;
-}) {
-  const capacityStr = volume || '';
-  const networkStr = (network || '').toUpperCase();
-  
-  let phoneStr = phone || '';
-  if (phoneStr.startsWith('233') && phoneStr.length > 10) {
-    phoneStr = '0' + phoneStr.slice(3);
-  } else if (phoneStr.length === 9 && !phoneStr.startsWith('0')) {
-    phoneStr = '0' + phoneStr;
-  }
-
-  return `Datapapa\n\nYour transaction of ${capacityStr} ${networkStr} data for ${phoneStr} was successful.\n\nThank you for choosing Datapapa.`;
-}
-
-/**
- * Logs a webhook event for auditing
- */
 export async function logWebhook({
   reference,
   payload,
