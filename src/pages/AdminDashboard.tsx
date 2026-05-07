@@ -1059,12 +1059,12 @@ export default function AdminDashboard() {
   const refreshAll = async () => {
     setIsLoadingTransactions(true);
     try {
-      await Promise.all([
-        fetchDashboardStats(),
-        fetchTransactions(),
-        fetchProviderSettings(),
-        dataHubSettings.api_key ? refreshDataHubStatus() : Promise.resolve(),
-      ]);
+      await fetchDashboardStats();
+      await fetchTransactions();
+      await fetchProviderSettings();
+      if (dataHubSettings.api_key) {
+        await refreshDataHubStatus();
+      }
       setLastDataRefresh(new Date().toLocaleTimeString());
     } catch (err) {
       console.error("Global refresh error:", err);

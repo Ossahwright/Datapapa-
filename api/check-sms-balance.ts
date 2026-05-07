@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 export default async function handler(req: any, res: any) {
+  console.log("check-sms-balance handler booted");
   try {
     const apiKey = process.env.ARKESEL_API_KEY;
     if (!apiKey) return res.json({ balance: 0, error: "API Key missing" });
@@ -13,6 +14,6 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({ balance: Number(balance), raw: data });
   } catch (e: any) {
-    return res.status(200).json({ balance: 0, error: e.message });
+    return res.status(500).json({ balance: 0, error: e.message });
   }
 }

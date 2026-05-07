@@ -16,17 +16,30 @@ export const getSupabase = () => {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-  supabaseClient = createClient(supabaseUrl, supabaseKey);
+  supabaseClient = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
   return supabaseClient;
 };
 
 // For backward compatibility while we transition
 export const supabase = createClient(
   process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  }
 );
 
-console.log("Supabase backend client initialized");
+console.log("server-utils loaded successfully");
 
 export async function syncWalletSilently() {
   try {

@@ -1,9 +1,12 @@
 import { supabase, getDataHubConfig } from '../lib/server-utils';
 
+console.log("server-utils loaded successfully inside check-datahub");
+
 // Simple in-memory global rate limiter since we run in a long-lived process
 const globalRateLimit = new Map<string, number>();
 
 export default async function handler(req: any, res: any) {
+  console.log("check-datahub handler booted");
   if (req.method !== "GET") {
     return res.status(405).json({
       success: false,

@@ -1,9 +1,13 @@
 import { supabase } from '../lib/server-utils';
 import axios from 'axios';
 
+console.log("server-utils loaded successfully inside health");
+
 export default async function handler(req: any, res: any) {
+  console.log("health handler booted");
   try {
     const healthData: any = {
+      success: true,
       status: "ok",
       time: new Date().toISOString(),
       services: {

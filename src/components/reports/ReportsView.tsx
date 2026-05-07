@@ -25,11 +25,8 @@ export function ReportsView() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [txRes, logsRes] = await Promise.all([
-        supabase.from("transactions").select("*").order("created_at", { ascending: false }),
-        // fetch execution logs for firewall/provider stats
-        supabase.from("datahub_logs").select("*").order("created_at", { ascending: false }).limit(2000)
-      ]);
+      const txRes = await supabase.from("transactions").select("*").order("created_at", { ascending: false });
+      const logsRes = await supabase.from("datahub_logs").select("*").order("created_at", { ascending: false }).limit(2000);
 
       if (txRes.error) throw txRes.error;
       setData(txRes.data || []);

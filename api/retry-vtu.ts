@@ -1,8 +1,11 @@
 import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
 
+console.log("server-utils loaded successfully inside retry-vtu");
+
 const globalRateLimit = new Map<string, number[]>();
 
 export default async function handler(req: any, res: any) {
+  console.log("retry-vtu handler booted");
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   // Rate Limiting: Max 5 retries per minute per IP
@@ -16,10 +19,10 @@ export default async function handler(req: any, res: any) {
   calls.push(now);
   globalRateLimit.set(ip, calls);
 
-  const { transactionId } = req.body;
-  if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
-
   try {
+    const { transactionId } = req.body;
+    if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
+
     console.log("=== RETRY ATTEMPT START ===");
     console.log("TRANSACTION ID:", transactionId);
 

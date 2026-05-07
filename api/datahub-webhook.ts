@@ -1,11 +1,14 @@
 import { supabase, sendSMS, buildSuccessSMS, syncWalletSilently, logWebhook } from '../lib/server-utils';
 
-export default async function handler(req: any, res: any) {
-  const payload = req.body;
-  const data = payload?.data || payload; 
-  const providerRef = data.reference || data.orderNumber || data.external_reference;
+console.log("server-utils loaded successfully inside datahub-webhook");
 
+export default async function handler(req: any, res: any) {
+  console.log("datahub-webhook handler booted");
   try {
+    const payload = req.body;
+    const data = payload?.data || payload; 
+    const providerRef = data?.reference || data?.orderNumber || data?.external_reference;
+
     console.log("WEBHOOK RECEIVED:", JSON.stringify(payload));
 
     if (!providerRef) {

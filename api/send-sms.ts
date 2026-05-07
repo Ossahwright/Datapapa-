@@ -1,20 +1,22 @@
 import { sendSMS } from '../lib/server-utils';
 
+console.log("server-utils loaded successfully inside send-sms");
+
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-
-  const { phone, recipients, message, sender, to } = req.body;
-  const target = to || phone || (Array.isArray(recipients) ? recipients[0] : recipients);
-
-  if (!target || !message) {
-    return res.status(400).json({ success: false, error: 'Target phone and message are required' });
-  }
-
-  console.log(`[API] Send SMS Request to: ${target}`);
-
+  console.log("send-sms handler booted");
   try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method Not Allowed' });
+    }
+
+    const { phone, recipients, message, sender, to } = req.body;
+    const target = to || phone || (Array.isArray(recipients) ? recipients[0] : recipients);
+
+    if (!target || !message) {
+      return res.status(400).json({ success: false, error: 'Target phone and message are required' });
+    }
+
+    console.log(`[API] Send SMS Request to: ${target}`);
     const result = await sendSMS(target, message, sender);
     
     if (result.status === 'success' || result.code === '1000' || result.code === 1000) {

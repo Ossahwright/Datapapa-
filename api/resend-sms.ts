@@ -1,12 +1,14 @@
 import { supabase, sendSMS, buildSuccessSMS } from '../lib/server-utils';
 
+console.log("server-utils loaded successfully inside resend-sms");
+
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
-
-  const { transactionId } = req.body;
-  if (!transactionId) return res.status(400).json({ error: "Transaction ID required" });
-
+  console.log("resend-sms handler booted");
   try {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
+    const { transactionId } = req.body;
+    if (!transactionId) return res.status(400).json({ error: "Transaction ID required" });
     const { data: transaction, error: fetchErr } = await supabase
       .from("transactions")
       .select("*")

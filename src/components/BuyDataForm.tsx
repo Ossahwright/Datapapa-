@@ -55,7 +55,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         const { data, error } = await supabase.from('bundles').select('*').order('capacity', { ascending: true });
         if (error) {
           if ((error.message?.includes('Lock broken') || error.message?.includes('steal')) && retryCount < 3) {
-            console.warn(`Supabase lock error, retrying (${retryCount + 1}/3)...`);
+            console.log(`Supabase lock error, retrying (${retryCount + 1}/3)...`);
             setTimeout(() => fetchBundles(retryCount + 1), 500);
             return;
           }
@@ -67,7 +67,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       } catch (err: any) {
         let msg = err.message || 'Unknown error occurred';
         if ((msg.includes('Lock broken') || msg.includes('steal')) && retryCount < 3) {
-          console.warn(`Supabase lock abort error, retrying (${retryCount + 1}/3)...`);
+          console.log(`Supabase lock abort error, retrying (${retryCount + 1}/3)...`);
           setTimeout(() => fetchBundles(retryCount + 1), 500);
           return;
         }
@@ -208,7 +208,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
       // Webhook will handle actual VTU processing, but we can do a background trigger.
       console.log("🚀 [API] TRIGGERING DATAHUB");
-      fetch("/api/purchase-data", {
+      await fetch("/api/purchase-data", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -220,7 +220,13 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           transaction_id: currentTxId, 
           payer_phone_number: payerPhone || phone // Fallback to recipient if empty
         }),
-      }).catch(e => console.error("VTU trigger error:", e));
+      }).catch(e => {
+        if (e.message && e.message.includes("Failed to fetch")) {
+           console.log("VTU trigger background request was aborted or failed to fetch (ignoring).");
+        } else {
+           console.error("VTU trigger error:", e);
+        }
+      });
 
       // Clear the form
       setPhone('');

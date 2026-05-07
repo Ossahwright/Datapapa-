@@ -83,9 +83,9 @@ export default function App() {
         setUserRole(null);
       }
     } catch (err: any) {
-      if ((err.message?.includes('Lock') || err.message?.includes('stole')) && retryCount < 3) {
+      if ((err.message?.includes('Lock') || err.message?.includes('steal')) && retryCount < 3) {
         // Retry silently
-        console.warn(`User role fetch lock conflict, retrying (${retryCount + 1}/3)...`);
+        console.log(`User role fetch lock conflict, retrying (${retryCount + 1}/3)...`);
         isFetchingRole.current = false;
         setTimeout(() => fetchUserRole(existingUser, retryCount + 1), 500);
         return;
@@ -103,7 +103,11 @@ export default function App() {
     
     // Set a maximum wait time for initialization
     const timeoutPromise = new Promise(resolve => setTimeout(resolve, 5000));
-    const initPromise = Promise.all([fetchGlobalSettings(), fetchUserRole()]);
+    
+    const initPromise = (async () => {
+      await fetchUserRole();
+      await fetchGlobalSettings();
+    })();
     
     await Promise.race([initPromise, timeoutPromise]);
     setIsLoading(false);

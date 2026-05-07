@@ -178,8 +178,11 @@ export default async function handler(req: any, res: any) {
     }
 
     return res.status(200).send("ok");
-  } catch (err: any) {
-    console.error("❌ [Webhook] Error:", err.message);
-    return res.status(200).send("error");
+  } catch (error: any) {
+    console.error("❌ [Webhook] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown server error"
+    });
   }
 }

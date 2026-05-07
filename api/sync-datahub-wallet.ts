@@ -1,7 +1,10 @@
 import { supabase } from '../lib/server-utils';
 import { callDataHubAPI } from '../lib/datahub-client';
 
+console.log("server-utils loaded successfully inside sync-datahub-wallet");
+
 export default async function handler(req: any, res: any) {
+  console.log("sync-datahub-wallet handler booted");
   try {
     // Allow GET (for quick browser test) and POST
     if (!["GET", "POST"].includes(req.method || "")) {

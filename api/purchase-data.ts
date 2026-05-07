@@ -1,20 +1,22 @@
 import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
 
+console.log("server-utils loaded successfully inside purchase-data");
+
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { paystack_ref, transaction_id, payer_phone_number } = req.body;
-  const finalTransactionId = transaction_id || paystack_ref;
-
-  if (!finalTransactionId) {
-    return res.status(400).json({ error: 'Missing transaction ID' });
-  }
-
-  console.log(`💰 [API] PURCHASE ROUTE TRIGGERED for: ${finalTransactionId}`);
-
+  console.log("purchase-data handler booted");
   try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const { paystack_ref, transaction_id, payer_phone_number } = req.body;
+    const finalTransactionId = transaction_id || paystack_ref;
+
+    if (!finalTransactionId) {
+      return res.status(400).json({ error: 'Missing transaction ID' });
+    }
+
+    console.log(`💰 [API] PURCHASE ROUTE TRIGGERED for: ${finalTransactionId}`);
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .select('*')
