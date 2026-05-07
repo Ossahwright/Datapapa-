@@ -1,4 +1,4 @@
-import { supabase, getDataHubConfig } from '../lib/server-utils.js';
+import { supabase, getDataHubConfig } from '../lib/server-utils';
 
 export default async function handler(req: any, res: any) {
   const startTime = Date.now();
@@ -20,12 +20,7 @@ export default async function handler(req: any, res: any) {
           "X-API-Key": apiKey,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          networkKey: "YELLO",
-          recipient: "0000000000",
-          capacity: "1",
-          reference: "ping_" + Date.now()
-        }) 
+        body: JSON.stringify({}) // 🛡️ EMERGENCY: Removed placeholder 0000000000 payload to prevent unintended purchases
       }
     );
 

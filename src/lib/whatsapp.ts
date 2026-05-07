@@ -1,74 +1,94 @@
+/**
+ * Centralized WhatsApp Messaging Utility for Datapapa
+ * 
+ * Ensures all WhatsApp communications open the direct recipient chat 
+ * instead of self-chats or generic screens.
+ */
+
 export interface WhatsAppOptions {
-  phone?: string;
-  message: string;
+  phone: string; // Recipient number
+  message: string; // Message content
 }
 
 /**
- * Normalizes a phone number to standard Ghana format (233XXXXXXXXX)
+ * STRICT Number Normalization
+ * Resolves local Ghana numbers to canonical 233XXXXXXXXX format.
  */
 export function normalizePhoneNumber(rawPhone: string): string {
   if (!rawPhone) return "";
   
-  // Remove all non-numeric characters
+  // 1. Strip all non-numeric characters
   let cleaned = rawPhone.trim().replace(/\D/g, "");
   
-  // Handle start with 0 (standard Ghana local format)
-  if (cleaned.startsWith("0")) {
+  // 2. Handle standard local format (starts with 0, 10 digits)
+  if (cleaned.length === 10 && cleaned.startsWith("0")) {
     cleaned = "233" + cleaned.slice(1);
   } 
-  // Handle 9-digit numbers (missing lead 0 or international code)
+  
+  // 3. Handle 9-digit format (missing lead zero)
   else if (cleaned.length === 9) {
     cleaned = "233" + cleaned;
   }
-  // Handle 233 variants
-  else if (cleaned.startsWith("233")) {
-    // If it's like 2330..., remove the 0 after 233
-    if (cleaned.startsWith("2330")) {
-      cleaned = "233" + cleaned.slice(4);
-    }
+  
+  // 4. International format already correct (starts with 233, 12 digits)
+  else if (cleaned.startsWith("233") && cleaned.length === 12) {
+    // Already canonical
+  }
+  
+  // 5. Cleanup accidental 2330... double-prefix
+  else if (cleaned.startsWith("2330") && cleaned.length === 13) {
+    cleaned = "233" + cleaned.slice(4);
   }
 
-  // Final check: standard Ghana WhatsApp numbers are 12 digits (233 + 9 digits)
   return cleaned;
 }
 
 /**
- * Robustly validates if a phone number matches standard formats (Ghana focused)
+ * STRICT Number Validation
+ * Ensures canonical format 233XXXXXXXXX is met.
  */
 export function isValidPhoneNumber(phone: string): boolean {
+  if (!phone) return false;
   const normalized = normalizePhoneNumber(phone);
-  // Basic validation: 10 to 15 digits is safe for global, but 12 is typical for Ghana
-  return normalized.length >= 10 && normalized.length <= 15;
+  
+  // Reject common placeholders/test numbers
+  const testNumbers = ["0000000000", "233000000000", "0240000000", "0200000000"];
+  if (testNumbers.includes(phone) || testNumbers.includes(normalized)) return false;
+
+  return /^233\d{9}$/.test(normalized);
 }
 
 /**
- * Opens WhatsApp native app on mobile or WhatsApp web on desktop
+ * Launches DIRECT WhatsApp Customer Chat
+ * Uses api.whatsapp.com to ensure reliable redirection and escapes iframe using _blank.
  */
 export function openWhatsApp({ phone, message }: WhatsAppOptions) {
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  const encodedMessage = encodeURIComponent(message);
-  const normalizedPhone = phone ? normalizePhoneNumber(phone) : "";
-
-  if (isMobile) {
-    // Force native app on mobile
-    const nativeUrl = normalizedPhone 
-      ? `whatsapp://send?phone=${normalizedPhone}&text=${encodedMessage}`
-      : `whatsapp://send?text=${encodedMessage}`;
-    
-    window.location.href = nativeUrl;
-    
-    // Fallback to wa.me if the app didn't open (monitored by document focus)
-    setTimeout(() => {
-      if (document.hasFocus()) {
-        window.open(`https://wa.me/${normalizedPhone}?text=${encodedMessage}`, "_blank");
-      }
-    }, 1200);
-  } else {
-    // Use Web WhatsApp for desktop sessions
-    const webUrl = normalizedPhone
-      ? `https://web.whatsapp.com/send?phone=${normalizedPhone}&text=${encodedMessage}`
-      : `https://web.whatsapp.com/send?text=${encodedMessage}`;
-    
-    window.open(webUrl, "_blank", "noopener,noreferrer");
+  if (!phone) {
+    console.error("WhatsApp ERROR: Recipient phone is missing.");
+    return;
   }
+
+  const normalized = normalizePhoneNumber(phone);
+  
+  if (!isValidPhoneNumber(normalized)) {
+    console.error("WhatsApp ERROR: Invalid recipient number format.", { original: phone, normalized });
+    return;
+  }
+
+  const encodedMessage = encodeURIComponent(message);
+  
+  // 🚀 Use api.whatsapp.com/send - it's the more robust official endpoint for web-originated chats.
+  // The 'phone=' parameter is CRITICAL to open the direct customer chat.
+  const finalUrl = `https://api.whatsapp.com/send?phone=${normalized}&text=${encodedMessage}`;
+
+  console.log("🚀 Opening WhatsApp direct customer chat:", {
+    originalRecipient: phone,
+    normalizedRecipient: normalized,
+    finalUrl
+  });
+
+  // 🛡️ CRITICAL: We use window.open(..., "_blank") to escape the iframe sandbox.
+  // Using window.location.href inside an iframe results in a "Refused to connect" 
+  // error because WhatsApp blocks loading its target pages within frames.
+  window.open(finalUrl, "_blank", "noopener,noreferrer");
 }

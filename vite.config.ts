@@ -66,6 +66,7 @@ export default defineConfig(({ mode }) => {
                   }
 
                   // Load and execute the API handler
+                  console.log(`[API Bridge] Loading module: ${filePath}`);
                   const module = await server.ssrLoadModule(filePath);
                   const handler = module.default;
                   
@@ -73,17 +74,26 @@ export default defineConfig(({ mode }) => {
                     console.log(`[API Bridge] Executing: ${apiPath}`);
                     await handler(req, resProxy);
                     return;
+                  } else {
+                    console.warn(`[API Bridge] No default export found in ${filePath}`);
+                    res.statusCode = 500;
+                    res.end(JSON.stringify({ error: "No default export found in handler file" }));
+                    return;
                   }
                 } catch (e: any) {
-                  console.error(`[API Bridge] Error in ${apiPath}:`, e);
+                  console.error(`[API Bridge] Fatal error in ${apiPath}:`, e);
+                  console.error(e.stack);
                   if (!res.headersSent) {
                     res.statusCode = 500;
-                    res.end(JSON.stringify({ error: e.message }));
+                    res.end(JSON.stringify({ error: e.message || "Internal Server Error", stack: e.stack }));
                   }
                   return;
                 }
               } else {
                 console.warn(`[API Bridge] 404: File not found for ${apiPath} (checked ${filePath})`);
+                res.statusCode = 404;
+                res.end(JSON.stringify({ error: "API endpoint file not found" }));
+                return;
               }
             }
             next();

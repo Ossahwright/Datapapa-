@@ -1,4 +1,4 @@
-import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
+import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -7,6 +7,8 @@ export default async function handler(req: any, res: any) {
   if (!transactionId) return res.status(400).json({ success: false, error: 'Missing transaction ID' });
 
   try {
+    return res.status(400).json({ success: false, error: "Retries are temporarily disabled for production stabilization." });
+    
     console.log(`[RetryVTU] Triggered for ID: ${transactionId}`);
     const { data: tx, error: fetchErr } = await supabase
       .from('transactions')

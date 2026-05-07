@@ -1,4 +1,4 @@
-import { supabase, getDataHubConfig } from './server-utils.js';
+import { supabase, getDataHubConfig } from './server-utils';
 
 /**
  * Standardized DataHub API Client

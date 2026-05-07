@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { ReportsView } from "../components/reports/ReportsView";
 import {
   LogOut,
   LayoutDashboard,
@@ -31,6 +32,7 @@ import {
   Home,
   Lock,
   Unlock,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
@@ -39,7 +41,7 @@ export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [currentView, setCurrentView] = useState<
-    "dashboard" | "transactions" | "bundles" | "customers" | "settings"
+    "dashboard" | "transactions" | "bundles" | "customers" | "settings" | "reports"
   >("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -976,13 +978,21 @@ export default function AdminDashboard() {
   const [isDeletingTx, setIsDeletingTx] = useState(false);
 
   const handleWhatsAppMessage = (tx: any) => {
-    const rawPhone = tx.recipient_phone || tx.payer_phone_number || "";
+    // 🛡️ STRICT PRIORITY: Always target the human recipient first
+    const rawPhone = tx.recipient_phone || tx.payer_phone_number || tx.phone || "";
     if (!rawPhone) {
       alert("No phone number available for this transaction.");
       return;
     }
 
-    const message = `Hello *${tx.payer_phone_number || "Customer"}* 👋\n\nYour *Datapapa* transaction has been processed successfully.\n\n📱 *Network:* ${tx.network || "N/A"}\n📦 *Bundle:* ${tx.capacity || "N/A"}\n🔑 *Reference:* ${tx.id || "N/A"}\n\nIf you experience any issue, kindly reply to this message.\n\nThank you for choosing *Datapapa*! ✨`;
+    const network = String(tx.network || "N/A").toUpperCase();
+    const bundle = tx.capacity || tx.bundle_name || tx.volume || "N/A";
+    const recipient = tx.recipient_phone || "N/A";
+    const reference = tx.id || "N/A";
+
+    const message = `Hello 👋\n\nYour ${appSettings.app_name} transaction is being processed successfully.\n\n📶 Network: ${network}\n📦 Bundle: ${bundle}\n📱 Recipient: ${recipient}\n🧾 Reference: ${reference}\n\nThank you for choosing ${appSettings.app_name}.`;
+
+    console.log("🛠️ Preparing direct WhatsApp chat for customer:", { recipient, rawPhone, network });
 
     openWhatsApp({
       phone: rawPhone,
@@ -1351,6 +1361,7 @@ export default function AdminDashboard() {
           <nav className="space-y-1 px-3">
             {[
               { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+              { id: "reports", label: "Reports", icon: BarChart3 },
               { id: "transactions", label: "Transactions", icon: CreditCard },
               { id: "bundles", label: "Bundles", icon: Database },
               { id: "customers", label: "Customers", icon: Users },
@@ -1771,6 +1782,16 @@ export default function AdminDashboard() {
                 </table>
               </div>
             </div>
+          </motion.div>
+        )}
+
+        {currentView === "reports" && (
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+          >
+            <ReportsView />
           </motion.div>
         )}
 
@@ -2683,6 +2704,28 @@ export default function AdminDashboard() {
                                     >
                                       View
                                     </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleWhatsAppMessage({ recipient_phone: customer.recipient_phone });
+                                      }}
+                                      className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors"
+                                      title="Message Customer"
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="14"
+                                        height="14"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      >
+                                        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 1 1-7.6-13.8 8.38 8.38 0 0 1 3.8.9L21 2z"></path>
+                                      </svg>
+                                    </button>
                                     {customer.user_id && (
                                       <button
                                         onClick={(e) => {
@@ -3137,12 +3180,16 @@ export default function AdminDashboard() {
                         </label>
                         <div className="p-5 bg-slate-50 border border-slate-200 rounded-2xl relative group">
                           <pre className="text-sm font-medium text-slate-700 whitespace-pre-wrap font-sans">
-                            Hello Your Datapapa transaction has been processed
-                            successfully. Network: {"{network}"}
-                            Bundle: {"{bundle}"}
-                            Reference: {"{reference}"}
-                            If you experience any issue, kindly reply to this
-                            message. Thank you for using Datapapa.
+                            Hello 👋{"\n"}
+                            {"\n"}
+                            Your Datapapa transaction is being processed successfully.{"\n"}
+                            {"\n"}
+                            📶 Network: {"{network}"}{"\n"}
+                            📦 Bundle: {"{bundle}"}{"\n"}
+                            📱 Recipient: {"{recipient}"}{"\n"}
+                            🧾 Reference: {"{reference}"}{"\n"}
+                            {"\n"}
+                            Thank you for choosing Datapapa.
                           </pre>
                           <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
                             <span className="px-2 py-1 bg-white text-slate-500 font-bold text-[10px] uppercase rounded-md shadow-sm border border-slate-200">
@@ -3566,20 +3613,44 @@ export default function AdminDashboard() {
                           <div className="text-xs font-mono text-slate-400">
                             Ref: {tx.paystack_receipt || tx.id.substring(0, 8)}
                           </div>
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              tx.status === "success" ||
-                              tx.status === "completed"
-                                ? "bg-green-100 text-green-700"
-                                : tx.status === "failed"
-                                  ? "bg-red-100 text-red-700"
-                                  : tx.status === "pending"
-                                    ? "bg-yellow-100 text-yellow-700"
-                                    : "bg-slate-100 text-slate-700"
-                            }`}
-                          >
-                            {tx.status || "N/A"}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleWhatsAppMessage(tx);
+                              }}
+                              className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors"
+                              title="Message via WhatsApp"
+                            >
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 1 1-7.6-13.8 8.38 8.38 0 0 1 3.8.9L21 2z"></path>
+                              </svg>
+                            </button>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                tx.status === "success" ||
+                                tx.status === "completed"
+                                  ? "bg-green-100 text-green-700"
+                                  : tx.status === "failed"
+                                    ? "bg-red-100 text-red-700"
+                                    : tx.status === "pending"
+                                      ? "bg-yellow-100 text-yellow-700"
+                                      : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              {tx.status || "N/A"}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     ))}

@@ -1,4 +1,4 @@
-import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils.js';
+import { supabase, sendSMS, syncWalletSilently, purchaseData } from '../lib/server-utils';
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
@@ -78,8 +78,8 @@ export default async function handler(req: any, res: any) {
     }
 
     // IDEMPOTENCY CHECK
-    if (transaction.status === "paid" || transaction.vtu_status === "success") {
-      console.log("Transaction already processed");
+    if (transaction.status === "paid" || transaction.vtu_status === "success" || transaction.vtu_status === "processing" || transaction.external_reference) {
+      console.log("♻️ [Webhook] Transaction already processed or being processed. Skipping duplication.");
       return res.status(200).send("already processed");
     }
 

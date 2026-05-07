@@ -1,5 +1,5 @@
-import { supabase } from '../lib/server-utils.js';
-import { callDataHubAPI } from '../lib/datahub-client.js';
+import { supabase } from '../lib/server-utils';
+import { callDataHubAPI } from '../lib/datahub-client';
 
 export default async function handler(req: any, res: any) {
   try {

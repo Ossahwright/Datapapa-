@@ -46,26 +46,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const currency = settings?.currency || "GHS";
   const supportEmail = settings?.support_email || "support@datapapa.com";
 
-  const sendWhatsAppNotification = (tx: any) => {
-    try {
-      const message = `💰 *NEW TRANSACTION ON ${appName.toUpperCase()}*\n\n` +
-        `👤 *Payer:* ${tx.payer_phone_number}\n` +
-        `📱 *Recipient:* ${tx.recipient_phone}\n` +
-        `📦 *Bundle:* ${tx.capacity}\n` +
-        `🌐 *Network:* ${tx.network.toUpperCase()}\n` +
-        `💵 *Amount:* GHS ${Number(tx.amount).toFixed(2)}\n` +
-        `🆔 *Ref:* ${tx.id}\n` +
-        `📅 *Time:* ${new Date().toLocaleString()}`;
-      
-      // We open this in background or a hidden way if possible
-      // Using the central whatsapp utility fallback mechanism
-      openWhatsApp({ phone: adminWhatsApp, message });
-    } catch (e) {
-      console.error("WhatsApp Error:", e);
-    }
-  };
-
   const fetchBundles = async (retryCount = 0) => {
+
     if (supabaseReady) {
       if (retryCount === 0) setIsLoadingBundles(true);
       setLoadError('');
@@ -240,16 +222,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }),
       }).catch(e => console.error("VTU trigger error:", e));
 
-      // Trigger Admin WhatsApp Notification
-      sendWhatsAppNotification({
-        id: currentTxId,
-        payer_phone_number: payerPhone || phone,
-        recipient_phone: phone,
-        capacity: selectedBundleObj?.volume,
-        network: network,
-        amount: selectedBundleObj?.price
-      });
-
       // Clear the form
       setPhone('');
       setPayerPhone('');
@@ -261,6 +233,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       }, 3000);
 
     } catch (err: any) {
+
       console.error("Payment post-processing error:", err);
     } finally {
       setIsLoading(false);

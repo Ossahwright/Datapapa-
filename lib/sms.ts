@@ -40,5 +40,5 @@ export function buildSmsMessage(data: {
   network: string;
   phone: string;
 }) {
-  return `Datapapa\n\nYour purchase of ${data.capacity} ${data.network} data for ${data.phone} was successful.\n\nKindly contact or WhatsApp us on 0244014207\nThank you for your trust.`;
+  return `Datapapa\n\nYour purchase of ${data.capacity} ${data.network} data for ${data.phone} was successful.\n\nThank you for choosing Datapapa.`;
 }

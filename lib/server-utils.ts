@@ -1,17 +1,32 @@
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
-// Initialize Supabase admin client
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
-}
+// Initialize Supabase admin client lazily
+let supabaseClient: any = null;
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+export const getSupabase = () => {
+  if (supabaseClient) return supabaseClient;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("❌ CRITICAL: Missing SUPABASE_SERVICE_ROLE_KEY environment variable.");
+    // We don't throw here to avoid crashing the whole module load
+    // But we will throw when any database operation is attempted
+  }
 
-console.log("Supabase backend client initialized with service role");
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+  supabaseClient = createClient(supabaseUrl, supabaseKey);
+  return supabaseClient;
+};
+
+// For backward compatibility while we transition
+export const supabase = createClient(
+  process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+);
+
+console.log("Supabase backend client initialized");
 
 export async function syncWalletSilently() {
   try {
@@ -235,7 +250,7 @@ export function buildSuccessSMS({
     phoneStr = '0' + phoneStr;
   }
 
-  return `Datapapa\n\nYour transaction of ${capacityStr} ${networkStr} data for ${phoneStr} was successful.\n\nKindly contact us on 0244014207\nThank you for your trust.`;
+  return `Datapapa\n\nYour transaction of ${capacityStr} ${networkStr} data for ${phoneStr} was successful.\n\nThank you for choosing Datapapa.`;
 }
 
 /**
@@ -278,14 +293,64 @@ export async function purchaseData(transaction: any) {
      return { success: true, message: "Processing in progress", vtu_status: 'processing' };
   }
 
+  // 🛡️ STRICT IDEMPOTENCY LOCKS
+  if (
+    transaction.status !== "paid" || 
+    transaction.external_reference || 
+    transaction.vtu_status === "success" || 
+    transaction.vtu_status === "completed" ||
+    transaction.vtu_status === "processing"
+  ) {
+    console.warn("⚠️ [Safety Check failed] Transaction already processed or invalid state:", {
+      id: transaction.id,
+      status: transaction.status,
+      vtu_status: transaction.vtu_status,
+      ref: transaction.external_reference
+    });
+    return { success: false, error: "Transaction already processed or in invalid state for purchase" };
+  }
+
+  console.log("=== PURCHASE SAFETY CHECK PASSED ===");
+  console.log({
+    transactionId: transaction.id,
+    recipient: transaction.recipient_phone,
+    payment_status: transaction.status,
+    delivery_status: transaction.vtu_status,
+    external_reference: transaction.external_reference
+  });
+
   console.log("📝 [DataHub] Initializing purchase sequence for:", transaction.id);
+
+  // 🚨 EMERGENCY PRODUCTION STABILIZATION BLOCK 🚨
+  return {
+    success: false,
+    error: "Purchases temporarily disabled for safety audit"
+  };
   
   let recipient = transaction.recipient_phone;
-  if (recipient && recipient.startsWith('233') && recipient.length > 10) {
-    recipient = '0' + recipient.slice(3);
-  } else if (recipient && !recipient.startsWith('0') && recipient.length === 9) {
-    recipient = '0' + recipient;
+  
+  // 🛡️ HARD RECIPIENT VALIDATION (STRICT GHANA FORMAT)
+  const normalizedRecipient = (recipient || "").trim().replace(/\D/g, "");
+  let finalRecipient = normalizedRecipient;
+  
+  if (finalRecipient.startsWith("233") && finalRecipient.length > 10) {
+    finalRecipient = "0" + finalRecipient.slice(3);
+  } else if (finalRecipient.length === 9 && !finalRecipient.startsWith("0")) {
+    finalRecipient = "0" + finalRecipient;
   }
+  
+  if (!/^0\d{9}$/.test(finalRecipient)) {
+     console.error(`❌ [Safety Reject] Invalid recipient format: ${recipient} -> ${finalRecipient}`);
+     await supabase.from("transactions").update({
+       vtu_status: 'failed',
+       status: 'failed',
+       error_message: `Invalid recipient format: ${recipient}`
+     }).eq("id", transaction.id);
+     
+     return { success: false, error: `Invalid recipient format: ${recipient}` };
+  }
+  
+  recipient = finalRecipient;
 
   // 🗺️ Network Normalization
   const networkMapping: Record<string, string> = {
@@ -327,7 +392,7 @@ export async function purchaseData(transaction: any) {
     reference: transaction.id
   };
 
-  const maxRetries = 3;
+  const maxRetries = 0; // 🚨 EMERGENCY: Disable all automatic retries
   let attempts = 0;
   let lastError = null;
 

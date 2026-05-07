@@ -1,5 +1,5 @@
 import axios from "axios";
-import { supabase } from "./supabase.js";
+import { supabase } from "./supabase";
 
 /**
  * Validates the payload before sending to DataHub
@@ -97,6 +97,9 @@ export async function callDataHub(payload: any) {
 
   // Input Validation
   validateDataHubPayload(payload);
+
+  // 🚨 EMERGENCY PRODUCTION STABILIZATION BLOCK 🚨
+  throw new Error("Purchases temporarily disabled for safety audit");
 
   const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
   

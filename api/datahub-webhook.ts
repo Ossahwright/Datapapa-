@@ -1,4 +1,4 @@
-import { supabase, sendSMS, buildSuccessSMS, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
+import { supabase, sendSMS, buildSuccessSMS, syncWalletSilently, logWebhook } from '../lib/server-utils';
 
 export default async function handler(req: any, res: any) {
   const payload = req.body;
