@@ -54,9 +54,40 @@ export default async function handler(req: any, res: any) {
     if (findError) throw findError;
 
     if (!tx) {
-      console.warn("Transaction not found:", providerRef);
-      await logWebhook({ reference: providerRef, payload, status: 'ignored' });
-      return res.status(200).json({ message: "Ignored" });
+      console.warn("Transaction not found via reference:", providerRef);
+      
+      // 🔍 STEP 6: MULTI-STRATEGY RECONCILIATION
+      // If no reference match, try matching by recipient + capacity proximity within last 30 mins
+      const recipient = data?.recipient || data?.number || data?.phone;
+      const amount = data?.amount || data?.volume || data?.plan;
+      
+      if (recipient) {
+        console.log("🧩 [Reconciliation] Attempting proximity match for:", recipient);
+        const normalizedRecipient = recipient.trim().replace(/\D/g, "").slice(-9); // Match last 9 digits
+        
+        const { data: proximityTx } = await supabase
+          .from("transactions")
+          .select("*")
+          .eq("vtu_status", "processing")
+          .order("created_at", { ascending: false })
+          .limit(10); // Check recent processing transactions
+        
+        const matched = proximityTx?.find(t => {
+          const tRecipient = (t.recipient_phone || "").trim().replace(/\D/g, "").slice(-9);
+          const isRecent = (Date.now() - new Date(t.created_at).getTime()) < 1800000; // 30 mins
+          return tRecipient === normalizedRecipient && isRecent;
+        });
+
+        if (matched) {
+          console.log("✅ [Reconciliation] Webhook matched via proximity for tx:", matched.id);
+          tx = matched;
+        }
+      }
+
+      if (!tx) {
+        await logWebhook({ reference: providerRef, payload, status: 'ignored' });
+        return res.status(200).json({ message: "Ignored" });
+      }
     }
 
     console.log("MATCHED TX:", tx.id);

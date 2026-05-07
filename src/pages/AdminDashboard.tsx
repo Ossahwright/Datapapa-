@@ -34,6 +34,7 @@ import {
   Lock,
   Unlock,
   BarChart3,
+  ShieldAlert,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
@@ -998,6 +999,34 @@ export default function AdminDashboard() {
   };
 
   const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
+
+  const getTransactionStatus = (tx: any) => {
+    const isPaid = tx.status === 'paid' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
+    const vtu = tx.vtu_status;
+    const updatedAt = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
+    const now = Date.now();
+    const isStale = vtu === 'processing' && (now - updatedAt > 600000); // 10 mins
+
+    if (vtu === 'success' || vtu === 'delivered' || vtu === 'completed') {
+      return { label: 'Fulfilled', color: 'bg-emerald-100 text-emerald-700', icon: null };
+    }
+    if (vtu === 'failed') {
+      return { label: 'Failed', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
+    }
+    if (isStale) {
+      return { label: 'Stale Processing', color: 'bg-amber-100 text-amber-700 font-bold animate-pulse', icon: <Clock size={10} className="mr-1" />, retry: true };
+    }
+    if (vtu === 'processing') {
+      return { label: 'Awaiting Webhook', color: 'bg-indigo-100 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" /> };
+    }
+    if (tx.status === 'blocked_source') {
+      return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
+    }
+    if (isPaid) {
+      return { label: 'Paid - Queued', color: 'bg-blue-100 text-blue-700', icon: <Clock size={10} className="mr-1" /> };
+    }
+    return { label: tx.status || 'Pending', color: 'bg-slate-100 text-slate-700', icon: null };
+  };
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [txToDelete, setTxToDelete] = useState<any>(null);
   useEffect(() => {
@@ -2070,43 +2099,15 @@ export default function AdminDashboard() {
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  tx.delivery_status === "delivered" ||
-                                  tx.vtu_status === "success" ||
-                                  tx.vtu_status === "delivered" ||
-                                  tx.vtu_status === "completed"
-                                    ? "bg-green-100 text-green-700"
-                                    : tx.delivery_status === "failed" ||
-                                        tx.vtu_status === "failed"
-                                      ? "bg-red-100 text-red-700"
-                                      : tx.delivery_status === "delivering" ||
-                                          tx.vtu_status === "processing"
-                                        ? "bg-blue-100 text-blue-700"
-                                        : tx.vtu_status === "pending"
-                                          ? "bg-yellow-100 text-yellow-700"
-                                          : "bg-slate-100 text-slate-700"
-                                }`}
-                              >
-                                {(tx.delivery_status === "delivering" ||
-                                  tx.vtu_status === "processing") && (
-                                  <RefreshCw
-                                    size={10}
-                                    className="animate-spin mr-1"
-                                  />
-                                )}
-                                {tx.delivery_status === "delivered" ||
-                                tx.vtu_status === "delivered" ||
-                                tx.vtu_status === "success"
-                                  ? "Delivered"
-                                  : tx.delivery_status === "failed" ||
-                                      tx.vtu_status === "failed"
-                                    ? "Failed"
-                                    : tx.delivery_status === "delivering" ||
-                                        tx.vtu_status === "processing"
-                                      ? "Processing"
-                                      : tx.vtu_status || "N/A"}
-                              </span>
+                              {(() => {
+                                const state = getTransactionStatus(tx);
+                                return (
+                                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${state.color}`}>
+                                    {state.icon}
+                                    {state.label}
+                                  </span>
+                                );
+                              })()}
                             </td>
 
                             <td className="px-6 py-4 text-center text-slate-600 font-medium font-mono text-xs">
@@ -2121,6 +2122,24 @@ export default function AdminDashboard() {
                                 >
                                   <Search size={16} />
                                 </button>
+                                
+                                {(() => {
+                                  const state = getTransactionStatus(tx);
+                                  if (tx.vtu_status === 'processing' || state.label === 'Stale Processing') {
+                                    return (
+                                      <button
+                                        onClick={() => retryVTU(tx.id)}
+                                        disabled={isRetryingVTU === tx.id}
+                                        className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
+                                        title="Sync/Reconcile with Provider"
+                                      >
+                                        <RefreshCw size={16} />
+                                      </button>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+
                                 {(tx.vtu_status === "failed" ||
                                   tx.vtu_status === "pending" ||
                                   tx.delivery_status === "failed" ||
@@ -2132,20 +2151,18 @@ export default function AdminDashboard() {
                                       tx.delivery_status === "delivered" ||
                                       tx.vtu_status === "delivered" ||
                                       tx.vtu_status === "success" ||
-                                      tx.delivery_status === "delivering" ||
-                                      tx.vtu_status === "processing"
+                                      (tx.vtu_status === "processing" && !stuck)
                                     }
                                     className={`p-2 rounded-lg transition-colors ${
                                       isRetryingVTU === tx.id ||
                                       tx.delivery_status === "delivered" ||
                                       tx.vtu_status === "delivered" ||
                                       tx.vtu_status === "success" ||
-                                      tx.delivery_status === "delivering" ||
-                                      tx.vtu_status === "processing"
-                                        ? "text-slate-300 cursor-not-allowed"
+                                      (tx.vtu_status === "processing" && !stuck)
+                                        ? "text-slate-200 cursor-not-allowed"
                                         : "text-amber-600 hover:bg-amber-50"
                                     } ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
-                                    title="Retry VTU Delivery"
+                                    title="Force Retry VTU"
                                   >
                                     <RefreshCw size={16} />
                                   </button>

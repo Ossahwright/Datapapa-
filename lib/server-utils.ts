@@ -346,6 +346,42 @@ export async function logWebhook({
   }
 }
 
+/**
+ * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
+ * Queries DataHub directly for the status of a specific order.
+ */
+export async function checkProviderTransactionStatus(transactionIdOrRef: string) {
+  try {
+    const { apiKey, baseUrl } = await getDataHubConfig();
+    if (!apiKey) return null;
+
+    const base = baseUrl.replace(/\/+$/, "");
+    // Note: DataHub documentation varies, but common status endpoint is /order-status/{ref} or query param
+    const endpoint = `${base}/order-status/${transactionIdOrRef}`;
+    
+    console.log(`🔍 [Reconciliation] Checking provider status for: ${transactionIdOrRef}`);
+    
+    const response = await axios.get(endpoint, {
+      headers: { "X-API-Key": apiKey },
+      timeout: 10000,
+      validateStatus: () => true
+    });
+
+    const result = response.data;
+    console.log("📡 [Reconciliation] Provider status response:", JSON.stringify(result));
+
+    return {
+      status: response.status,
+      data: result,
+      isFulfilled: result.success === true || result.status?.toUpperCase() === 'SUCCESSFUL' || result.status?.toUpperCase() === 'DELIVERED',
+      isFailed: result.status?.toUpperCase() === 'FAILED' || result.status?.toUpperCase() === 'REJECTED'
+    };
+  } catch (err) {
+    console.error("❌ [Reconciliation] Status check failed:", err);
+    return null;
+  }
+}
+
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
@@ -397,6 +433,25 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
+  // 🛡️ STEP 5: PROVIDER RECONCILIATION before retry
+  if (source === "manual_retry") {
+    // If we have any reference, check provider first
+    const refToCheck = transaction.external_reference || transaction.id;
+    const providerStatus = await checkProviderTransactionStatus(refToCheck);
+    
+    if (providerStatus?.isFulfilled) {
+      console.log("✅ [Reconciliation] Provider already fulfilled this order. Repairing local state.");
+      await supabase.from("transactions").update({
+        vtu_status: 'success',
+        delivery_status: 'delivered',
+        external_reference: providerStatus.data?.data?.reference || transaction.external_reference || refToCheck,
+        updated_at: new Date().toISOString()
+      }).eq("id", transaction.id);
+      
+      return { success: true, message: "Reconciled: Already fulfilled", vtu_status: 'success' };
+    }
+  }
+
   // Idempotency: Don't re-run if we already have a provider ref, UNLESS it's a manual retry 
   // and we suspect the previous call failed or was lost
   if (transaction.external_reference && source !== "manual_retry") {
@@ -406,8 +461,13 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   const isLockedStatus = ["success", "completed", "delivered"].includes(transaction.vtu_status);
   
-  // Only lock "processing" if it's NOT a manual retry. 
-  if (isLockedStatus || (transaction.vtu_status === "processing" && source !== "manual_retry")) {
+  // 🛡️ STEP 3: STALE PROCESSING DETECTION
+  const isStale = transaction.vtu_status === "processing" && 
+                 transaction.updated_at && 
+                 (Date.now() - new Date(transaction.updated_at).getTime() > 600000); // 10 minutes
+
+  // Only lock "processing" if it's NOT a manual retry and NOT stale. 
+  if (isLockedStatus || (transaction.vtu_status === "processing" && source !== "manual_retry" && !isStale)) {
     console.log(`✅ [Safety Gate] Transaction already ${transaction.vtu_status}. Skipping.`);
     return { success: true, message: `Already ${transaction.vtu_status}`, vtu_status: transaction.vtu_status };
   }
