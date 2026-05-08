@@ -108,12 +108,23 @@ export default async function handler(req: any, res: any) {
       // Update transaction status if successful
       if (result.success) {
         const providerReference = result.external_reference || result.data?.reference || result.data?.id || result.reference;
-        await supabase.from("transactions").update({
+        
+        // If we are forcing a retry on a previously failed payment, mark the payment as paid
+        const isPaymentOverridden = tx.status === "failed" || tx.status === "pending";
+        
+        const updates: any = {
           api_status: "success",
           vtu_status: "processing",
           external_reference: providerReference || tx.external_reference,
           updated_at: new Date().toISOString()
-        }).eq("id", tx.id);
+        };
+        
+        if (isPaymentOverridden) {
+           updates.status = "paid";
+           updates.payment_status = "paid";
+        }
+        
+        await supabase.from("transactions").update(updates).eq("id", tx.id);
       }
 
       // Sync wallet in background
