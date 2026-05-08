@@ -7,29 +7,40 @@
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
-// Initialize Supabase admin client lazily
-let supabaseClient: any = null;
+const supabaseUrl =
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-export const getSupabase = () => {
-  if (supabaseClient) return supabaseClient;
+const serviceRoleKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!supabaseUrl) {
+  console.error("SUPABASE_URL missing");
+  throw new Error("SUPABASE_URL missing");
+}
 
-  if (!supabaseKey) {
-    console.error("❌ CRITICAL: Missing SUPABASE_SERVICE_ROLE_KEY environment variable.");
-    // We handle this more strictly in startup validation now
-  }
+if (!serviceRoleKey) {
+  console.error("SUPABASE_SERVICE_ROLE_KEY missing");
+  throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
+}
 
-  supabaseClient = createClient(supabaseUrl, supabaseKey!, {
+export const supabaseAdmin = createClient(
+  supabaseUrl,
+  serviceRoleKey,
+  {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false
     }
-  });
-  return supabaseClient;
-};
+  }
+);
+
+// This MUST become the ONLY backend Supabase client.
+export const supabase = supabaseAdmin;
+
+export const getSupabase = () => supabase;
 
 /**
  * 🚀 STEP 4: STARTUP ENV VALIDATION
@@ -87,18 +98,7 @@ export async function isAdminAuth(req: any) {
   }
 }
 
-// For backward compatibility while we transition
-export const supabase = createClient(
-  process.env.SUPABASE_URL! || process.env.VITE_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false
-    }
-  }
-);
+// Supabase client is initialized at the top of the file
 
 console.log("server-utils loaded successfully");
 
@@ -366,6 +366,9 @@ export async function reconcileTransaction(transactionId: string) {
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
+  console.log("=== DATAHUB EXECUTION START ===");
+  console.log("TRANSACTION:", transaction.id);
+
   // 🚀 FORENSIC TRACING: START
   const executionId = Math.random().toString(36).substring(7);
   console.log(`=== [${executionId}] PROVIDER EXECUTION START ===`);
@@ -510,11 +513,9 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         
       console.log(`=== [${executionId}] ACCEPTANCE COMMITTED ===`);
       if (providerReference) console.log(`=== [${executionId}] PROVIDER REFERENCE SAVED ===`);
-      console.log(`=== [${executionId}] PROVIDER PAYLOAD PERSISTED ===`);
-
+      
       if (atomicError) {
-        console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE (Reference may be orphaned):`, atomicError.message);
-        // We still return success to the caller because the provider DID accept it
+        console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE:`, atomicError.message);
       }
 
       return { success: true, vtu_status: 'provider_accepted', provider_reference: providerReference, external_reference: providerReference, ...result };
@@ -522,28 +523,39 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
     // Explicit Failure Handling
     const lastError = result.message || result.error || "Provider rejected request";
-    console.log(`=== [${executionId}] PROVIDER REJECTED ===`);
+    console.log("=== DATAHUB EXECUTION FAILED (PROVIDER REJECTION) ===");
     console.error(`🛑 [${executionId}] Provider Rejected:`, lastError);
     
-    await supabase.from("transactions").update({ 
-      vtu_status: 'provider_rejected', 
-      error_message: lastError,
-      updated_at: new Date().toISOString(),
-      api_response: result
-    }).eq("id", transaction.id);
+    try {
+      await supabase.from("transactions").update({ 
+        vtu_status: 'provider_rejected', 
+        error_message: lastError,
+        updated_at: new Date().toISOString(),
+        api_response: result
+      }).eq("id", transaction.id);
+    } catch (saveErr) {
+      console.error("❌ Failed to persist provider rejection state:", saveErr);
+    }
 
     return { success: false, error: lastError };
 
   } catch (err: any) {
-    console.error(`❌ [${executionId}] CRITICAL CONNECTION FAILURE:`, err.message);
+    console.log("=== DATAHUB EXECUTION FAILED (CRITICAL ERROR) ===");
+    console.error(`❌ [${executionId}] CRITICAL ERROR:`, err.message);
     
-    // In case of connection failure, we DON'T mark as failed if we don't know for sure
-    // We let it sit in manual_review_required for reconciliation
-    await supabase.from("transactions").update({ 
-      vtu_status: 'manual_review_required', 
-      error_message: `Connection Error: ${err.message}`,
-      updated_at: new Date().toISOString()
-    }).eq("id", transaction.id);
-    throw err;
+    try {
+      // In case of connection failure, we DON'T mark as failed if we don't know for sure
+      // We let it sit in manual_review_required for reconciliation
+      await supabase.from("transactions").update({ 
+        vtu_status: 'manual_review_required', 
+        error_message: `Fatal Execution Error: ${err.message}`,
+        updated_at: new Date().toISOString()
+      }).eq("id", transaction.id);
+    } catch (saveErr) {
+      console.error("❌ Failed to persist critical failure state:", saveErr);
+    }
+    
+    // We return a failure object instead of throwing to prevent webhook crash
+    return { success: false, error: err.message };
   }
 }

@@ -10,12 +10,22 @@ import { supabase, syncWalletSilently, purchaseData } from '../lib/server-utils.
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
-  console.log("=== PAYSTACK WEBHOOK HIT ===");
-  console.log("Method:", req.method);
+  console.log("=== PAYSTACK WEBHOOK START ===");
+  console.log("METHOD:", req.method);
+  console.log("EVENT:", req.body?.event);
   console.log("Timestamp:", new Date().toISOString());
 
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
+  }
+
+  // SAFE REQUEST VALIDATION
+  if (!req.body || !req.body.data) {
+    console.error("❌ [Webhook] Invalid webhook payload - missing body or data");
+    return res.status(400).json({
+      success: false,
+      error: "Invalid webhook payload"
+    });
   }
 
   try {
@@ -32,13 +42,22 @@ export default async function handler(req: any, res: any) {
 
     // SIGNATURE VERIFICATION
     const signature = req.headers["x-paystack-signature"];
+    if (!signature) {
+      console.error("❌ [Webhook] Missing X-Paystack-Signature header");
+      return res.status(401).send("missing signature");
+    }
+
     const hash = crypto
       .createHmac("sha512", PAYSTACK_SECRET_KEY)
       .update(JSON.stringify(req.body))
       .digest("hex");
 
     const isValidSignature = hash === signature;
-    console.log("Signature Valid:", isValidSignature);
+    console.log("Signature Validation:", {
+      provided: signature.substring(0, 8) + "...",
+      calculated: hash.substring(0, 8) + "...",
+      match: isValidSignature
+    });
 
     if (!isValidSignature) {
       console.error("❌ [Webhook] Invalid signature");
@@ -71,7 +90,9 @@ export default async function handler(req: any, res: any) {
     }
 
     // FETCH TRANSACTION
-    console.log("=== FETCHING TRANSACTION FROM DB ===");
+    console.log("=== FETCHING TRANSACTION ===");
+    console.log("REFERENCE:", transactionId);
+    
     const { data: transaction, error: findError } = await supabase
       .from("transactions")
       .select("*")
@@ -83,7 +104,8 @@ export default async function handler(req: any, res: any) {
       return res.status(200).send("transaction not found");
     }
 
-    console.log("TRANSACTION FOUND:", {
+    console.log("=== TRANSACTION FOUND ===");
+    console.log("TRANSACTION INFO:", {
       id: transaction.id,
       current_status: transaction.status,
       current_vtu: transaction.vtu_status,
@@ -91,7 +113,7 @@ export default async function handler(req: any, res: any) {
     });
 
     // 🛡️ HARDENED WEBHOOK IDEMPOTENCY (STEP 5)
-    console.log("=== CHECKING WEBHOOK IDEMPOTENCY ===");
+    console.log("=== VERIFYING PAYMENT STATUS ===");
     if (
       transaction.status === "paid" || 
       transaction.status === "success" ||
@@ -153,7 +175,7 @@ export default async function handler(req: any, res: any) {
     });
 
     // TRIGGER VTU
-    console.log("=== TRIGGERING DATAHUB PURCHASE ===");
+    console.log("=== CALLING purchaseData() ===");
     try {
       const result = await purchaseData(updatedTransaction, "paystack_webhook");
       console.log("=== PURCHASE EXECUTION RESULT ===");

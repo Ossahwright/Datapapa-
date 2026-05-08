@@ -205,32 +205,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       const currentPaystackRef = paystackResponse.reference;
       setTransactionId(currentPaystackRef);
 
-      // Webhook will handle actual VTU processing, but we can do a background trigger.
-      console.log("🚀 [API] TRIGGERING DATAHUB");
-      await fetch("/api/purchase-data", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          bundle, 
-          phone, 
-          paystack_ref: currentPaystackRef,
-          transaction_id: currentTxId, 
-          payer_phone_number: payerPhone || phone // Fallback to recipient if empty
-        }),
-      }).catch(e => {
-        if (e.message && e.message.includes("Failed to fetch")) {
-           console.log("VTU trigger background request was aborted or failed to fetch (ignoring).");
-        } else {
-           console.error("VTU trigger error:", e);
-        }
-      });
-
-      // Clear the form fields but keep values for summary
-      const savedPhone = phone;
-      const savedPayerPhone = payerPhone;
-      const savedBundle = bundle;
+      // Webhook automatically handles provider execution as per Step 7 STRICT restoration.
+      console.log("✅ Payment successful. Awaiting webhook fulfillment...");
       
     } catch (err: any) {
       console.error("Payment post-processing error:", err);
