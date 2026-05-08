@@ -48,20 +48,25 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    console.log(`=== WEBHOOK RECONCILIATION ===`);
     if (!providerRef || providerRef === "unknown") {
       console.warn("⚠️ [Webhook] No provider reference found in payload");
       await logWebhook({ reference: "unknown", payload, status: 'ignored' });
       return res.status(200).json({ message: "No reference found, skipping" });
     }
 
-    // 🔍 Find transaction (try external_reference then id)
+    // 🔍 Find transaction Priority
+    // 1. provider_reference exact match
+    // 2. external_reference match (fallback)
+    // 3. internal_reference / id exact match
+    
     let { data: tx, error: findError } = await supabase
       .from("transactions")
       .select("*")
-      .or(`external_reference.eq."${providerRef}",id.eq."${providerRef}"`)
+      .or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}",id.eq."${providerRef}"`)
       .maybeSingle();
 
-    if (findError) {
+    if (findError && findError.code !== 'PGRST116') {
       console.error("❌ [Webhook] Supabase find error:", findError.message);
       throw findError;
     }
@@ -69,11 +74,11 @@ export default async function handler(req: any, res: any) {
     if (!tx) {
       console.warn("🔍 [Webhook] Transaction not found via direct reference:", providerRef);
       
-      // 🔍 PROXIMITY RECONCILIATION
+      // 🔍 PROXIMITY RECONCILIATION (Emergency Only)
       const recipient = data?.recipient || data?.number || data?.phone;
       if (recipient) {
         const normalizedRecipient = String(recipient).trim().replace(/\D/g, "").slice(-9);
-        console.log("🧩 [Reconciliation] Attempting proximity match for last 9 digits:", normalizedRecipient);
+        console.log("🧩 [Reconciliation] EMERGENCY proximity match for last 9 digits:", normalizedRecipient);
         
         const { data: recentTxs } = await supabase
           .from("transactions")
@@ -88,7 +93,9 @@ export default async function handler(req: any, res: any) {
           return tRecipient === normalizedRecipient && isRecent;
         });
 
-        if (tx) console.log("✅ [Reconciliation] Matched via proximity! TxId:", tx.id);
+        if (tx) {
+           console.log("✅ [Reconciliation] EMERGENCY proximity matched! TxId:", tx.id);
+        }
       }
 
       if (!tx) {
@@ -97,8 +104,11 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ message: "Transaction not found" });
       }
     }
+    
+    console.log(`=== PROVIDER TRUTH MATCH ===`);
+    console.log(`Matched Tx ID: ${tx.id}`);
 
-    console.log("=== WEBHOOK CONVERGENCE START ===");
+    console.log("=== STATE CONVERGENCE ===");
     console.log("Matched Transaction:", tx.id);
     console.log("Provider Reference:", providerRef);
     console.log("Current Local State:", { delivery: tx.delivery_status, vtu: tx.vtu_status });

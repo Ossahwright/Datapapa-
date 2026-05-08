@@ -373,8 +373,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   });
   
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
-  if (transaction.external_reference || transaction.vtu_status === 'delivered') {
-    console.log(`📡 [${executionId}] Transaction has reference or delivered. Switching to Reconciliation mode.`);
+  if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === 'delivered') {
+    console.log(`📡 [${executionId}] Transaction has provider footprint. Switching to Reconciliation mode.`);
     return reconcileTransaction(transaction.id);
   }
 
@@ -487,13 +487,20 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         .from("transactions")
         .update({
           vtu_status: 'provider_accepted',
+          provider_reference: orderId || null,
           external_reference: orderId || transaction.external_reference,
+          internal_reference: transaction.id,
+          provider_payload: result,
+          provider_accepted_at: new Date().toISOString(),
+          reconciliation_state: 'awaiting_provider_confirmation',
           api_response: result,
           updated_at: new Date().toISOString()
         })
         .eq("id", transaction.id);
         
       console.log(`=== [${executionId}] ACCEPTANCE COMMITTED ===`);
+      if (orderId) console.log(`=== [${executionId}] PROVIDER REFERENCE SAVED ===`);
+      console.log(`=== [${executionId}] PROVIDER PAYLOAD PERSISTED ===`);
 
       if (atomicError) {
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE (Reference may be orphaned):`, atomicError.message);

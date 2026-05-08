@@ -104,10 +104,9 @@ export default async function handler(req: any, res: any) {
         .eq("id", txData.id)
         .select();
 
-      console.log("Transaction update result", {
-        updatedTx,
-        updateError
-      });
+      if (updateError) {
+        console.error("Transaction update error:", updateError);
+      }
     }
 
     // Sync wallet in background

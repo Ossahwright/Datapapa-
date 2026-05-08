@@ -2014,9 +2014,9 @@ export default function AdminDashboard() {
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
-                      <th className="px-6 py-4">Transaction ID</th>
+                      <th className="px-6 py-4">Internal Ref</th>
                       <th className="px-6 py-4">Date & Time</th>
-                      <th className="px-6 py-4">Paystack Receipt</th>
+                      <th className="px-6 py-4">Provider Ref</th>
                       <th className="px-6 py-4">Network</th>
                       <th className="px-6 py-4">Capacity</th>
                       <th className="px-6 py-4">Payer</th>
@@ -2058,14 +2058,14 @@ export default function AdminDashboard() {
                             className={`hover:bg-slate-50/50 transition-colors ${stuck ? "bg-amber-50/30" : ""}`}
                           >
                             <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                              {tx.id.substring(0, 8)}...
-                              {tx.id.substring(tx.id.length - 4)}
+                              {(tx.internal_reference || tx.id).substring(0, 8)}...
+                              {(tx.internal_reference || tx.id).substring((tx.internal_reference || tx.id).length - 4)}
                             </td>
                             <td className="px-6 py-4 text-slate-600">
                               {new Date(tx.created_at).toLocaleString()}
                             </td>
                             <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                              {tx.paystack_receipt || "N/A"}
+                              {tx.provider_reference || tx.external_reference || "N/A"}
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3">
@@ -4210,10 +4210,18 @@ export default function AdminDashboard() {
                   <div className="space-y-6">
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Transaction Reference
+                        Internal Ref
                       </label>
-                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100">
-                        {selectedTransaction.id}
+                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100 break-all">
+                        {selectedTransaction.internal_reference || selectedTransaction.id}
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                        Provider Ref
+                      </label>
+                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100 break-all">
+                        {selectedTransaction.provider_reference || selectedTransaction.external_reference || "N/A"}
                       </p>
                     </div>
                     <div>
@@ -4277,6 +4285,24 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="mt-8 pt-8 border-t border-slate-100 grid grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                      Reconciliation State
+                    </label>
+                    <span className="font-mono text-sm font-semibold text-slate-700 capitalize">
+                      {(selectedTransaction.reconciliation_state || "N/A").replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                      Provider Accepted At
+                    </label>
+                    <p className="font-mono text-sm">
+                      {selectedTransaction.provider_accepted_at 
+                        ? new Date(selectedTransaction.provider_accepted_at).toLocaleString() 
+                        : "N/A"}
+                    </p>
+                  </div>
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
                       Payment Status

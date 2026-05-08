@@ -68,6 +68,7 @@ export default async function handler(req: any, res: any) {
     // 🛡️ RECONCILIATION OVERRIDE GUARD (INDUSTRY STANDARD)
     // If the provider previously accepted or gave a reference, NEVER repurchase.
     const hasProviderFootprint = 
+      !!tx.provider_reference || 
       !!tx.external_reference || 
       ["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "manual_review_required"].includes(tx.vtu_status);
 
@@ -122,14 +123,16 @@ export default async function handler(req: any, res: any) {
       
       // Update transaction status if successful
       if (result.success) {
-        const providerReference = result.external_reference || result.data?.reference || result.data?.id || result.reference;
+        const providerReference = result.provider_reference || result.external_reference || result.data?.reference || result.data?.id || result.reference;
         
         const updates: any = {
            status: "paid",
            payment_status: "paid",
            api_status: "success",
            vtu_status: result.vtu_status || "provider_accepted",
+           provider_reference: providerReference || tx.provider_reference || null,
            external_reference: providerReference || tx.external_reference,
+           reconciliation_state: "awaiting_provider_confirmation",
            updated_at: new Date().toISOString()
         };
         

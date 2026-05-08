@@ -40,6 +40,11 @@ CREATE TABLE public.transactions (
     delivery_status TEXT,
     delivery_updated_at TIMESTAMP WITH TIME ZONE,
     external_reference TEXT,
+    internal_reference TEXT,
+    provider_reference TEXT,
+    provider_payload JSONB,
+    provider_accepted_at TIMESTAMPTZ,
+    reconciliation_state TEXT,
     datahub_network_key TEXT,
     datahub_capacity TEXT,
     delivery_attempts INTEGER DEFAULT 0,
@@ -291,5 +296,13 @@ BEGIN
     WHERE created_at::date = CURRENT_DATE;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 🚀 NEW COLUMNS MIGRATION FOR V2 RECONCILIATION
+ALTER TABLE public.transactions
+  ADD COLUMN IF NOT EXISTS internal_reference TEXT,
+  ADD COLUMN IF NOT EXISTS provider_reference TEXT,
+  ADD COLUMN IF NOT EXISTS provider_payload JSONB,
+  ADD COLUMN IF NOT EXISTS provider_accepted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reconciliation_state TEXT;
 
 -- End of script
