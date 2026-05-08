@@ -1006,6 +1006,14 @@ export default function AdminDashboard() {
     const now = Date.now();
     const isStale = vtu === 'processing' && (now - updatedAt > 600000); // 10 mins
 
+    if (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu)) {
+      return { 
+        label: 'Reconciliation Required', 
+        color: 'bg-amber-50 text-amber-700 border border-amber-300 font-bold', 
+        icon: <RefreshCw size={10} className="mr-1" />, 
+        reconcile: true 
+      };
+    }
     if (vtu === 'success' || vtu === 'delivered' || vtu === 'completed') {
       return { label: 'Fulfilled', color: 'bg-emerald-100 text-emerald-700', icon: null };
     }

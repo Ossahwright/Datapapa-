@@ -327,6 +327,7 @@ export async function reconcileTransaction(transactionId: string) {
     return { success: false, error: "Not found" };
   }
   
+  // 🛡️ Provider Truth Priority
   const ref = tx.external_reference || tx.id;
   const provider = await checkProviderTransactionStatus(ref);
   
@@ -335,32 +336,41 @@ export async function reconcileTransaction(transactionId: string) {
     return { success: false, error: "Provider unreachable or status missing" };
   }
   
+  const timestamp = new Date().toISOString();
   if (provider.isFulfilled || provider.isFailed) {
     const deliveryStatus = provider.isFulfilled ? "delivered" : "failed";
     const vtuStatus = provider.isFulfilled ? "success" : "failed";
     
-    console.log(`📝 [Reconcile] Updating state to: ${deliveryStatus}`);
+    console.log(`📝 [Reconcile] Converging state to: ${deliveryStatus}`);
     
     const { error: updateErr } = await supabase
       .from("transactions")
       .update({
         delivery_status: deliveryStatus,
         vtu_status: vtuStatus,
-        delivery_updated_at: new Date().toISOString(),
+        delivery_updated_at: timestamp,
+        updated_at: timestamp,
         api_response: provider.data,
-        error_message: provider.isFailed ? (provider.data?.message || "Provider reported failure") : null
+        error_message: provider.isFailed ? (provider.data?.message || "Provider reported failure") : null,
+        external_reference: provider.reference || tx.external_reference
       })
       .eq("id", transactionId);
       
     if (updateErr) {
-      console.error("❌ [Reconcile] Update failed:", updateErr.message);
+      console.error("❌ [Reconcile] Convergence failed:", updateErr.message);
       return { success: false, error: updateErr.message };
     }
     
     return { success: true, status: deliveryStatus };
   }
   
-  console.log(`⏳ [Reconcile] Still in intermediate state: ${provider.statusRaw}`);
+  console.log(`⏳ [Reconcile] Provider confirms processing (${provider.statusRaw}). Syncing local state.`);
+  await supabase.from("transactions").update({
+    vtu_status: 'processing',
+    updated_at: timestamp,
+    external_reference: provider.reference || tx.external_reference
+  }).eq("id", transactionId);
+
   return { success: true, status: "processing", raw: provider.statusRaw };
 }
 
@@ -368,7 +378,8 @@ export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
   // 🚀 FORENSIC TRACING: START
-  console.log("=== PURCHASE EXECUTION START ===");
+  const executionId = Math.random().toString(36).substring(7);
+  console.log(`=== [${executionId}] PURCHASE EXECUTION START ===`);
   console.log({
     source,
     transaction_id: transaction.id,
@@ -378,108 +389,43 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     timestamp: new Date().toISOString()
   });
   
+  // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
+  if (transaction.external_reference || transaction.vtu_status === 'success') {
+    console.log(`📡 [${executionId}] Transaction has reference. Switching to Reconciliation mode.`);
+    return reconcileTransaction(transaction.id);
+  }
+
   // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
   const allowedSources = ["paystack_webhook", "manual_retry", "direct_api"];
   if (!allowedSources.includes(source)) {
-    const errObj = { error: `Unauthorized purchase execution source: ${source}` };
-    console.error(`❌ ${errObj.error}`);
-    try {
-      await supabase.from("datahub_logs").insert({
-        endpoint: "/data-purchase (blocked)",
-        status: "blocked_source",
-        http_status: 403,
-        payload: { transaction_id: transaction.id, source },
-        response: errObj,
-        created_at: new Date().toISOString()
-      });
-    } catch(e) {}
-    throw new Error(errObj.error);
+    throw new Error(`Unauthorized purchase execution source: ${source}`);
   }
 
-  // 🛡️ STEP 6: STRICT TRANSACTION SAFETY GATES
-  console.log("INITIAL STATE:", {
-    status: transaction.status,
-    vtu_status: transaction.vtu_status,
-    external_reference: transaction.external_reference
-  });
-
-  // Support multiple valid success states
+  // 🛡️ STEP 3: PAYMENT VERIFICATION
   const isPaid = 
     transaction.status === "paid" || 
     transaction.status === "success" || 
     transaction.payment_status === "paid" || 
-    transaction.payment_status === "success";
+    transaction.payment_status === "success" ||
+    source === "manual_retry"; 
 
   if (!isPaid) {
-    console.error("❌ [Safety Reject] Payment not verified. Status:", transaction.status);
+    console.error(`❌ [${executionId}] Safety Reject: Payment not verified. Status:`, transaction.status);
     throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
-  // 🛡️ STEP 5: PROVIDER RECONCILIATION before retry
-  if (source === "manual_retry") {
-    // If we have any reference, check provider first
-    const refToCheck = transaction.external_reference || transaction.id;
-    const providerStatus = await checkProviderTransactionStatus(refToCheck);
-    
-    if (providerStatus?.isFulfilled) {
-      console.log("✅ [Reconciliation] Provider already fulfilled this order. Repairing local state.");
-      await supabase.from("transactions").update({
-        vtu_status: 'success',
-        delivery_status: 'delivered',
-        external_reference: providerStatus.data?.data?.reference || transaction.external_reference || refToCheck,
-        updated_at: new Date().toISOString()
-      }).eq("id", transaction.id);
-      
-      return { success: true, message: "Reconciled: Already fulfilled", vtu_status: 'success' };
-    }
-  }
-
-  // Idempotency: Don't re-run if we already have a provider ref, UNLESS it's a manual retry 
-  // and we suspect the previous call failed or was lost
-  if (transaction.external_reference && source !== "manual_retry") {
-    console.warn("🛑 [Idempotency Block] Transaction already has external_reference:", transaction.external_reference);
-    return { success: true, message: "Already processed at provider level", external_reference: transaction.external_reference };
-  }
-
-  const isLockedStatus = ["success", "completed", "delivered"].includes(transaction.vtu_status);
-  
-  // 🛡️ STEP 3: STALE PROCESSING DETECTION
-  const isStale = transaction.vtu_status === "processing" && 
-                 transaction.updated_at && 
-                 (Date.now() - new Date(transaction.updated_at).getTime() > 600000); // 10 minutes
-
-  // Only lock "processing" if it's NOT a manual retry and NOT stale. 
-  if (isLockedStatus || (transaction.vtu_status === "processing" && source !== "manual_retry" && !isStale)) {
-    console.log(`✅ [Safety Gate] Transaction already ${transaction.vtu_status}. Skipping.`);
-    return { success: true, message: `Already ${transaction.vtu_status}`, vtu_status: transaction.vtu_status };
-  }
-
-  if (transaction.status === "cancelled") {
-    console.error("❌ [Safety Reject] Cancelled transaction blocked");
-    throw new Error("Cancelled transaction blocked from purchase execution");
-  }
-
-  // 🛡️ STEP 8: RECIPIENT NORMALIZATION (REGEX /^0\d{9}$/)
+  // 🛡️ STEP 4: RECIPIENT NORMALIZATION
   let recipient = (transaction.recipient_phone || "").trim().replace(/\D/g, "");
-  
-  if (recipient.startsWith("233") && recipient.length > 10) {
-    recipient = "0" + recipient.slice(3);
-  } else if (recipient.length === 9 && !recipient.startsWith("0")) {
-    recipient = "0" + recipient;
-  }
+  if (recipient.startsWith("233") && recipient.length > 10) recipient = "0" + recipient.slice(3);
+  else if (recipient.length === 9 && !recipient.startsWith("0")) recipient = "0" + recipient;
   
   if (!/^0\d{9}$/.test(recipient)) {
-     console.error(`❌ [Safety Reject] Invalid recipient format: ${transaction.recipient_phone} -> ${recipient}`);
-     await supabase.from("transactions").update({
-       vtu_status: 'failed',
-       error_message: `Recipient normalization failed: ${recipient}`,
-       updated_at: new Date().toISOString()
-     }).eq("id", transaction.id);
-     
-     throw new Error(`Invalid recipient number: ${recipient}. Must match 0XXXXXXXXX.`);
+     const error = `Invalid recipient number: ${recipient}. Must match 0XXXXXXXXX.`;
+     await supabase.from("transactions").update({ vtu_status: 'failed', error_message: error, updated_at: new Date().toISOString() }).eq("id", transaction.id);
+     throw new Error(error);
   }
 
-  // 🛡️ STEP 7: LOCK PROVIDER NETWORK NORMALIZATION
+  // 📦 Network Mapping
   const networkMapping: Record<string, string> = {
     'mtn': 'YELLO',
     'airteltigo-ishare': 'AT_PREMIUM',
@@ -488,194 +434,91 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     'airteltigo-bigtime': 'AT_BIGTIME',
     'at': 'AT_PREMIUM'
   };
+  const networkKey = networkMapping[String(transaction.network || "").toLowerCase()] || transaction.network?.toUpperCase();
 
-  const rawNetwork = String(transaction.network || "").toLowerCase();
-  const networkKey = networkMapping[rawNetwork] || transaction.network?.toUpperCase();
-  
-  console.log("NETWORK MAPPED:", networkKey);
-
-  // 📦 Payload Preparation
+  // 📦 Capacity Normalization
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
   let finalCapacity = "";
-  
   if (typeof capacity === 'string') {
     const upperCap = capacity.toUpperCase().trim();
-    
-    // If it contains "GB", convert to MB (assuming 1GB = 1000MB for DataHub, or 1024 if preferred)
-    // Most Ghanaian VTU APIs use 1000MB for 1GB (e.g. 1000 for 1GB MTN)
     if (upperCap.endsWith("GB")) {
       const num = parseFloat(upperCap.replace("GB", "").trim());
-      if (!isNaN(num)) {
-        finalCapacity = Math.round(num * 1000).toString();
-      } else {
-        finalCapacity = upperCap.replace("GB", "").trim();
-      }
+      finalCapacity = !isNaN(num) ? Math.round(num * 1000).toString() : upperCap.replace("GB", "").trim();
     } else if (upperCap.endsWith("MB")) {
       finalCapacity = upperCap.replace("MB", "").trim();
     } else {
-      // If it's already a number string (e.g. "1000"), it's likely already in MB
-      // but if it's "1", "2", "5", etc. it might be GB without the unit.
       const num = parseFloat(upperCap);
-      if (!isNaN(num) && num < 100) {
-        // Safe assumption: if less than 100 and no unit, it's likely GB
-        finalCapacity = Math.round(num * 1000).toString();
-      } else {
-        finalCapacity = upperCap;
-      }
+      finalCapacity = (!isNaN(num) && num < 100) ? Math.round(num * 1000).toString() : upperCap;
     }
   } else {
-    finalCapacity = String(capacity);
-    const num = parseFloat(finalCapacity);
-    if (!isNaN(num) && num < 100) {
-      finalCapacity = Math.round(num * 1000).toString();
-    }
+    const num = parseFloat(String(capacity));
+    finalCapacity = (!isNaN(num) && num < 100) ? Math.round(num * 1000).toString() : String(capacity);
   }
-  
-  console.log("CAPACITY NORMALIZED:", {
-    original: capacity,
-    final: finalCapacity
-  });
 
-  const payload = {
-    networkKey: networkKey,
-    recipient,
-    capacity: finalCapacity,
-    reference: transaction.id
-  };
+  const payload = { networkKey, recipient, capacity: finalCapacity, reference: transaction.id };
+  const { apiKey, baseUrl } = await getDataHubConfig();
+  if (!apiKey) throw new Error("DataHub API key is missing");
 
-  const maxAttempts = 1; // 🚀 User requested MAX_RETRIES = 0, so 1 attempt
-  let attempts = 0;
-  let lastError = null;
+  const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
 
-  while (attempts < maxAttempts) {
-    try {
-      attempts++;
-      console.log(`=== ATTEMPT ${attempts}/${maxAttempts} ===`);
+  try {
+    console.log(`🚀 [${executionId}] Calling Provider API...`);
+    const response = await axios.post(endpoint, payload, {
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "Accept": "application/json" },
+      timeout: 25000, 
+      validateStatus: () => true
+    });
+
+    const result = response.data;
+    console.log(`📡 [${executionId}] Provider Response:`, response.status, JSON.stringify(result));
+
+    // 🛡️ ATOMIC PERSISTENCE BLOCK
+    const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
+    const isAccepted = (response.status >= 200 && response.status < 300) && (
+      result.success === true || result.status === true || 
+      ["SUCCESSFUL", "PROCESSING", "SUCCESS", "DELIVERED", "PENDING"].includes(String(result.status || "").toUpperCase()) ||
+      result.code === 200 || result.code === '200'
+    );
+
+    if (isAccepted || orderId) {
+      console.log(`✅ [${executionId}] Provider Accepted Execution. ATOMIC COMMITTING REF:`, orderId);
       
-      const { apiKey, baseUrl } = await getDataHubConfig();
-      
-      if (!apiKey) {
-        throw new Error("DataHub API key is missing in settings");
-      }
-
-      // 🛡️ Final URL Construction (Double Guarded)
-      const base = baseUrl.replace(/\/+$/, "");
-      const endpoint = `${base}/data-purchase`;
-      
-      console.log("=== FINAL DATAHUB URL ===");
-      console.log(endpoint);
-      console.log("=== DATAHUB REQUEST PAYLOAD ===");
-      console.log(payload);
-      console.log("=== DATAHUB REQUEST HEADERS ===");
-      console.log({
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey ? "PRESENT" : "MISSING",
-        "Accept": "application/json"
-      });
-
-      // 🛡️ STEP 7: DO NOT set "processing" before the call begins
-      // We will only update status to processing IF the provider accepts the request.
-      console.log("=== INITIATING PROVIDER CALL ===");
-
-      const response = await axios.post(endpoint, payload, {
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "Accept": "application/json"
-        },
-        timeout: 20000, 
-        validateStatus: () => true
-      });
-
-      const result = response.data;
-      
-      console.log("=== DATAHUB RAW RESPONSE ===");
-      console.log({
-        status: response.status,
-        data: result
-      });
-
-      // 🛡️ Handle HTML 404 responses
-      if (typeof result === 'string' && result.includes('<!DOCTYPE html>')) {
-        console.error("=== DATAHUB HTML ERROR DETECTED ===");
-        lastError = `HTTP ${response.status}: Endpoint returned HTML (Malformed URL suspected: ${endpoint})`;
-        if (attempts >= maxAttempts) break;
-        continue; 
-      }
-      
-      const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
-
-      // Log to database
-      try {
-        await supabase.from("datahub_logs").insert({
-          endpoint,
-          status: (response.status >= 200 && response.status < 300) ? 'success' : 'failed',
-          http_status: response.status,
-          payload: payload,
-          response: result,
-          created_at: new Date().toISOString()
-        });
-      } catch (logErr) {
-        console.error("[DataHub Logging Error]:", logErr);
-      }
-
-      const isActuallySuccess = (response.status >= 200 && response.status < 300) && (
-        result.success === true || 
-        result.status === true ||
-        result.status?.toUpperCase() === 'SUCCESSFUL' || 
-        result.status?.toUpperCase() === 'PROCESSING' ||
-        result.status?.toUpperCase() === 'SUCCESS' ||
-        result.code === 200 ||
-        result.code === '200'
-      );
-
-      if (isActuallySuccess) {
-        console.log("✅ DATAHUB EXECUTION SUCCESSFUL");
-        await supabase
-          .from("transactions")
-          .update({
-            vtu_status: 'processing',
-            external_reference: orderId || null,
-            api_response: result,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", transaction.id);
-
-        return { 
-          success: true, 
-          status: response.status,
+      const { error: atomicError } = await supabase
+        .from("transactions")
+        .update({
           vtu_status: 'processing',
-          external_reference: orderId,
-          ...result 
-        };
+          external_reference: orderId || transaction.external_reference,
+          api_response: result,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", transaction.id);
+
+      if (atomicError) {
+        console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE (Reference may be orphaned):`, atomicError.message);
+        // We still return success to the caller because the provider DID accept it
       }
 
-      // If not successful and we have retries left, continue
-      lastError = result.message || result.error || JSON.stringify(result);
-      console.warn(`🛑 [DataHub] attempt failed: ${lastError}`);
-      
-    } catch (err: any) {
-      console.error("=== DATAHUB REQUEST EXCEPTION ===");
-      if (err.response) {
-        lastError = `HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}`;
-        console.error("RESPONSE DATA:", err.response.data);
-      } else {
-        lastError = err.message;
-        console.error("ERROR MESSAGE:", err.message);
-      }
-      if (attempts >= maxAttempts) break;
+      return { success: true, vtu_status: 'processing', external_reference: orderId, ...result };
     }
-  }
 
-  // If we reach here, attempts exhausted
-  console.error("=== FINAL FAILURE: ATTEMPTS EXHAUSTED ===");
-  await supabase.from("transactions").update({ 
-    vtu_status: 'failed', 
-    status: 'failed', 
-    error_message: lastError,
-    updated_at: new Date().toISOString(),
-    api_response: { error: lastError, attempts } 
-  }).eq("id", transaction.id);
-  
-  return { success: false, error: lastError };
+    // Explicit Failure Handling
+    const lastError = result.message || result.error || "Provider rejected request";
+    console.error(`🛑 [${executionId}] Provider Rejected:`, lastError);
+    
+    await supabase.from("transactions").update({ 
+      vtu_status: 'failed', 
+      error_message: lastError,
+      updated_at: new Date().toISOString(),
+      api_response: result
+    }).eq("id", transaction.id);
+
+    return { success: false, error: lastError };
+
+  } catch (err: any) {
+    console.error(`❌ [${executionId}] CRITICAL CONNECTION FAILURE:`, err.message);
+    
+    // In case of connection failure, we DON'T mark as failed if we don't know for sure
+    // We let it sit in 'pending' or whatever state it was in for reconciliation
+    throw err;
+  }
 }

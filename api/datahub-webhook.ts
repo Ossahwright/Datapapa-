@@ -98,39 +98,46 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    console.log("MATCHED TRANSACTION ID:", tx.id);
-    console.log("CURRENT LOCAL STATUS:", tx.delivery_status);
+    console.log("=== WEBHOOK CONVERGENCE START ===");
+    console.log("Matched Transaction:", tx.id);
+    console.log("Provider Reference:", providerRef);
+    console.log("Current Local State:", { delivery: tx.delivery_status, vtu: tx.vtu_status });
 
-    // 🚫 Prevent duplication
-    if (tx.delivery_status === "delivered") {
-      console.log("✅ [Webhook] Transaction already marked as delivered. Skipping.");
-      return res.status(200).json({ message: "Already delivered" });
+    // 🚫 Idempotency: Never downgrade from a terminal success state
+    if (tx.delivery_status === "delivered" || tx.vtu_status === "success") {
+      console.log("✅ [Webhook] Transaction already fulfilled. Convergence complete. Skipping.");
+      return res.status(200).json({ message: "Already fulfilled" });
     }
 
     const statusStr = String(data.status || payload.status || "").toUpperCase();
-    console.log("INCOMING PROVIDER STATUS:", statusStr);
+    console.log("Incoming Provider Status:", statusStr);
 
     const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL"].includes(statusStr);
     const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED"].includes(statusStr);
 
     if (!isSuccess && !isFailed) {
-      console.log(`⏳ [Webhook] Intermediate status received (${statusStr}). No state change.`);
-      return res.status(200).json({ message: "Still processing" });
+      console.log(`⏳ [Webhook] Intermediate state received (${statusStr}). Enforcing convergence...`);
+      // Even for intermediate states, ensure we are in 'processing' to avoid 'failed' false positives
+      if (tx.vtu_status !== 'processing') {
+         await supabase.from("transactions").update({ vtu_status: 'processing', updated_at: timestamp }).eq("id", tx.id);
+      }
+      return res.status(200).json({ message: "Converged to processing" });
     }
 
     const deliveryStatus = isSuccess ? "delivered" : "failed";
     const vtuStatus = isSuccess ? "success" : "failed";
 
-    console.log(`📝 [Webhook] Updating DB: ${deliveryStatus}`);
+    console.log(`📝 [Webhook] Converging truth to: ${deliveryStatus}`);
 
     const { data: updatedRows, error: updateError } = await supabase
       .from("transactions")
       .update({
         delivery_status: deliveryStatus,
         vtu_status: vtuStatus,
-        delivery_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        delivery_updated_at: timestamp,
+        updated_at: timestamp,
         api_response: payload,
+        external_reference: providerRef || tx.external_reference,
         error_message: isSuccess ? null : (data.message || data.error || "Provider reported failure")
       })
       .eq("id", tx.id)
@@ -138,10 +145,12 @@ export default async function handler(req: any, res: any) {
 
     if (updateError) {
       console.error("❌ [Webhook] Supabase Update Error (Possible RLS?):", updateError.message);
+      console.log("RLS Error Details:", JSON.stringify(updateError));
       throw updateError;
     }
 
-    console.log("ROWS UPDATED:", updatedRows?.length || 0);
+    console.log("DB Update Result: SUCCESS");
+    console.log("Rows Updated:", updatedRows?.length || 0);
     console.log("=== WEBHOOK RECONCILIATION SUCCESS ===");
 
     await logWebhook({ reference: providerRef, payload, status: 'processed' });
