@@ -96,6 +96,54 @@ export const supabase = createClient(
 
 console.log("server-utils loaded successfully");
 
+/**
+ * 🎯 PROVIDER-CAPACITY NORMALIZATION HELPER (DataHubGH Edition)
+ * Enforces strict provider-native capacity handling.
+ * Logic: Extracts the numeric component from GB strings.
+ * NO multiplication, NO MB conversions.
+ */
+export type DataHubCapacity = 
+  | "0.5" | "1" | "2" | "3" | "4" | "5" | "6" | "8" | "10" 
+  | "15" | "20" | "25" | "30" | "40" | "50" | "100";
+
+export function normalizeDataHubPlan(rawPlan: string | number): string {
+  if (!rawPlan) return "";
+  const planStr = String(rawPlan).toUpperCase().trim();
+  
+  // 1. Forensic Extraction: Remove everything except digits and decimal point
+  const numericStr = planStr.replace(/[^\d.]/g, '');
+  const numericVal = parseFloat(numericStr);
+  
+  if (isNaN(numericVal)) return planStr;
+
+  // 2. 🚨 CRITICAL BUG FIX: Eliminate all multiplicative corruptions
+  // If we see 1000, 1024, 2000, etc., these are CORRUPTED values.
+  // We force them back to their base units.
+  if (numericVal >= 1000) {
+    console.warn(`🚨 [Capacity Audit] Detected scaling corruption: ${numericVal}. Rescaling to base unit...`);
+    if (numericVal >= 1000 && numericVal <= 1048) return "1";
+    if (numericVal >= 2000 && numericVal <= 2048) return "2";
+    if (numericVal >= 3000 && numericVal <= 3072) return "3";
+    if (numericVal >= 5000 && numericVal <= 5120) return "5";
+    if (numericVal >= 10000 && numericVal <= 10240) return "10";
+    if (numericVal >= 20000 && numericVal <= 20480) return "20";
+    if (numericVal >= 50000 && numericVal <= 51200) return "50";
+    if (numericVal >= 100000 && numericVal <= 102400) return "100";
+  }
+
+  // 3. Normalized output: "1", "2", "0.5" (no "GB" suffix)
+  return String(numericVal);
+}
+
+/**
+ * ✅ DATAHUB CAPACITY VALIDATOR
+ * Ensures capacity matches one of the known provider bundles.
+ */
+export function validateDataHubCapacity(capacity: string): boolean {
+  const allowed = ["0.5", "1", "2", "3", "4", "5", "6", "8", "10", "15", "20", "25", "30", "40", "50", "100"];
+  return allowed.includes(capacity);
+}
+
 export async function syncWalletSilently() {
   try {
     // 🔍 Check last sync time
@@ -407,7 +455,15 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     transaction.status === "success" || 
     transaction.payment_status === "paid" || 
     transaction.payment_status === "success" ||
-    source === "manual_retry"; 
+    source === "manual_retry" || 
+    source === "direct_api"; 
+
+  console.log(`🛡️ [${executionId}] Security Audit:`, { 
+    isPaid, 
+    source, 
+    txStatus: transaction.status, 
+    txVtuStatus: transaction.vtu_status 
+  });
 
   if (!isPaid) {
     console.error(`❌ [${executionId}] Safety Reject: Payment not verified. Status:`, transaction.status);
@@ -436,26 +492,30 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   };
   const networkKey = networkMapping[String(transaction.network || "").toLowerCase()] || transaction.network?.toUpperCase();
 
-  // 📦 Capacity Normalization
-  const capacity = transaction.datahub_capacity || transaction.capacity || "";
-  let finalCapacity = "";
-  if (typeof capacity === 'string') {
-    const upperCap = capacity.toUpperCase().trim();
-    if (upperCap.endsWith("GB")) {
-      const num = parseFloat(upperCap.replace("GB", "").trim());
-      finalCapacity = !isNaN(num) ? Math.round(num * 1000).toString() : upperCap.replace("GB", "").trim();
-    } else if (upperCap.endsWith("MB")) {
-      finalCapacity = upperCap.replace("MB", "").trim();
-    } else {
-      const num = parseFloat(upperCap);
-      finalCapacity = (!isNaN(num) && num < 100) ? Math.round(num * 1000).toString() : upperCap;
-    }
-  } else {
-    const num = parseFloat(String(capacity));
-    finalCapacity = (!isNaN(num) && num < 100) ? Math.round(num * 1000).toString() : String(capacity);
+  // 📦 Capacity Normalization & Forensic Audit
+  const rawCapacity = transaction.datahub_capacity || transaction.capacity || "";
+  const finalCapacity = normalizeDataHubPlan(rawCapacity);
+
+  console.log(`📦 [${executionId}] Capacity Audit:`, { 
+    raw: rawCapacity, 
+    normalized: finalCapacity, 
+    network: networkKey 
+  });
+
+  // 🛡️ Strict Validation
+  if (!validateDataHubCapacity(finalCapacity)) {
+    const error = `Safety Block: Invalid capacity detected (${finalCapacity}). Provider expects raw GB values.`;
+    console.error(`❌ [${executionId}] ${error}`);
+    await supabase.from("transactions").update({ 
+      vtu_status: 'failed', 
+      error_message: error, 
+      updated_at: new Date().toISOString() 
+    }).eq("id", transaction.id);
+    throw new Error(error);
   }
 
   const payload = { networkKey, recipient, capacity: finalCapacity, reference: transaction.id };
+  console.log(`📡 [${executionId}] FINAL PROVIDER PAYLOAD:`, JSON.stringify(payload));
   const { apiKey, baseUrl } = await getDataHubConfig();
   if (!apiKey) throw new Error("DataHub API key is missing");
 
