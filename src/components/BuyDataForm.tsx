@@ -274,37 +274,47 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setIsLoading(true);
 
     try {
-      // 1. Save transaction FIRST as requested
+      // 1. Save transaction FIRST via Backend API (Server-Owned persistence)
       const { data: userData } = await supabase.auth.getUser();
       
       const sellingPrice = selectedBundleObj?.price || 0;
       const costPrice = parseFloat(selectedBundleObj?.original?.cost_price || '0') || 0;
       const profit = Math.max(0, sellingPrice - costPrice);
 
-          const { data, error: txError } = await supabase
-        .from("transactions")
-        .insert({
-          user_id: userData?.user?.id || null,
-          amount: sellingPrice,
-          profit: profit,
-          network: network,
-          recipient_phone: phone,
-          payer_phone_number: payerPhone || phone, // Store payer phone
-          status: "pending",
-          capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
-          network_key: selectedBundleObj?.original?.network_key || network,
-          datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
-          datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || ''
-        })
-        .select()
-        .single();
+      const payload = {
+        user_id: userData?.user?.id || null,
+        amount: sellingPrice,
+        profit: profit,
+        network: network,
+        recipient_phone: phone,
+        payer_phone_number: payerPhone || phone,
+        capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
+        network_key: selectedBundleObj?.original?.network_key || network,
+        datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
+        datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || ''
+      };
 
-      if (txError) throw txError;
+      console.log("🚀 [Client] INITIATING SECURE TRANSACTION VIA BACKEND...");
       
-      console.log("Transaction created in Supabase:", data);
+      const response = await fetch("/api/initiate-transaction", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const initResult = await response.json();
+
+      if (!response.ok || !initResult.success) {
+        throw new Error(initResult.error || "Failed to initiate transaction");
+      }
+
+      const tx = initResult.transaction;
+      console.log("✅ Transaction created by Secure Backend:", tx.id);
 
       // 2. Now trigger Paystack via state update that fires useEffect
-      setCurrentTxId(data.id);
+      setCurrentTxId(tx.id);
     } catch (err: any) {
       console.error("Initialization error:", err);
       setError(err.message || 'Failed to initiate transaction. Please try again.');

@@ -1154,20 +1154,23 @@ export default function AdminDashboard() {
 
   const markDelivered = async (txId: string) => {
     try {
-      const { error } = await supabase
-        .from("transactions")
-        .update({
-          delivery_status: "delivered",
-          delivery_updated_at: new Date().toISOString(),
-        })
-        .eq("id", txId);
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      if (error) throw error;
-      alert("Marked as delivered");
-      fetchTransactions();
+      const res = await axios.post("/api/admin-tx-action", { 
+        action: 'mark_delivered', 
+        transactionId: txId 
+      }, { headers });
+
+      if (res.data.success) {
+        alert("Marked as delivered");
+        fetchTransactions();
+      } else {
+        throw new Error(res.data.error || "Failed to update transaction");
+      }
     } catch (err: any) {
       console.error("Mark as delivered error:", err);
-      alert("Failed to mark as delivered: " + (err.message || String(err)));
+      alert("Failed to mark as delivered: " + (err.response?.data?.error || err.message || String(err)));
     }
   };
 
@@ -1175,18 +1178,23 @@ export default function AdminDashboard() {
     if (isDeletingTx) return;
     setIsDeletingTx(true);
     try {
-      const { error } = await supabase
-        .from("transactions")
-        .delete()
-        .eq("id", txId);
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      if (error) throw error;
+      const res = await axios.post("/api/admin-tx-action", { 
+        action: 'delete', 
+        transactionId: txId 
+      }, { headers });
 
-      setTransactions((prev) => prev.filter((t) => t.id !== txId));
-      setTxToDelete(null);
-      fetchDashboardStats();
+      if (res.data.success) {
+        setTransactions((prev) => prev.filter((t) => t.id !== txId));
+        setTxToDelete(null);
+        fetchDashboardStats();
+      } else {
+        throw new Error(res.data.error || "Failed to delete transaction");
+      }
     } catch (err: any) {
-      alert(`Delete failed: ${err.message}`);
+      alert(`Delete failed: ${err.response?.data?.error || err.message}`);
     } finally {
       setIsDeletingTx(false);
     }

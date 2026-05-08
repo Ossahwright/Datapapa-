@@ -131,9 +131,9 @@ DROP POLICY IF EXISTS "Users can view their own transactions." ON public.transac
 DROP POLICY IF EXISTS "Admins can view all transactions." ON public.transactions;
 DROP POLICY IF EXISTS "Admins can manage transactions" ON public.transactions;
 
-CREATE POLICY "Anyone can create a transaction." ON public.transactions FOR INSERT WITH CHECK (true);
 CREATE POLICY "Users can view their own transactions." ON public.transactions FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Admins can manage transactions" ON public.transactions FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
+-- NOTE: service_role bypasses RLS naturally, so it can always insert/update.
 
 -- 6. Trigger to automatically create a user profile when a new auth user signs up
 CREATE OR REPLACE FUNCTION public.handle_new_user()
