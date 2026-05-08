@@ -1036,7 +1036,12 @@ export default function AdminDashboard() {
       return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
     }
     if (isPaid) {
-      return { label: 'Payment Verified', color: 'bg-blue-100 text-blue-700', icon: <Clock size={10} className="mr-1" /> };
+      return { 
+        label: 'Payment Verified', 
+        color: 'bg-blue-100 text-blue-700', 
+        icon: <Clock size={10} className="mr-1" />,
+        retry: !vtu || vtu === 'pending'
+      };
     }
     return { label: tx.status || 'Pending', color: 'bg-slate-100 text-slate-700', icon: null };
   };

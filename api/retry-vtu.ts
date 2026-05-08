@@ -86,21 +86,14 @@ export default async function handler(req: any, res: any) {
     const isRecentlyProcessed = (Date.now() - lastUpdate < 30000); // 30 second cooldown
     if (isRecentlyProcessed && (tx.vtu_status === "provider_execution_started" || tx.vtu_status === "processing")) {
       console.log("⏳ [Retry Blocked] Retried too recently.");
-      return res.status(429).json({ success: false, message: "Please wait 30 seconds between retry attempts." });
+      return res.status(200).json({ success: false, message: "Please wait 30 seconds between retry attempts." });
     }
 
-    // ✅ ALLOW REPURCHASE ONLY IF:
-    // 1. It explicitly failed or provider rejected it natively
-    // 2. OR it is "stuck" natively
-    const isExplicitlyFailed = tx.status === "failed" || tx.vtu_status === "failed" || tx.vtu_status === "provider_rejected";
-    const isStuck = (tx.status === "paid" || tx.status === "payment_verified" || tx.status === "success") && (!tx.vtu_status || tx.vtu_status === 'pending');
+    // ✅ ALLOW REPURCHASE
+    // Since we've passed the "Delivered" and "Footprint" guards, and it's an authenticated Admin,
+    // we allow the repurchase attempt to proceed. This covers failed, stuck, and stale transactions.
     
-    console.log("RETRY QUALIFICATION:", { isExplicitlyFailed, isStuck, vtu_status: tx.vtu_status });
-
-    if (!isExplicitlyFailed && !isStuck) {
-      console.error("❌ [Retry Blocked] Not eligible for repurchase.");
-      return res.json({ success: false, message: `Repurchase not allowed (Current state: ${tx.vtu_status || tx.status})` });
-    }
+    console.log("RETRY QUALIFICATION: ACCEPTED (Admin Override)");
 
     console.log("=== INCREMENTING RETRY ATTEMPTS ===");
     await supabase.from('transactions').update({
