@@ -13,7 +13,7 @@ let supabaseClient: any = null;
 export const getSupabase = () => {
   if (supabaseClient) return supabaseClient;
 
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co';
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseKey) {
@@ -21,7 +21,7 @@ export const getSupabase = () => {
     // We handle this more strictly in startup validation now
   }
 
-  supabaseClient = createClient(supabaseUrl, supabaseKey || "", {
+  supabaseClient = createClient(supabaseUrl, supabaseKey!, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -39,10 +39,16 @@ export function validateEnv() {
   const critical = [
     'PAYSTACK_SECRET_KEY',
     'DATAHUB_API_KEY',
-    'VITE_SUPABASE_URL',
+    'SUPABASE_URL',
     'SUPABASE_SERVICE_ROLE_KEY'
   ];
-  const missing = critical.filter(key => !process.env[key]);
+  const missing = critical.filter(key => {
+    const val = process.env[key];
+    if (!val && key === 'SUPABASE_URL') {
+      return !process.env['VITE_SUPABASE_URL'];
+    }
+    return !val;
+  });
   
   if (missing.length > 0) {
     console.error(`❌ CRITICAL STARTUP ERROR: Missing Environment Variables: ${missing.join(', ')}`);
@@ -83,8 +89,8 @@ export async function isAdminAuth(req: any) {
 
 // For backward compatibility while we transition
 export const supabase = createClient(
-  process.env.VITE_SUPABASE_URL || 'https://qsxzarhxgfwnogvuqomf.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  process.env.SUPABASE_URL! || process.env.VITE_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
   {
     auth: {
       persistSession: false,
