@@ -997,6 +997,7 @@ export default function AdminDashboard() {
   };
 
   const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
+  const [isReconciling, setIsReconciling] = useState<string | null>(null);
 
   const getTransactionStatus = (tx: any) => {
     const isPaid = tx.status === 'paid' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
@@ -1015,7 +1016,13 @@ export default function AdminDashboard() {
       return { label: 'Stale Processing', color: 'bg-amber-100 text-amber-700 font-bold animate-pulse', icon: <Clock size={10} className="mr-1" />, retry: true };
     }
     if (vtu === 'processing') {
-      return { label: 'Awaiting Webhook', color: 'bg-indigo-100 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" /> };
+      const isStuck = now - updatedAt > 120000; // 2 minutes
+      return { 
+        label: isStuck ? 'Delayed / Awaiting Webhook' : 'Processing', 
+        color: isStuck ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-indigo-50 text-indigo-700', 
+        icon: <RefreshCw size={10} className="animate-spin mr-1" />,
+        reconcile: true 
+      };
     }
     if (tx.status === 'blocked_source') {
       return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
@@ -1094,6 +1101,29 @@ export default function AdminDashboard() {
       alert("Failed to execute retry: " + errorMessage);
     } finally {
       setIsRetryingVTU(null);
+    }
+  };
+
+  const reconcileStatus = async (transactionId: string) => {
+    if (isReconciling) return;
+    setIsReconciling(transactionId);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
+      const res = await axios.post("/api/reconcile-tx", { transactionId }, { headers });
+      if (res.data.success) {
+        alert("Status Sync Complete: " + (res.data.status || "Updated"));
+      } else {
+        alert("Sync Failed: " + (res.data.error || "Could not reconcile with provider"));
+      }
+      fetchTransactions();
+    } catch (err: any) {
+      console.error("Reconciliation failed:", err);
+      alert("Error: " + (err.response?.data?.error || err.message));
+    } finally {
+      setIsReconciling(null);
     }
   };
 
@@ -2132,9 +2162,9 @@ export default function AdminDashboard() {
                                   if (tx.vtu_status === 'processing' || state.label === 'Stale Processing') {
                                     return (
                                       <button
-                                        onClick={() => retryVTU(tx.id)}
-                                        disabled={isRetryingVTU === tx.id}
-                                        className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
+                                        onClick={() => reconcileStatus(tx.id)}
+                                        disabled={isReconciling === tx.id}
+                                        className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isReconciling === tx.id ? "animate-spin" : ""}`}
                                         title="Sync/Reconcile with Provider"
                                       >
                                         <RefreshCw size={16} />
@@ -4301,7 +4331,27 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+                {selectedTransaction.delivery_status !== 'delivered' && selectedTransaction.vtu_status !== 'success' && (
+                  <>
+                    <button
+                      onClick={() => reconcileStatus(selectedTransaction.id)}
+                      disabled={isReconciling === selectedTransaction.id}
+                      className="px-4 py-2 bg-indigo-50 text-indigo-700 font-bold rounded-xl hover:bg-indigo-100 transition-colors flex items-center gap-2"
+                    >
+                      <RefreshCw size={16} className={isReconciling === selectedTransaction.id ? "animate-spin" : ""} />
+                      Sync Status
+                    </button>
+                    <button
+                      onClick={() => retryVTU(selectedTransaction.id)}
+                      disabled={isRetryingVTU === selectedTransaction.id}
+                      className="px-4 py-2 bg-amber-50 text-amber-700 font-bold rounded-xl hover:bg-amber-100 transition-colors flex items-center gap-2"
+                    >
+                      <RefreshCw size={16} className={isRetryingVTU === selectedTransaction.id ? "animate-spin" : ""} />
+                      Force Retry
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => setSelectedTransaction(null)}
                   className="px-6 py-2 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-colors"

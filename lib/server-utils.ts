@@ -262,30 +262,106 @@ export async function checkProviderTransactionStatus(transactionIdOrRef: string)
     if (!apiKey) return null;
 
     const base = baseUrl.replace(/\/+$/, "");
-    // Note: DataHub documentation varies, but common status endpoint is /order-status/{ref} or query param
-    const endpoint = `${base}/order-status/${transactionIdOrRef}`;
     
-    console.log(`🔍 [Reconciliation] Checking provider status for: ${transactionIdOrRef}`);
+    // Attempt multiple status endpoint patterns as DataHub versions vary
+    const endpoints = [
+      `${base}/order-status/${transactionIdOrRef}`,
+      `${base}/status/${transactionIdOrRef}`,
+      `${base}/data-purchase/${transactionIdOrRef}`
+    ];
     
-    const response = await axios.get(endpoint, {
-      headers: { "X-API-Key": apiKey },
-      timeout: 10000,
-      validateStatus: () => true
-    });
+    let lastResult = null;
+    
+    for (const endpoint of endpoints) {
+      console.log(`🔍 [Reconciliation] Trying endpoint: ${endpoint}`);
+      try {
+        const response = await axios.get(endpoint, {
+          headers: { "X-API-Key": apiKey },
+          timeout: 10000,
+          validateStatus: () => true
+        });
 
-    const result = response.data;
-    console.log("📡 [Reconciliation] Provider status response:", JSON.stringify(result));
+        if (response.status === 200) {
+          const result = response.data;
+          const data = result?.data || result;
+          const status = String(data?.status || result?.status || "").toUpperCase();
+          
+          console.log(`📡 [Reconciliation] Found status: ${status} for ${transactionIdOrRef}`);
+          
+          return {
+            status: response.status,
+            data: result,
+            statusRaw: status,
+            isFulfilled: ["DELIVERED", "SUCCESS", "SUCCESSFUL", "COMPLETED"].includes(status),
+            isFailed: ["FAILED", "REJECTED", "REVERSED", "CANCELLED"].includes(status),
+            isProcessing: ["PROCESSING", "PENDING", "AWAITING"].includes(status),
+            reference: data?.reference || data?.id || transactionIdOrRef
+          };
+        }
+        lastResult = response.data;
+      } catch (e) {}
+    }
 
-    return {
-      status: response.status,
-      data: result,
-      isFulfilled: result.success === true || result.status?.toUpperCase() === 'SUCCESSFUL' || result.status?.toUpperCase() === 'DELIVERED',
-      isFailed: result.status?.toUpperCase() === 'FAILED' || result.status?.toUpperCase() === 'REJECTED'
-    };
+    return { error: "No status found", lastResult };
   } catch (err) {
     console.error("❌ [Reconciliation] Status check failed:", err);
     return null;
   }
+}
+
+/**
+ * 🛠️ RECONCILE TRANSACTION
+ * Forces a local transaction to sync with provider state.
+ */
+export async function reconcileTransaction(transactionId: string) {
+  console.log(`=== [Reconcile] Starting reconciliation for: ${transactionId} ===`);
+  
+  const { data: tx, error: fetchError } = await supabase
+    .from("transactions")
+    .select("*")
+    .eq("id", transactionId)
+    .single();
+    
+  if (fetchError || !tx) {
+    console.error(`❌ [Reconcile] Transaction ${transactionId} not found`);
+    return { success: false, error: "Not found" };
+  }
+  
+  const ref = tx.external_reference || tx.id;
+  const provider = await checkProviderTransactionStatus(ref);
+  
+  if (!provider || provider.error) {
+    console.warn(`⚠️ [Reconcile] Could not get provider status for ${ref}`);
+    return { success: false, error: "Provider unreachable or status missing" };
+  }
+  
+  if (provider.isFulfilled || provider.isFailed) {
+    const deliveryStatus = provider.isFulfilled ? "delivered" : "failed";
+    const vtuStatus = provider.isFulfilled ? "success" : "failed";
+    
+    console.log(`📝 [Reconcile] Updating state to: ${deliveryStatus}`);
+    
+    const { error: updateErr } = await supabase
+      .from("transactions")
+      .update({
+        delivery_status: deliveryStatus,
+        vtu_status: vtuStatus,
+        delivery_updated_at: new Date().toISOString(),
+        api_response: provider.data,
+        error_message: provider.isFailed ? (provider.data?.message || "Provider reported failure") : null
+      })
+      .eq("id", transactionId);
+      
+    if (updateErr) {
+      console.error("❌ [Reconcile] Update failed:", updateErr.message);
+      return { success: false, error: updateErr.message };
+    }
+    
+    return { success: true, status: deliveryStatus };
+  }
+  
+  console.log(`⏳ [Reconcile] Still in intermediate state: ${provider.statusRaw}`);
+  return { success: true, status: "processing", raw: provider.statusRaw };
 }
 
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
@@ -396,7 +472,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
      console.error(`❌ [Safety Reject] Invalid recipient format: ${transaction.recipient_phone} -> ${recipient}`);
      await supabase.from("transactions").update({
        vtu_status: 'failed',
-       error_message: `Recipient normalization failed: ${recipient}`
+       error_message: `Recipient normalization failed: ${recipient}`,
+       updated_at: new Date().toISOString()
      }).eq("id", transaction.id);
      
      throw new Error(`Invalid recipient number: ${recipient}. Must match 0XXXXXXXXX.`);
@@ -596,6 +673,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     vtu_status: 'failed', 
     status: 'failed', 
     error_message: lastError,
+    updated_at: new Date().toISOString(),
     api_response: { error: lastError, attempts } 
   }).eq("id", transaction.id);
   
