@@ -4,6 +4,22 @@ console.log("server-utils loaded successfully inside datahub-webhook");
 
 export default async function handler(req: any, res: any) {
   console.log("datahub-webhook handler booted");
+  console.log("WEBHOOK METHOD:", req.method);
+  console.log("WEBHOOK BODY:", req.body);
+
+  if (req.method !== "POST") {
+    return res.status(200).json({
+      success: true,
+      message: "DataHub webhook endpoint online"
+    });
+  }
+
+  if (!req.body || typeof req.body !== "object") {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid payload"
+    });
+  }
   let providerRef = "unknown";
   let payload: any = {};
   
@@ -20,7 +36,8 @@ export default async function handler(req: any, res: any) {
       // Last ditch effort: scan entire payload for something that looks like our UUID
       const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
       const payloadString = JSON.stringify(payload);
-      const match = payloadString.match(uuidRegex);
+      console.log("MATCH FIELD:", payloadString);
+      const match = typeof payloadString === "string" ? payloadString.match(uuidRegex) : null;
       if (match) {
         providerRef = match[0];
         console.log("🧩 [Webhook] Extracted UUID from payload body:", providerRef);

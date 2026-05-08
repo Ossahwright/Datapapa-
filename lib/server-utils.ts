@@ -419,11 +419,45 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   // 📦 Payload Preparation
   const capacity = transaction.datahub_capacity || transaction.capacity || "";
-  let finalCapacity = typeof capacity === 'string' ? capacity.toUpperCase().replace("GB", "").trim() : String(capacity);
+  let finalCapacity = "";
   
-  if (finalCapacity.includes("MB")) {
-    finalCapacity = finalCapacity.replace("MB", "").trim();
+  if (typeof capacity === 'string') {
+    const upperCap = capacity.toUpperCase().trim();
+    
+    // If it contains "GB", convert to MB (assuming 1GB = 1000MB for DataHub, or 1024 if preferred)
+    // Most Ghanaian VTU APIs use 1000MB for 1GB (e.g. 1000 for 1GB MTN)
+    if (upperCap.endsWith("GB")) {
+      const num = parseFloat(upperCap.replace("GB", "").trim());
+      if (!isNaN(num)) {
+        finalCapacity = Math.round(num * 1000).toString();
+      } else {
+        finalCapacity = upperCap.replace("GB", "").trim();
+      }
+    } else if (upperCap.endsWith("MB")) {
+      finalCapacity = upperCap.replace("MB", "").trim();
+    } else {
+      // If it's already a number string (e.g. "1000"), it's likely already in MB
+      // but if it's "1", "2", "5", etc. it might be GB without the unit.
+      const num = parseFloat(upperCap);
+      if (!isNaN(num) && num < 100) {
+        // Safe assumption: if less than 100 and no unit, it's likely GB
+        finalCapacity = Math.round(num * 1000).toString();
+      } else {
+        finalCapacity = upperCap;
+      }
+    }
+  } else {
+    finalCapacity = String(capacity);
+    const num = parseFloat(finalCapacity);
+    if (!isNaN(num) && num < 100) {
+      finalCapacity = Math.round(num * 1000).toString();
+    }
   }
+  
+  console.log("CAPACITY NORMALIZED:", {
+    original: capacity,
+    final: finalCapacity
+  });
 
   const payload = {
     networkKey: networkKey,

@@ -60,17 +60,18 @@ export default async function handler(req: any, res: any) {
 
     // 🚫 Block invalid retries (Already successful)
     const isAlreadyDelivered = tx.vtu_status === "success" || tx.vtu_status === "completed" || tx.vtu_status === "delivered";
-    if (isAlreadyDelivered || tx.external_reference) {
-      console.log("✅ [Retry Blocked] Already delivered/has reference.");
-      return res.json({ success: false, message: "Already delivered or has provider reference — no retry allowed" });
+    if (isAlreadyDelivered) {
+      console.log("✅ [Retry Blocked] Already delivered.");
+      return res.json({ success: false, message: "Already delivered — no retry allowed" });
     }
 
     // ⏳ Block if still processing recently or retried too soon
+    // (Only block if it's NOT a reconciliation attempt for a stuck transaction)
     const lastUpdate = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
-    const isRecentlyProcessed = (Date.now() - lastUpdate < 60000); // 1 minute cooldown
-    if (isRecentlyProcessed) {
+    const isRecentlyProcessed = (Date.now() - lastUpdate < 30000); // 30 second cooldown
+    if (isRecentlyProcessed && tx.vtu_status === "processing") {
       console.log("⏳ [Retry Blocked] Retried too recently.");
-      return res.status(429).json({ success: false, message: "Please wait 60 seconds between retry attempts." });
+      return res.status(429).json({ success: false, message: "Please wait 30 seconds between retry attempts." });
     }
 
     // ✅ ALLOW RETRY IF:

@@ -3798,12 +3798,6 @@ export default function AdminDashboard() {
                             network: net,
                             network_key: key,
                             datahub_network_key: key,
-                            datahub_capacity: newBundle.capacity
-                              ? newBundle.capacity
-                                  .toUpperCase()
-                                  .replace("GB", "")
-                                  .trim()
-                              : "",
                           });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -3816,18 +3810,18 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Network Key
+                        Display Cap (e.g. 1GB)
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. YELLO, 1, 2"
-                        value={newBundle.network_key || ""}
+                        placeholder="e.g. 1GB"
+                        value={newBundle.capacity || ""}
                         onChange={(e) => {
-                          const val = e.target.value;
+                          const cap = e.target.value;
                           setNewBundle({
                             ...newBundle,
-                            network_key: val,
-                            datahub_network_key: val,
+                            capacity: cap,
+                            // Auto-set datahub fields but allow manual override in other fields
                           });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -3836,28 +3830,43 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Display Capacity
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 1GB, 500MB"
-                      value={newBundle.capacity || ""}
-                      onChange={(e) => {
-                        const cap = e.target.value;
-                        setNewBundle({
-                          ...newBundle,
-                          capacity: cap,
-                          datahub_capacity: cap
-                            .toUpperCase()
-                            .replace("GB", "")
-                            .trim(),
-                        });
-                      }}
-                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      required
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        DataHub Network Key
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. YELLO"
+                        value={newBundle.datahub_network_key || ""}
+                        onChange={(e) =>
+                          setNewBundle({
+                            ...newBundle,
+                            datahub_network_key: e.target.value,
+                          })
+                        }
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        DataHub Capacity (MB)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1000"
+                        value={newBundle.datahub_capacity || ""}
+                        onChange={(e) =>
+                          setNewBundle({
+                            ...newBundle,
+                            datahub_capacity: e.target.value,
+                          })
+                        }
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
                   </div>
 
                   <div>
@@ -4021,14 +4030,14 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Network Key
+                        Display Cap (e.g. 1GB)
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. YELLO, 1, 2"
-                        value={form.network_key || ""}
+                        placeholder="e.g. 1GB"
+                        value={form.capacity || ""}
                         onChange={(e) =>
-                          setForm({ ...form, network_key: e.target.value })
+                          setForm({ ...form, capacity: e.target.value })
                         }
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
@@ -4036,20 +4045,37 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Display Capacity
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 1GB, 500MB"
-                      value={form.capacity || ""}
-                      onChange={(e) =>
-                        setForm({ ...form, capacity: e.target.value })
-                      }
-                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      required
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        DataHub Network Key
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. YELLO"
+                        value={form.datahub_network_key || ""}
+                        onChange={(e) =>
+                          setForm({ ...form, datahub_network_key: e.target.value })
+                        }
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        DataHub Capacity (MB)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1000"
+                        value={form.datahub_capacity || ""}
+                        onChange={(e) =>
+                          setForm({ ...form, datahub_capacity: e.target.value })
+                        }
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
                   </div>
 
                   <div>

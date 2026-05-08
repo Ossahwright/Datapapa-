@@ -285,7 +285,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
           network_key: selectedBundleObj?.original?.network_key || network,
           datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
-          datahub_capacity: selectedBundleObj?.original?.datahub_capacity || (selectedBundleObj?.volume || selectedBundleObj?.capacity || '').toUpperCase().replace("GB", "").trim()
+          datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || (selectedBundleObj?.volume || selectedBundleObj?.capacity || '').toUpperCase().replace("GB", "000").replace("MB", "").trim()
         })
         .select()
         .single();
