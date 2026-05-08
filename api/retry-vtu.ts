@@ -130,8 +130,8 @@ export default async function handler(req: any, res: any) {
            payment_status: "paid",
            api_status: "success",
            vtu_status: result.vtu_status || "provider_accepted",
-           provider_reference: providerReference || tx.provider_reference || null,
-           external_reference: providerReference || tx.external_reference,
+           provider_reference: providerReference,
+           external_reference: providerReference,
            reconciliation_state: "awaiting_provider_confirmation",
            updated_at: new Date().toISOString()
         };

@@ -372,12 +372,13 @@ export default function AdminDashboard() {
   const isStuck = (t: any) => {
     if (!t?.created_at) return false;
     const diff = Date.now() - new Date(t.created_at).getTime();
+    // 🛡️ REPRODUCED CALM TIMING: 45 minute grace period
     const isProcessingTooLong =
-      t.vtu_status === "processing" && diff > 5 * 60 * 1000;
+      t.vtu_status === "processing" && diff > 45 * 60 * 1000;
     const isPendingTooLong =
-      t.vtu_status === "pending" &&
-      t.status === "paid" &&
-      diff > 10 * 60 * 1000;
+      (t.vtu_status === "pending" || !t.vtu_status) &&
+      (t.status === "paid" || t.status === "success") &&
+      diff > 45 * 60 * 1000;
     return isProcessingTooLong || isPendingTooLong;
   };
 
@@ -1004,7 +1005,7 @@ export default function AdminDashboard() {
     const vtu = tx.vtu_status;
     const updatedAt = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
     const now = Date.now();
-    const isStale = (vtu === 'processing' || vtu === 'provider_execution_started') && (now - updatedAt > 600000); // 10 mins
+    const isStale = (vtu === 'processing' || vtu === 'provider_execution_started') && (now - updatedAt > 2700000); // 45 mins (Calm Timing)
 
     if (vtu === 'manual_review_required' || (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
       return { 

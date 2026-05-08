@@ -333,15 +333,15 @@ export async function reconcileTransaction(transactionId: string) {
      const timestamp = new Date().toISOString();
      
      // Eventual Consistency Timestamps
-     // 0-5 mins: awaiting_provider_confirmation
-     // 5-30 min: reconciliation_pending
-     // 30-120 min: delayed_provider_processing
-     // 2h+: manual_review_required
+     // 0-45 mins: awaiting_provider_confirmation
+     // 45-90 min: delayed_provider_processing
+     // 90-180 min: reconciliation_pending
+     // 3h+: manual_review_required
      
      let newVtuStatus = tx.vtu_status;
-     if (age > 2 * 60 * 60 * 1000) newVtuStatus = "manual_review_required";
-     else if (age > 30 * 60 * 1000) newVtuStatus = "delayed_provider_processing";
-     else if (age > 5 * 60 * 1000) newVtuStatus = "reconciliation_pending";
+     if (age > 3 * 60 * 60 * 1000) newVtuStatus = "manual_review_required";
+     else if (age > 90 * 60 * 1000) newVtuStatus = "reconciliation_pending";
+     else if (age > 45 * 60 * 1000) newVtuStatus = "delayed_provider_processing";
      else if (tx.vtu_status === "provider_accepted") newVtuStatus = "awaiting_provider_confirmation";
 
      if (newVtuStatus !== tx.vtu_status) {
@@ -472,23 +472,27 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     console.log(`📡 [${executionId}] Provider Response:`, response.status, JSON.stringify(result));
 
     // 🛡️ ATOMIC PERSISTENCE BLOCK
-    const orderId = result.data?.reference || result.order_id || result.order_number || result.data?.order_id || result.data?.id || result.reference;
+    const providerReference =
+      (response as any)?.data?.data?.reference ||
+      (response as any)?.data?.reference ||
+      (response as any)?.reference ||
+      null;
     const isAccepted = (response.status >= 200 && response.status < 300) && (
       result.success === true || result.status === true || 
       ["SUCCESSFUL", "PROCESSING", "SUCCESS", "DELIVERED", "PENDING"].includes(String(result.status || "").toUpperCase()) ||
       result.code === 200 || result.code === '200'
     );
 
-    if (isAccepted || orderId) {
+    if (isAccepted || providerReference) {
       console.log(`=== [${executionId}] PROVIDER ACCEPTED ===`);
-      console.log(`✅ [${executionId}] ATOMIC COMMITTING REF:`, orderId);
+      console.log(`✅ [${executionId}] ATOMIC COMMITTING REF:`, providerReference);
       
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
           vtu_status: 'provider_accepted',
-          provider_reference: orderId || null,
-          external_reference: orderId || transaction.external_reference,
+          provider_reference: providerReference,
+          external_reference: providerReference,
           internal_reference: transaction.id,
           provider_payload: result,
           provider_accepted_at: new Date().toISOString(),
@@ -499,7 +503,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         .eq("id", transaction.id);
         
       console.log(`=== [${executionId}] ACCEPTANCE COMMITTED ===`);
-      if (orderId) console.log(`=== [${executionId}] PROVIDER REFERENCE SAVED ===`);
+      if (providerReference) console.log(`=== [${executionId}] PROVIDER REFERENCE SAVED ===`);
       console.log(`=== [${executionId}] PROVIDER PAYLOAD PERSISTED ===`);
 
       if (atomicError) {
@@ -507,7 +511,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         // We still return success to the caller because the provider DID accept it
       }
 
-      return { success: true, vtu_status: 'provider_accepted', external_reference: orderId, ...result };
+      return { success: true, vtu_status: 'provider_accepted', provider_reference: providerReference, external_reference: providerReference, ...result };
     }
 
     // Explicit Failure Handling

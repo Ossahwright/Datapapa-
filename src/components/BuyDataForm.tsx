@@ -34,6 +34,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'success'>('idle');
+  const [countdown, setCountdown] = useState(0);
 
   const [supabaseReady] = useState(isSupabaseConfigured);
   
@@ -198,6 +199,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setPaymentStatus("success");
     setSuccess(true); 
     setIsLoading(false);
+    setCountdown(10);
     
     try {
       const currentPaystackRef = paystackResponse.reference;
@@ -225,24 +227,31 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         }
       });
 
-      // Clear the form
-      setPhone('');
-      setPayerPhone('');
-      setBundle('');
+      // Clear the form fields but keep values for summary
+      const savedPhone = phone;
+      const savedPayerPhone = payerPhone;
+      const savedBundle = bundle;
       
-      // Delay so customer can see the success message before refresh
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-
     } catch (err: any) {
-
       console.error("Payment post-processing error:", err);
     } finally {
       setIsLoading(false);
-      setCurrentTxId(null);
+      // We don't null currentTxId here yet because we might need it for the summary if we chose to use it
     }
   };
+
+  // Countdown timer effect
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (countdown > 0) {
+      timer = setTimeout(() => {
+        setCountdown(prev => prev - 1);
+      }, 1000);
+    } else if (countdown === 0 && success) {
+      window.location.reload();
+    }
+    return () => clearTimeout(timer);
+  }, [countdown, success]);
 
   const handlePaymentClose = () => {
     setIsLoading(false);
@@ -306,114 +315,140 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   if (success) {
     const selectedNetwork = NETWORKS.find(n => n.id === network);
     return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-[2.5rem] shadow-2xl p-6 md:p-8 border border-slate-100 max-w-lg mx-auto w-full relative overflow-hidden"
-      >
-        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
-        
-        <div className="flex flex-col items-center">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
-            <CheckCircle2 className="w-8 h-8 text-green-600" />
-          </div>
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="bg-white rounded-[2.5rem] shadow-2xl p-6 md:p-8 border border-slate-100 max-w-lg mx-auto w-full relative overflow-hidden my-auto"
+        >
+          <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
           
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight">PAYMENT SUCCESS</h2>
-          <p className="text-slate-500 text-sm font-medium mt-1 uppercase tracking-widest">Transaction Receipt</p>
-          
-          {/* Main Receipt Content */}
-          <div className="w-full mt-8 bg-slate-50 rounded-3xl p-6 border border-slate-200/60 relative">
-            {/* Cut-out circles for receipt look */}
-            <div className="absolute top-1/2 -left-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
-            <div className="absolute top-1/2 -right-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
+          <div className="flex flex-col items-center">
+            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: "spring", stiffness: 200, damping: 20 }}
+              >
+                <CheckCircle2 className="w-10 h-10 text-green-600" />
+              </motion.div>
+            </div>
             
-            <div className="space-y-4 font-mono text-xs text-slate-600 uppercase">
-              <div className="flex justify-between">
-                <span>Date</span>
-                <span className="text-slate-900 font-bold">{new Date().toLocaleDateString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Network</span>
-                <span className="text-slate-900 font-bold">{selectedNetwork?.name}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Bundle</span>
-                <span className="text-slate-900 font-bold">{selectedBundleObj?.volume}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Recipient</span>
-                <span className="text-slate-900 font-bold text-sm tracking-tighter">{phone}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Payer</span>
-                <span className="text-slate-900 font-bold">{payerPhone || phone}</span>
-              </div>
+            <h2 className="text-3xl font-black text-slate-900 tracking-tight">TRANSACTION SUCCESS</h2>
+            <p className="text-slate-500 text-xs font-bold mt-1 uppercase tracking-[0.2em]">Official Receipt • {appName}</p>
+            
+            {/* Main Receipt Content */}
+            <div className="w-full mt-8 bg-slate-50 rounded-3xl p-6 border border-slate-200/60 relative">
+              {/* Cut-out circles for receipt look */}
+              <div className="absolute top-1/2 -left-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
+              <div className="absolute top-1/2 -right-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
               
-              <div className="pt-4 border-t border-dashed border-slate-300">
-                <div className="flex justify-between text-base">
-                  <span className="font-bold text-slate-400">Total</span>
-                  <span className="text-indigo-600 font-black">GHS {selectedBundleObj?.price.toFixed(2)}</span>
-                </div>
+              <div className="space-y-4 font-mono text-xs text-slate-600 uppercase">
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.1 }}
+                  className="flex justify-between items-center"
+                >
+                  <span>Status</span>
+                  <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded font-black text-[10px] animate-pulse">SUCCESSFUL</span>
+                </motion.div>
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className="flex justify-between"
+                >
+                  <span>Date & Time</span>
+                  <span className="text-slate-900 font-bold">{new Date().toLocaleString()}</span>
+                </motion.div>
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.3 }}
+                  className="flex justify-between"
+                >
+                  <span>Network</span>
+                  <span className="text-slate-900 font-bold">{selectedNetwork?.name}</span>
+                </motion.div>
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.4 }}
+                  className="flex justify-between"
+                >
+                  <span>Bundle</span>
+                  <span className="text-slate-900 font-bold truncate max-w-[150px] text-right">{selectedBundleObj?.volume}</span>
+                </motion.div>
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.5 }}
+                  className="flex justify-between"
+                >
+                  <span>Recipient</span>
+                  <span className="text-slate-900 font-bold text-sm tracking-tighter">{phone}</span>
+                </motion.div>
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.6 }}
+                  className="flex justify-between"
+                >
+                  <span>Payer</span>
+                  <span className="text-slate-900 font-bold">{payerPhone || phone}</span>
+                </motion.div>
+                
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.7 }}
+                  className="pt-4 border-t border-dashed border-slate-300"
+                >
+                  <div className="flex justify-between items-center text-base">
+                    <span className="font-bold text-slate-400">Amount Paid</span>
+                    <span className="text-indigo-600 font-black text-xl">GHS {selectedBundleObj?.price.toFixed(2)}</span>
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col items-center gap-2">
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Transaction Reference</div>
+              <div className="text-[10px] font-mono text-slate-400 break-all text-center px-4 bg-slate-50 py-2 rounded-lg border border-slate-100">{transactionId}</div>
+            </div>
+
+            <div className="mt-8 flex flex-col items-center w-full gap-4">
+              <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                Refreshing in <span className="text-indigo-600 font-bold tabular-nums">{countdown}s</span>...
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+                <button
+                  onClick={() => {
+                    window.location.reload();
+                  }}
+                  className="px-6 py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-lg shadow-slate-200 flex items-center justify-center gap-2"
+                >
+                  Continue Now
+                </button>
+                <button
+                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
+                  className="px-6 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 flex items-center justify-center gap-2"
+                >
+                  Support
+                </button>
               </div>
             </div>
           </div>
-
-          <div className="mt-6 flex flex-col items-center gap-2">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Reference ID</div>
-            <div className="text-[10px] font-mono text-slate-300 break-all text-center px-4">{transactionId}</div>
-          </div>
-
-          <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-            <button
-              onClick={() => {
-                setSuccess(false);
-                setNetwork('');
-                setBundle('');
-                setPhone('');
-                setPayerPhone('');
-                setTransactionId('');
-              }}
-              className="px-6 py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-lg shadow-slate-200"
-            >
-              Done
-            </button>
-            <button
-              onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
-              className="px-6 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95"
-            >
-              Support
-            </button>
-          </div>
-        </div>
-      </motion.div>
+        </motion.div>
+      </div>
     );
   }
 
   return (
     <div id="buy-data" className="w-full max-w-2xl mx-auto scroll-mt-24 relative">
-      <AnimatePresence>
-        {paymentStatus === "success" && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white rounded-3xl p-8 shadow-2xl text-center max-w-sm w-full border border-slate-100"
-            >
-              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-green-100 mb-6">
-                <CheckCircle2 className="h-10 w-10 text-green-600" />
-              </div>
-              <h2 className="text-2xl font-bold text-slate-900 mb-2">Payment Successful</h2>
-              <p className="text-slate-500 font-medium animate-pulse">Refreshing app...</p>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-6 sm:p-8 md:p-10 border border-slate-100">
         <div className="text-center mb-10">
           <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">

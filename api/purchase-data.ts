@@ -76,7 +76,11 @@ export default async function handler(req: any, res: any) {
         console.error("Missing finalTransactionId");
       }
 
-      const providerReference = result.data?.reference || result.data?.id || result.reference;
+      const providerReference = 
+        result?.provider_reference ||
+        result?.data?.reference ||
+        result?.reference ||
+        null;
       
       if (!providerReference) {
         console.error("Missing providerReference");
@@ -84,13 +88,11 @@ export default async function handler(req: any, res: any) {
 
       const updatePayload: any = {
         api_status: "success",
-        delivery_status: "processing"
+        delivery_status: "processing",
+        provider_reference: providerReference,
+        external_reference: providerReference,
+        reconciliation_state: 'awaiting_provider_confirmation'
       };
-
-      // Only set external_reference if we received one AND we don't already have one
-      if (providerReference && !txData.external_reference) {
-        updatePayload.external_reference = providerReference;
-      }
 
       console.log("Updating transaction with SERVICE ROLE permissions", {
         transaction_id: txData.id,
