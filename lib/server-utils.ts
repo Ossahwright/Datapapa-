@@ -302,64 +302,17 @@ export async function logWebhook({
 
 /**
  * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
- * Queries DataHub directly for the status of a specific order.
+ * We do not fabricate a fake polling status endpoint because DataHub does not have one we know.
  */
 export async function checkProviderTransactionStatus(transactionIdOrRef: string) {
-  try {
-    const { apiKey, baseUrl } = await getDataHubConfig();
-    if (!apiKey) return null;
-
-    const base = baseUrl.replace(/\/+$/, "");
-    
-    // Attempt multiple status endpoint patterns as DataHub versions vary
-    const endpoints = [
-      `${base}/order-status/${transactionIdOrRef}`,
-      `${base}/status/${transactionIdOrRef}`,
-      `${base}/data-purchase/${transactionIdOrRef}`
-    ];
-    
-    let lastResult = null;
-    
-    for (const endpoint of endpoints) {
-      console.log(`🔍 [Reconciliation] Trying endpoint: ${endpoint}`);
-      try {
-        const response = await axios.get(endpoint, {
-          headers: { "X-API-Key": apiKey },
-          timeout: 10000,
-          validateStatus: () => true
-        });
-
-        if (response.status === 200) {
-          const result = response.data;
-          const data = result?.data || result;
-          const status = String(data?.status || result?.status || "").toUpperCase();
-          
-          console.log(`📡 [Reconciliation] Found status: ${status} for ${transactionIdOrRef}`);
-          
-          return {
-            status: response.status,
-            data: result,
-            statusRaw: status,
-            isFulfilled: ["DELIVERED", "SUCCESS", "SUCCESSFUL", "COMPLETED"].includes(status),
-            isFailed: ["FAILED", "REJECTED", "REVERSED", "CANCELLED"].includes(status),
-            isProcessing: ["PROCESSING", "PENDING", "AWAITING"].includes(status),
-            reference: data?.reference || data?.id || transactionIdOrRef
-          };
-        }
-        lastResult = response.data;
-      } catch (e) {}
-    }
-
-    return { error: "No status found", lastResult };
-  } catch (err) {
-    console.error("❌ [Reconciliation] Status check failed:", err);
-    return null;
-  }
+  // DATAHUB GH DOES NOT HAVE A RELIABLE STATUS ENDPOINT.
+  console.log(`🔍 [Reconciliation] Skipped API polling for ${transactionIdOrRef}. DataHub relies on Webhook.`);
+  return { error: "No status found", isWebhookDriven: true };
 }
 
 /**
  * 🛠️ RECONCILE TRANSACTION
- * Forces a local transaction to sync with provider state.
+ * Forces a local transaction to sync with provider state (if possible).
  */
 export async function reconcileTransaction(transactionId: string) {
   console.log(`=== [Reconcile] Starting reconciliation for: ${transactionId} ===`);
@@ -375,51 +328,33 @@ export async function reconcileTransaction(transactionId: string) {
     return { success: false, error: "Not found" };
   }
   
-  // 🛡️ Provider Truth Priority
-  const ref = tx.external_reference || tx.id;
-  const provider = await checkProviderTransactionStatus(ref);
-  
-  if (!provider || provider.error) {
-    console.warn(`⚠️ [Reconcile] Could not get provider status for ${ref}`);
-    return { success: false, error: "Provider unreachable or status missing" };
-  }
-  
-  const timestamp = new Date().toISOString();
-  if (provider.isFulfilled || provider.isFailed) {
-    const deliveryStatus = provider.isFulfilled ? "delivered" : "failed";
-    const vtuStatus = provider.isFulfilled ? "success" : "failed";
-    
-    console.log(`📝 [Reconcile] Converging state to: ${deliveryStatus}`);
-    
-    const { error: updateErr } = await supabase
-      .from("transactions")
-      .update({
-        delivery_status: deliveryStatus,
-        vtu_status: vtuStatus,
-        delivery_updated_at: timestamp,
-        updated_at: timestamp,
-        api_response: provider.data,
-        error_message: provider.isFailed ? (provider.data?.message || "Provider reported failure") : null,
-        external_reference: provider.reference || tx.external_reference
-      })
-      .eq("id", transactionId);
-      
-    if (updateErr) {
-      console.error("❌ [Reconcile] Convergence failed:", updateErr.message);
-      return { success: false, error: updateErr.message };
-    }
-    
-    return { success: true, status: deliveryStatus };
-  }
-  
-  console.log(`⏳ [Reconcile] Provider confirms processing (${provider.statusRaw}). Syncing local state.`);
-  await supabase.from("transactions").update({
-    vtu_status: 'processing',
-    updated_at: timestamp,
-    external_reference: provider.reference || tx.external_reference
-  }).eq("id", transactionId);
+  if (tx.vtu_status === "provider_accepted" || tx.vtu_status === "awaiting_provider_confirmation") {
+     const age = Date.now() - new Date(tx.updated_at).getTime();
+     const timestamp = new Date().toISOString();
+     
+     // Eventual Consistency Timestamps
+     // 0-5 mins: awaiting_provider_confirmation
+     // 5-30 min: reconciliation_pending
+     // 30-120 min: delayed_provider_processing
+     // 2h+: manual_review_required
+     
+     let newVtuStatus = tx.vtu_status;
+     if (age > 2 * 60 * 60 * 1000) newVtuStatus = "manual_review_required";
+     else if (age > 30 * 60 * 1000) newVtuStatus = "delayed_provider_processing";
+     else if (age > 5 * 60 * 1000) newVtuStatus = "reconciliation_pending";
+     else if (tx.vtu_status === "provider_accepted") newVtuStatus = "awaiting_provider_confirmation";
 
-  return { success: true, status: "processing", raw: provider.statusRaw };
+     if (newVtuStatus !== tx.vtu_status) {
+         console.log(`⏳ [Reconcile] Escalating state for ${tx.id} from ${tx.vtu_status} to ${newVtuStatus}`);
+         await supabase.from("transactions").update({
+            vtu_status: newVtuStatus,
+            updated_at: timestamp
+         }).eq("id", transactionId);
+         return { success: true, status: newVtuStatus, raw: "webhook-driven" };
+     }
+  }
+
+  return { success: true, status: tx.vtu_status, raw: "webhook-driven" };
 }
 
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
@@ -427,7 +362,7 @@ export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
   // 🚀 FORENSIC TRACING: START
   const executionId = Math.random().toString(36).substring(7);
-  console.log(`=== [${executionId}] PURCHASE EXECUTION START ===`);
+  console.log(`=== [${executionId}] PROVIDER EXECUTION START ===`);
   console.log({
     source,
     transaction_id: transaction.id,
@@ -438,8 +373,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   });
   
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
-  if (transaction.external_reference || transaction.vtu_status === 'success') {
-    console.log(`📡 [${executionId}] Transaction has reference. Switching to Reconciliation mode.`);
+  if (transaction.external_reference || transaction.vtu_status === 'delivered') {
+    console.log(`📡 [${executionId}] Transaction has reference or delivered. Switching to Reconciliation mode.`);
     return reconcileTransaction(transaction.id);
   }
 
@@ -452,6 +387,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   // 🛡️ STEP 3: PAYMENT VERIFICATION
   const isPaid = 
     transaction.status === "paid" || 
+    transaction.status === "payment_verified" || 
     transaction.status === "success" || 
     transaction.payment_status === "paid" || 
     transaction.payment_status === "success" ||
@@ -470,6 +406,9 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
+  // Set provider execution started
+  await supabase.from("transactions").update({ vtu_status: 'provider_execution_started', updated_at: new Date().toISOString() }).eq("id", transaction.id);
+
   // 🛡️ STEP 4: RECIPIENT NORMALIZATION
   let recipient = (transaction.recipient_phone || "").trim().replace(/\D/g, "");
   if (recipient.startsWith("233") && recipient.length > 10) recipient = "0" + recipient.slice(3);
@@ -477,7 +416,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   
   if (!/^0\d{9}$/.test(recipient)) {
      const error = `Invalid recipient number: ${recipient}. Must match 0XXXXXXXXX.`;
-     await supabase.from("transactions").update({ vtu_status: 'failed', error_message: error, updated_at: new Date().toISOString() }).eq("id", transaction.id);
+     await supabase.from("transactions").update({ vtu_status: 'provider_rejected', error_message: error, updated_at: new Date().toISOString() }).eq("id", transaction.id);
      throw new Error(error);
   }
 
@@ -507,7 +446,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     const error = `Safety Block: Invalid capacity detected (${finalCapacity}). Provider expects raw GB values.`;
     console.error(`❌ [${executionId}] ${error}`);
     await supabase.from("transactions").update({ 
-      vtu_status: 'failed', 
+      vtu_status: 'provider_rejected', 
       error_message: error, 
       updated_at: new Date().toISOString() 
     }).eq("id", transaction.id);
@@ -541,32 +480,36 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     );
 
     if (isAccepted || orderId) {
-      console.log(`✅ [${executionId}] Provider Accepted Execution. ATOMIC COMMITTING REF:`, orderId);
+      console.log(`=== [${executionId}] PROVIDER ACCEPTED ===`);
+      console.log(`✅ [${executionId}] ATOMIC COMMITTING REF:`, orderId);
       
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
-          vtu_status: 'processing',
+          vtu_status: 'provider_accepted',
           external_reference: orderId || transaction.external_reference,
           api_response: result,
           updated_at: new Date().toISOString()
         })
         .eq("id", transaction.id);
+        
+      console.log(`=== [${executionId}] ACCEPTANCE COMMITTED ===`);
 
       if (atomicError) {
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE (Reference may be orphaned):`, atomicError.message);
         // We still return success to the caller because the provider DID accept it
       }
 
-      return { success: true, vtu_status: 'processing', external_reference: orderId, ...result };
+      return { success: true, vtu_status: 'provider_accepted', external_reference: orderId, ...result };
     }
 
     // Explicit Failure Handling
     const lastError = result.message || result.error || "Provider rejected request";
+    console.log(`=== [${executionId}] PROVIDER REJECTED ===`);
     console.error(`🛑 [${executionId}] Provider Rejected:`, lastError);
     
     await supabase.from("transactions").update({ 
-      vtu_status: 'failed', 
+      vtu_status: 'provider_rejected', 
       error_message: lastError,
       updated_at: new Date().toISOString(),
       api_response: result
@@ -578,7 +521,12 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     console.error(`❌ [${executionId}] CRITICAL CONNECTION FAILURE:`, err.message);
     
     // In case of connection failure, we DON'T mark as failed if we don't know for sure
-    // We let it sit in 'pending' or whatever state it was in for reconciliation
+    // We let it sit in manual_review_required for reconciliation
+    await supabase.from("transactions").update({ 
+      vtu_status: 'manual_review_required', 
+      error_message: `Connection Error: ${err.message}`,
+      updated_at: new Date().toISOString()
+    }).eq("id", transaction.id);
     throw err;
   }
 }

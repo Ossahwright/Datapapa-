@@ -78,7 +78,7 @@ export default async function handler(req: any, res: any) {
         const { data: recentTxs } = await supabase
           .from("transactions")
           .select("*")
-          .eq("vtu_status", "processing")
+          .in("vtu_status", ["provider_execution_started", "provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing"])
           .order("created_at", { ascending: false })
           .limit(20);
         
@@ -104,7 +104,7 @@ export default async function handler(req: any, res: any) {
     console.log("Current Local State:", { delivery: tx.delivery_status, vtu: tx.vtu_status });
 
     // 🚫 Idempotency: Never downgrade from a terminal success state
-    if (tx.delivery_status === "delivered" || tx.vtu_status === "success") {
+    if (tx.delivery_status === "delivered" || tx.vtu_status === "delivered") {
       console.log("✅ [Webhook] Transaction already fulfilled. Convergence complete. Skipping.");
       return res.status(200).json({ message: "Already fulfilled" });
     }
@@ -117,15 +117,15 @@ export default async function handler(req: any, res: any) {
 
     if (!isSuccess && !isFailed) {
       console.log(`⏳ [Webhook] Intermediate state received (${statusStr}). Enforcing convergence...`);
-      // Even for intermediate states, ensure we are in 'processing' to avoid 'failed' false positives
-      if (tx.vtu_status !== 'processing') {
-         await supabase.from("transactions").update({ vtu_status: 'processing', updated_at: timestamp }).eq("id", tx.id);
+      // Even for intermediate states, ensure we are in a valid waiting state
+      if (!["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending"].includes(tx.vtu_status)) {
+         await supabase.from("transactions").update({ vtu_status: 'awaiting_provider_confirmation', updated_at: timestamp }).eq("id", tx.id);
       }
-      return res.status(200).json({ message: "Converged to processing" });
+      return res.status(200).json({ message: "Converged to waiting" });
     }
 
     const deliveryStatus = isSuccess ? "delivered" : "failed";
-    const vtuStatus = isSuccess ? "success" : "failed";
+    const vtuStatus = isSuccess ? "delivered" : "provider_rejected";
 
     console.log(`📝 [Webhook] Converging truth to: ${deliveryStatus}`);
 

@@ -1000,13 +1000,13 @@ export default function AdminDashboard() {
   const [isReconciling, setIsReconciling] = useState<string | null>(null);
 
   const getTransactionStatus = (tx: any) => {
-    const isPaid = tx.status === 'paid' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
+    const isPaid = tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
     const vtu = tx.vtu_status;
     const updatedAt = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
     const now = Date.now();
-    const isStale = vtu === 'processing' && (now - updatedAt > 600000); // 10 mins
+    const isStale = (vtu === 'processing' || vtu === 'provider_execution_started') && (now - updatedAt > 600000); // 10 mins
 
-    if (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu)) {
+    if (vtu === 'manual_review_required' || (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
       return { 
         label: 'Reconciliation Required', 
         color: 'bg-amber-50 text-amber-700 border border-amber-300 font-bold', 
@@ -1015,19 +1015,18 @@ export default function AdminDashboard() {
       };
     }
     if (vtu === 'success' || vtu === 'delivered' || vtu === 'completed') {
-      return { label: 'Fulfilled', color: 'bg-emerald-100 text-emerald-700', icon: null };
+      return { label: 'Delivered', color: 'bg-emerald-100 text-emerald-700', icon: null };
     }
-    if (vtu === 'failed') {
-      return { label: 'Failed', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
+    if (vtu === 'provider_rejected' || vtu === 'failed') {
+      return { label: 'Provider Rejected', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
     }
     if (isStale) {
       return { label: 'Stale Processing', color: 'bg-amber-100 text-amber-700 font-bold animate-pulse', icon: <Clock size={10} className="mr-1" />, retry: true };
     }
-    if (vtu === 'processing') {
-      const isStuck = now - updatedAt > 120000; // 2 minutes
+    if (["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "provider_execution_started", "processing"].includes(vtu)) {
       return { 
-        label: isStuck ? 'Delayed / Awaiting Webhook' : 'Processing', 
-        color: isStuck ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-indigo-50 text-indigo-700', 
+        label: vtu.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), 
+        color: 'bg-indigo-50 text-indigo-700', 
         icon: <RefreshCw size={10} className="animate-spin mr-1" />,
         reconcile: true 
       };
@@ -1036,7 +1035,7 @@ export default function AdminDashboard() {
       return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
     }
     if (isPaid) {
-      return { label: 'Paid - Queued', color: 'bg-blue-100 text-blue-700', icon: <Clock size={10} className="mr-1" /> };
+      return { label: 'Payment Verified', color: 'bg-blue-100 text-blue-700', icon: <Clock size={10} className="mr-1" /> };
     }
     return { label: tx.status || 'Pending', color: 'bg-slate-100 text-slate-700', icon: null };
   };
@@ -2167,72 +2166,62 @@ export default function AdminDashboard() {
                                 
                                 {(() => {
                                   const state = getTransactionStatus(tx);
-                                  if (tx.vtu_status === 'processing' || state.label === 'Stale Processing') {
-                                    return (
-                                      <button
-                                        onClick={() => reconcileStatus(tx.id)}
-                                        disabled={isReconciling === tx.id}
-                                        className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isReconciling === tx.id ? "animate-spin" : ""}`}
-                                        title="Sync/Reconcile with Provider"
-                                      >
-                                        <RefreshCw size={16} />
-                                      </button>
-                                    );
-                                  }
-                                  return null;
-                                })()}
 
-                                {(tx.vtu_status === "failed" ||
-                                  tx.vtu_status === "pending" ||
-                                  tx.delivery_status === "failed" ||
-                                  stuck) && (
-                                  <button
-                                    onClick={() => retryVTU(tx.id)}
-                                    disabled={
-                                      isRetryingVTU === tx.id ||
-                                      tx.delivery_status === "delivered" ||
-                                      tx.vtu_status === "delivered" ||
-                                      tx.vtu_status === "success" ||
-                                      (tx.vtu_status === "processing" && !stuck)
-                                    }
-                                    className={`p-2 rounded-lg transition-colors ${
-                                      isRetryingVTU === tx.id ||
-                                      tx.delivery_status === "delivered" ||
-                                      tx.vtu_status === "delivered" ||
-                                      tx.vtu_status === "success" ||
-                                      (tx.vtu_status === "processing" && !stuck)
-                                        ? "text-slate-200 cursor-not-allowed"
-                                        : "text-amber-600 hover:bg-amber-50"
-                                    } ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
-                                    title="Force Retry VTU"
-                                  >
-                                    <RefreshCw size={16} />
-                                  </button>
-                                )}
-                                {tx.delivery_status !== "delivered" &&
-                                  tx.vtu_status !== "success" &&
-                                  tx.vtu_status !== "delivered" && (
-                                    <button
-                                      onClick={() => markDelivered(tx.id)}
-                                      className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                      title="Mark as Delivered"
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="16"
-                                        height="16"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                                      </svg>
-                                    </button>
-                                  )}
+                                  return (
+                                    <>
+                                      {state.reconcile && (
+                                        <button
+                                          onClick={() => reconcileStatus(tx.id)}
+                                          disabled={isReconciling === tx.id}
+                                          className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isReconciling === tx.id ? "animate-spin" : ""}`}
+                                          title="Sync/Reconcile with Provider"
+                                        >
+                                          <RefreshCw size={16} />
+                                        </button>
+                                      )}
+
+                                      {state.retry && (
+                                        <button
+                                          onClick={() => retryVTU(tx.id)}
+                                          disabled={isRetryingVTU === tx.id}
+                                          className={`p-2 rounded-lg transition-colors ${
+                                            isRetryingVTU === tx.id
+                                              ? "text-slate-200 cursor-not-allowed"
+                                              : "text-amber-600 hover:bg-amber-50"
+                                          } ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
+                                          title="Force Retry VTU"
+                                        >
+                                          <RefreshCw size={16} />
+                                        </button>
+                                      )}
+
+                                      {!state.reconcile && tx.delivery_status !== "delivered" &&
+                                        tx.vtu_status !== "success" &&
+                                        tx.vtu_status !== "delivered" && (
+                                          <button
+                                            onClick={() => markDelivered(tx.id)}
+                                            className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                            title="Mark as Delivered"
+                                          >
+                                            <svg
+                                              xmlns="http://www.w3.org/2000/svg"
+                                              width="16"
+                                              height="16"
+                                              viewBox="0 0 24 24"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              strokeWidth="2"
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                            >
+                                              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                                            </svg>
+                                          </button>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                                 {(tx.vtu_status === "success" ||
                                   tx.delivery_status === "delivered") && (
                                   <div className="flex gap-1">

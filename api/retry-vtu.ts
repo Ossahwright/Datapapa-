@@ -59,70 +59,79 @@ export default async function handler(req: any, res: any) {
     });
 
     // 🚫 Block invalid retries (Already successful)
-    const isAlreadyDelivered = tx.vtu_status === "success" || tx.vtu_status === "completed" || tx.vtu_status === "delivered";
+    const isAlreadyDelivered = tx.vtu_status === "delivered" || tx.vtu_status === "success";
     if (isAlreadyDelivered) {
       console.log("✅ [Retry Blocked] Already delivered.");
       return res.json({ success: false, message: "Already delivered — no retry allowed" });
     }
 
+    // 🛡️ RECONCILIATION OVERRIDE GUARD (INDUSTRY STANDARD)
+    // If the provider previously accepted or gave a reference, NEVER repurchase.
+    const hasProviderFootprint = 
+      !!tx.external_reference || 
+      ["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "manual_review_required"].includes(tx.vtu_status);
+
+    if (hasProviderFootprint) {
+      console.log("🛡️ [Retry Firewall] Transaction has provider footprint. Diverting to Reconciliation.");
+      return res.status(200).json({ 
+        success: false, 
+        message: "Repurchase Denied: Transaction is already known by provider. Use 'Sync Status' to check current state, or wait for webhook.",
+        divertedToReconciliation: true 
+      });
+    }
+
     // ⏳ Block if still processing recently or retried too soon
-    // (Only block if it's NOT a reconciliation attempt for a stuck transaction)
     const lastUpdate = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
     const isRecentlyProcessed = (Date.now() - lastUpdate < 30000); // 30 second cooldown
-    if (isRecentlyProcessed && tx.vtu_status === "processing") {
+    if (isRecentlyProcessed && (tx.vtu_status === "provider_execution_started" || tx.vtu_status === "processing")) {
       console.log("⏳ [Retry Blocked] Retried too recently.");
       return res.status(429).json({ success: false, message: "Please wait 30 seconds between retry attempts." });
     }
 
-    // ✅ ALLOW RETRY IF:
-    // 1. It explicitly failed
-    // 2. OR it is "stuck" (paid/success but not success/processing)
-    const isExplicitlyFailed = tx.status === "failed" || tx.vtu_status === "failed";
-    const isStuck = (tx.status === "paid" || tx.status === "success") && !tx.vtu_status;
+    // ✅ ALLOW REPURCHASE ONLY IF:
+    // 1. It explicitly failed or provider rejected it natively
+    // 2. OR it is "stuck" natively
+    const isExplicitlyFailed = tx.status === "failed" || tx.vtu_status === "failed" || tx.vtu_status === "provider_rejected";
+    const isStuck = (tx.status === "paid" || tx.status === "payment_verified" || tx.status === "success") && (!tx.vtu_status || tx.vtu_status === 'pending');
     
-    console.log("RETRY QUALIFICATION:", { isExplicitlyFailed, isStuck });
+    console.log("RETRY QUALIFICATION:", { isExplicitlyFailed, isStuck, vtu_status: tx.vtu_status });
 
-    if (!isExplicitlyFailed && !isStuck && tx.vtu_status !== "processing") {
-      console.error("❌ [Retry Blocked] Not eligible for retry.");
-      return res.json({ success: false, message: `Retry not allowed (Current state: ${tx.vtu_status || tx.status})` });
+    if (!isExplicitlyFailed && !isStuck) {
+      console.error("❌ [Retry Blocked] Not eligible for repurchase.");
+      return res.json({ success: false, message: `Repurchase not allowed (Current state: ${tx.vtu_status || tx.status})` });
     }
 
     console.log("=== INCREMENTING RETRY ATTEMPTS ===");
     await supabase.from('transactions').update({
        delivery_attempts: (tx.delivery_attempts || 0) + 1,
+       vtu_status: 'provider_execution_started',
        updated_at: new Date().toISOString()
     }).eq('id', tx.id);
 
     // 🔁 Use purchaseData directly
-    console.log("=== RE-EXECUTING purchaseData ===");
+    console.log("=== RE-EXECUTE REPURCHASE ===");
     try {
-      // 🛡️ CRITICAL: If we are retrying a "stuck" but "paid" transaction, 
-      // ensure we pass the correct object state
+      // 🛡️ FORCE fresh retry 
       const retryObject = { ...tx };
-      if (isStuck) retryObject.status = "paid";
+      retryObject.status = "paid";
+      delete retryObject.external_reference;
 
       const result = await purchaseData(retryObject, "manual_retry");
-      console.log("=== RETRY EXECUTION RESULT ===");
+      console.log("=== REPURCHASE EXECUTION RESULT ===");
       console.log(JSON.stringify(result, null, 2));
       
       // Update transaction status if successful
       if (result.success) {
         const providerReference = result.external_reference || result.data?.reference || result.data?.id || result.reference;
         
-        // If we are forcing a retry on a previously failed payment, mark the payment as paid
-        const isPaymentOverridden = tx.status === "failed" || tx.status === "pending";
-        
         const updates: any = {
-          api_status: "success",
-          vtu_status: "processing",
-          external_reference: providerReference || tx.external_reference,
-          updated_at: new Date().toISOString()
+           status: "paid",
+           payment_status: "paid",
+           api_status: "success",
+           vtu_status: result.vtu_status || "provider_accepted",
+           external_reference: providerReference || tx.external_reference,
+           updated_at: new Date().toISOString()
         };
-        
-        if (isPaymentOverridden) {
-           updates.status = "paid";
-           updates.payment_status = "paid";
-        }
         
         await supabase.from("transactions").update(updates).eq("id", tx.id);
       }
@@ -130,7 +139,9 @@ export default async function handler(req: any, res: any) {
       // Sync wallet in background
       syncWalletSilently().catch(console.error);
 
-      return res.status(result.success ? 200 : 400).json(result);
+      // We return 200 even for logical failures so the frontend can read the JSON payload
+      // Otherwise Axios throws, and if standard parsing fails, it shows "Request failed with status code 400"
+      return res.status(200).json(result);
     } catch (processErr: any) {
       console.error("[RetryVTU] Processing error:", processErr);
       return res.status(500).json({ success: false, error: `Internal processing error: ${processErr.message}` });

@@ -1,6 +1,19 @@
-import { supabase } from './lib/server-utils.js';
+import axios from 'axios';
 async function test() {
-  const { data } = await supabase.from('transactions').select('id, network, capacity, datahub_capacity, status, vtu_status, error_message, api_response').order('created_at', { ascending: false }).limit(5);
-  console.log(JSON.stringify(data, null, 2));
+  try {
+    const res = await axios.post("http://localhost:3000/api/retry-vtu", { transactionId: "8a5715cb-bebe-46f4-9c21-032d9056199d" }, {
+      headers: {
+        "x-admin-bypass": "true" // simulate admin
+      }
+    });
+    console.log("Success:", res.data);
+  } catch (err: any) {
+    if (err.response) {
+      console.log("Status:", err.response.status);
+      console.log("Data:", err.response.data);
+    } else {
+      console.log("Error:", err.message);
+    }
+  }
 }
 test();
