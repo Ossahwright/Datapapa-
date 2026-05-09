@@ -213,23 +213,11 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ success: false, error: "Financial integrity check failed" });
     }
 
-    // STEP 5.5 — FRESH RE-FETCH RE-CONFIRMATION (As requested by Step 5 of Restoration Plan)
-    console.log("=== RE-FETCHING FRESH TRANSACTION BEFORE EXECUTION ===");
-    const { data: freshTx, error: freshErr } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("id", updatedTransaction.id)
-      .single();
-
-    if (freshErr || !freshTx) {
-      console.error("❌ Failed to re-fetch fresh transaction for execution.");
-      return res.status(500).json({ success: false, error: "Execution fetch failed" });
-    }
-
     // TRIGGER VTU
     console.log("=== INVOKING purchaseData() ===");
     try {
-      const result = await purchaseData(freshTx, "paystack_webhook");
+      // updatedTransaction already contains the fresh data from the .select() update at STEP 3
+      const result = await purchaseData(updatedTransaction, "paystack_webhook");
       console.log("=== PURCHASE EXECUTION RESULT ===");
       console.log(JSON.stringify(result, null, 2));
     } catch (error: any) {

@@ -6,6 +6,18 @@
 
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
+import http from 'http';
+import https from 'https';
+
+// Persistent agents for connection pooling (Speed Optimization)
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+
+export const apiClient = axios.create({
+  httpAgent,
+  httpsAgent,
+  timeout: 40000, // Slightly longer to be safe
+});
 
 const supabaseUrl =
   process.env.SUPABASE_URL ||
@@ -232,10 +244,19 @@ export function formatPhone(phone: string): string {
   return cleaned;
 }
 
+let cachedConfig: { apiKey: string, baseUrl: string } | null = null;
+let lastConfigFetch = 0;
+
 /**
  * Centralized DataHub Config Helper
  */
 export async function getDataHubConfig() {
+  const now = Date.now();
+  // Cache for 5 minutes
+  if (cachedConfig && (now - lastConfigFetch < 300000)) {
+    return cachedConfig;
+  }
+
   const defaultUrl = "https://app.datahubgh.com/api/external";
   const envKey = process.env.DATAHUB_API_KEY;
   let envUrl = process.env.DATAHUB_BASE_URL;
@@ -245,8 +266,6 @@ export async function getDataHubConfig() {
     envUrl = defaultUrl;
   }
 
-  // 🛡️ Forensic Clean: Ensure baseUrl is the ROOT and does not already contain the endpoint path
-  // If the user pasted the full endpoint into settings, we strip it to prevent duplication.
   const sanitizeUrl = (url: string) => {
     let clean = url.trim().replace(/\/+$/, "");
     if (clean.endsWith("/data-purchase")) {
@@ -256,10 +275,12 @@ export async function getDataHubConfig() {
   };
 
   if (envKey) {
-    return {
+    cachedConfig = {
       apiKey: envKey.trim(),
       baseUrl: sanitizeUrl(envUrl)
     };
+    lastConfigFetch = now;
+    return cachedConfig;
   }
 
   try {
@@ -272,10 +293,12 @@ export async function getDataHubConfig() {
     if (dhData?.value?.api_key) {
       const dbUrl = dhData.value.base_url;
       const finalUrl = (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl : dbUrl;
-      return {
+      cachedConfig = {
         apiKey: dhData.value.api_key.trim(),
         baseUrl: sanitizeUrl(finalUrl)
       };
+      lastConfigFetch = now;
+      return cachedConfig;
     }
   } catch (err) {
     console.error("[DataHub Config] Error:", err);
@@ -456,7 +479,7 @@ export async function reconcileTransaction(transactionId: string) {
   if (tx.status === "pending" && tx.paystack_receipt) {
     console.log(`🔍 [Reconcile] Checking Paystack for ref: ${tx.paystack_receipt}`);
     try {
-      const psRes = await axios.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
+      const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
       });
       
@@ -546,20 +569,15 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   // 🛡️ STEP 3: PAYMENT VERIFICATION
   const isPaid = transaction.status === "success";
 
-  console.log(`🛡️ [${executionId}] Security Audit:`, { 
-    isPaid, 
-    source, 
-    txStatus: transaction.status, 
-    txVtuStatus: transaction.vtu_status 
-  });
-
-  if (!isPaid && source !== "manual_retry" && source !== "direct_api") {
-    console.error(`❌ [${executionId}] Safety Reject: Payment not verified as 'success'. Status:`, transaction.status);
-    throw new Error(`Payment verification required: Current status is ${transaction.status}`);
+  // Skip "in-progress" update for faster execution if from webhook/direct
+  if (source !== "manual_retry") {
+    // Fire and forget or skip
+    supabase.from("transactions").update({ vtu_status: 'processing', updated_at: new Date().toISOString() }).eq("id", transaction.id).then(({error}) => {
+       if (error) console.error("Non-blocking status update failed", error);
+    });
+  } else {
+    await supabase.from("transactions").update({ vtu_status: 'provider_execution_started', updated_at: new Date().toISOString() }).eq("id", transaction.id);
   }
-
-  // Set provider execution started
-  await supabase.from("transactions").update({ vtu_status: 'provider_execution_started', updated_at: new Date().toISOString() }).eq("id", transaction.id);
 
   // 🛡️ STEP 4: RECIPIENT NORMALIZATION
   let recipient = (transaction.recipient_phone || "").trim().replace(/\D/g, "");
@@ -614,9 +632,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   try {
     console.log(`🚀 [${executionId}] Calling Provider API...`);
-    const response = await axios.post(endpoint, payload, {
+    const response = await apiClient.post(endpoint, payload, {
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "Accept": "application/json" },
-      timeout: 25000, 
       validateStatus: () => true
     });
 

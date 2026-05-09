@@ -1,4 +1,4 @@
-import { supabase, purchaseData, syncWalletSilently } from '../lib/server-utils.js';
+import { supabase, purchaseData, syncWalletSilently, apiClient } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside purchase-data");
 
@@ -42,18 +42,48 @@ export default async function handler(req: any, res: any) {
     }
 
     // Use the unified logic from server-utils.ts
-    // 🛡️ RACE CONDITION PROTECTION: If status is still pending, wait a moment and re-fetch 
-    // to see if the webhook has finished processing.
+    // 🛡️ SPEED OPTIMIZATION: If pending, check Paystack Truth directly to avoid waiting for webhook
     let finalTxData = txData;
     if (txData.status === "pending") {
-      console.log("⏳ [API] Transaction pending. Waiting for webhook sync...");
-      await new Promise(r => setTimeout(r, 2000));
-      const { data: refreshedTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('id', finalTransactionId)
-        .single();
-      if (refreshedTx) finalTxData = refreshedTx;
+      console.log("⏳ [API] Transaction pending. Verifying with Paystack directly for speed...");
+      try {
+        const psRes = await supabase.from('transactions').select('paystack_receipt').eq('id', finalTransactionId).single();
+        const receipt = txData.paystack_receipt || psRes.data?.paystack_receipt;
+        
+        if (receipt) {
+          const { data: psVerify } = await apiClient.get(`https://api.paystack.co/transaction/verify/${receipt}`, {
+            headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+          });
+          
+          if (psVerify?.data?.status === "success") {
+            console.log("✅ [API] Paystack confirms success. Self-promoting for speed.");
+            const { data: promoted } = await supabase
+              .from('transactions')
+              .update({ 
+                status: 'success', 
+                payment_verified_at: new Date().toISOString(),
+                updated_at: new Date().toISOString() 
+              })
+              .eq('id', finalTransactionId)
+              .select()
+              .single();
+            if (promoted) finalTxData = promoted;
+          }
+        }
+      } catch (err) {
+        console.error("Paystack direct verify failed in purchase-data logic:", err);
+      }
+      
+      // Fallback: If still pending after direct check, wait a tiny bit (max 1s) as a safety buffer
+      if (finalTxData.status === "pending") {
+        await new Promise(r => setTimeout(r, 800));
+        const { data: refreshedTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('id', finalTransactionId)
+          .single();
+        if (refreshedTx) finalTxData = refreshedTx;
+      }
     }
 
     if (finalTxData.status === "pending") {
