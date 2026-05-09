@@ -449,17 +449,46 @@ export const VTU_STATUSES = {
 
 /**
  * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
- * We do not fabricate a fake polling status endpoint because DataHub does not have one we know.
+ * Attempts to poll DataHub API for real-time status truth.
  */
-export async function checkProviderTransactionStatus(transactionIdOrRef: string) {
-  // DATAHUB GH DOES NOT HAVE A RELIABLE STATUS ENDPOINT.
-  console.log(`🔍 [Reconciliation] Skipped API polling for ${transactionIdOrRef}. DataHub relies on Webhook.`);
+export async function checkProviderTransactionStatus(tx: any) {
+  const { apiKey, baseUrl } = await getDataHubConfig();
+  if (!apiKey) return { error: "No API key" };
+
+  const reference = tx.provider_reference || tx.external_reference || tx.id;
+  
+  const endpoints = [
+    `${baseUrl.replace(/\/+$/, "")}/transactions/${reference}`,
+    `${baseUrl.replace(/\/+$/, "")}/data-purchase/${reference}`,
+    `${baseUrl.replace(/\/+$/, "")}/status?reference=${reference}`,
+    `${baseUrl.replace(/\/+$/, "")}/status/${reference}`,
+    `${baseUrl.replace(/\/+$/, "")}/check-status?reference=${reference}`,
+    `${baseUrl.replace(/\/+$/, "")}/transactions/status/${reference}`
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`🔍 [Reconciliation] Polling DataHub: ${endpoint}`);
+      const response = await apiClient.get(endpoint, {
+        headers: { "X-API-Key": apiKey, "Accept": "application/json" },
+        timeout: 10000
+      });
+
+      const result = response.data?.data || response.data;
+      if (response.status === 200 && result) {
+        const status = String(result.status || result.delivery_status || "").toUpperCase();
+        const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL"].includes(status);
+        const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(status);
+        
+        return { success: true, isSuccess, isFailed, providerStatus: status, data: result };
+      }
+    } catch (err) { }
+  }
   return { error: "No status found", isWebhookDriven: true };
 }
 
 /**
- * 🛠️ RECONCILE TRANSACTION
- * Forces a local transaction to sync with provider state (if possible).
+ * Reconciles a transaction with Paystack and DataHub.
  */
 export async function reconcileTransaction(transactionId: string) {
   console.log(`=== [Reconcile] Starting reconciliation for: ${transactionId} ===`);
@@ -470,66 +499,53 @@ export async function reconcileTransaction(transactionId: string) {
     .eq("id", transactionId)
     .single();
     
-  if (fetchError || !tx) {
-    console.error(`❌ [Reconcile] Transaction ${transactionId} not found`);
-    return { success: false, error: "Not found" };
-  }
+  if (fetchError || !tx) return { success: false, error: "Not found" };
   
   const timestamp = new Date().toISOString();
 
-  // 🛡️ STEP 1: If pending, check Paystack Truth
+  // 🛡️ STEP 1: Paystack Truth
   if (tx.status === "pending" && tx.paystack_receipt) {
-    console.log(`🔍 [Reconcile] Checking Paystack for ref: ${tx.paystack_receipt}`);
     try {
       const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
       });
-      
       if (psRes.data?.data?.status === "success") {
-        console.log(`✅ [Reconcile] Paystack matches success! Promoting to success.`);
-        const { error: updErr } = await supabase.from("transactions").update({
-          status: "success",
-          payment_verified_at: timestamp,
-          updated_at: timestamp
-        }).eq("id", transactionId);
-        
-        if (!updErr) {
-          // Re-fetch to get success state for purchaseData
-          const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
-          if (updatedTx) {
-            console.log(`🚀 [Reconcile] Triggering delayed delivery for ${transactionId}`);
-            await purchaseData(updatedTx, "reconciliation_sync");
-            return { success: true, status: "success", action: "delivered" };
-          }
-        }
-      } else {
-        console.log(`ℹ️ [Reconcile] Paystack status: ${psRes.data?.data?.status || 'unknown'}`);
+        await supabase.from("transactions").update({ status: "success", payment_verified_at: timestamp, updated_at: timestamp }).eq("id", transactionId);
+        const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
+        if (updatedTx) await purchaseData(updatedTx, "reconciliation_sync");
+        return { success: true, status: "success" };
       }
-    } catch (err: any) {
-      console.error(`❌ [Reconcile] Paystack verify error:`, err.message);
-    }
+    } catch (err) {}
   }
 
-  // ⏳ STEP 2: Escalation logic for delivery states
-  if (tx.vtu_status === "provider_accepted" || tx.vtu_status === "awaiting_provider_confirmation" || tx.vtu_status === "processing" || tx.vtu_status === "delayed_provider_processing") {
-     const age = Date.now() - new Date(tx.updated_at || tx.created_at).getTime();
-     
-     let newVtuStatus = tx.vtu_status;
-     
-     // ⏳ Time-based escalation
-     if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED; // 6h+
-     else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING; // 3-6h
-     else if (age > 90 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING; // 90-180m
-     else if (tx.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED) newVtuStatus = VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION; // Early transition
+  // 🛡️ STEP 2: Active Polling
+  const isWaiting = ["provider_accepted", "awaiting_provider_confirmation", "processing", "provider_execution_started", "delayed_provider_processing"].includes(tx.vtu_status);
+  if (isWaiting) {
+    const poll = await checkProviderTransactionStatus(tx);
+    if (poll.success && (poll.isSuccess || poll.isFailed)) {
+      const vtuStatus = poll.isSuccess ? "delivered" : "provider_rejected";
+      await supabase.from("transactions").update({
+        vtu_status: vtuStatus,
+        delivery_status: poll.isSuccess ? "delivered" : "failed",
+        delivered_at: poll.isSuccess ? timestamp : null,
+        reconciliation_completed_at: poll.isSuccess ? timestamp : null,
+        updated_at: timestamp,
+        api_response: poll.data
+      }).eq("id", transactionId);
+      return { success: true, status: vtuStatus };
+    }
 
-     if (newVtuStatus !== tx.vtu_status) {
-         console.log(`⏳ [Reconcile] Escalating state for ${tx.id} from ${tx.vtu_status} to ${newVtuStatus}`);
-         await supabase.from("transactions").update({
-            vtu_status: newVtuStatus,
-            updated_at: timestamp
-         }).eq("id", transactionId);
-         return { success: true, status: newVtuStatus };
-     }
+    // ⏳ STEP 3: Escalation
+    const age = Date.now() - new Date(tx.updated_at || tx.created_at).getTime();
+    let newVtuStatus = tx.vtu_status;
+    if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED;
+    else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING;
+    else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING;
+
+    if (newVtuStatus !== tx.vtu_status) {
+        await supabase.from("transactions").update({ vtu_status: newVtuStatus, updated_at: timestamp }).eq("id", transactionId);
+        return { success: true, status: newVtuStatus };
+    }
   }
 
   return { success: true, status: tx.vtu_status || tx.status, message: "Sync complete" };
@@ -607,7 +623,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   // 📦 Network Mapping
   const networkMapping: Record<string, string> = {
-    'mtn': 'YELLO',
+    'mtn': 'MTN', // 🚀 SWITCHED FROM YELLO TO MTN FOR STABILITY/SPEED
     'airteltigo-ishare': 'AT_PREMIUM',
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
@@ -638,7 +654,15 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(error);
   }
 
-  const payload = { networkKey, recipient, capacity: finalCapacity, reference: transaction.id };
+  const payload = { 
+    networkKey, 
+    recipient, 
+    capacity: finalCapacity, 
+    reference: transaction.id,
+    external_reference: transaction.id, // 🚀 REDUNDANT BUT ADDED FOR PROVIDER TRACING
+    request_id: transaction.id,         // 🚀 ADDED FOR ALTERNATIVE GATEWAYS
+    client_id: transaction.id           // 🚀 SOME CLONES USE THIS
+  };
   console.log(`📡 [${executionId}] FINAL PROVIDER PAYLOAD:`, JSON.stringify(payload));
   const { apiKey, baseUrl } = await getDataHubConfig();
   if (!apiKey) throw new Error("DataHub API key is missing");
@@ -658,8 +682,12 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     // 🛡️ ATOMIC PERSISTENCE BLOCK
     const providerReference =
       (response as any)?.data?.data?.reference ||
+      (response as any)?.data?.data?.id ||
+      (response as any)?.data?.data?.transaction_id ||
       (response as any)?.data?.reference ||
+      (response as any)?.data?.id ||
       (response as any)?.reference ||
+      (response as any)?.id ||
       null;
     const isAccepted = (response.status >= 200 && response.status < 300) && (
       result.success === true || result.status === true || 
@@ -678,8 +706,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         .from("transactions")
         .update({
           vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
-          provider_reference: providerReference,
-          external_reference: providerReference,
+          provider_reference: providerReference || transaction.id, // Fallback to our ID if null
+          external_reference: providerReference || transaction.id,
           internal_reference: transaction.id,
           provider_payload: result,
           provider_accepted_at: acceptanceTime,

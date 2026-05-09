@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, FormEvent } from "react";
+import { useState, useEffect, useCallback, useRef, FormEvent, Fragment } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
@@ -246,6 +246,22 @@ export default function AdminDashboard() {
 
     return () => clearInterval(interval);
   }, []);
+
+  // 🔄 AUTO-RECONCILIATION LOOP
+  // Proactively fixes "Delayed Processing" transactions every 10 minutes
+  useEffect(() => {
+    if (currentView !== "transactions") return;
+    
+    console.log("⏰ Setting up auto-reconciliation loop (10m)");
+    const reconInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        console.log("🔄 Triggering scheduled bulk reconciliation...");
+        bulkSync();
+      }
+    }, 10 * 1000 * 60); 
+
+    return () => clearInterval(reconInterval);
+  }, [currentView]);
 
   const loadHealth = async () => {
     try {
@@ -1010,6 +1026,44 @@ export default function AdminDashboard() {
 
   const [isRetryingVTU, setIsRetryingVTU] = useState<string | null>(null);
   const [isReconciling, setIsReconciling] = useState<string | null>(null);
+  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
+
+  const syncWithProvider = async (transactionId: string) => {
+    setIsReconciling(transactionId);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const res = await axios.post("/api/reconcile-tx", 
+        { transactionId },
+        { headers: { Authorization: `Bearer ${session?.session?.access_token}` } }
+      );
+      
+      if (res.data.success) {
+        // Refresh local data
+        const { data: updated } = await supabase.from('transactions').select('*').eq('id', transactionId).single();
+        if (updated) {
+          setTransactions(prev => prev.map(t => t.id === transactionId ? updated : t));
+        }
+      }
+    } catch (err) {
+      console.error("Sync failed:", err);
+    } finally {
+      setIsReconciling(null);
+    }
+  };
+
+  const bulkSync = async () => {
+    setIsBulkSyncing(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const headers = session?.session?.access_token ? { Authorization: `Bearer ${session.session.access_token}` } : {};
+      await axios.post("/api/bulk-reconcile", {}, { headers });
+      await fetchTransactions(); // Refresh all
+    } catch (err) {
+      console.error("Bulk sync failed:", err);
+    } finally {
+      setIsBulkSyncing(false);
+    }
+  };
 
   const getTransactionStatus = (tx: any) => {
     const isPaid = tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
@@ -1833,9 +1887,8 @@ export default function AdminDashboard() {
                         const isExpanded = expandedRows.has(tx.id);
 
                         return (
-                          <>
+                          <Fragment key={tx.id}>
                             <tr
-                              key={tx.id}
                               onClick={() => toggleRow(tx.id)}
                               className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${isStuck(tx) ? "bg-rose-50/50" : ""} ${isExpanded ? "bg-slate-50/90" : ""}`}
                             >
@@ -1890,6 +1943,36 @@ export default function AdminDashboard() {
                               </td>
                               <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      syncWithProvider(tx.id);
+                                    }}
+                                    disabled={
+                                      isReconciling === tx.id ||
+                                      tx.delivery_status === "delivered" ||
+                                      tx.vtu_status === "delivered" ||
+                                      tx.vtu_status === "success"
+                                    }
+                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${
+                                      isReconciling === tx.id ||
+                                      tx.delivery_status === "delivered" ||
+                                      tx.vtu_status === "delivered" ||
+                                      tx.vtu_status === "success"
+                                        ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                                        : "bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white"
+                                    }`}
+                                    title="Sync with Provider"
+                                  >
+                                    <ShieldCheck
+                                      size={14}
+                                      className={
+                                        isReconciling === tx.id
+                                          ? "animate-spin"
+                                          : ""
+                                      }
+                                    />
+                                  </button>
                                   <button
                                     onClick={() => retryVTU(tx.id)}
                                     disabled={
@@ -1991,7 +2074,7 @@ export default function AdminDashboard() {
                                 </tr>
                               )}
                             </AnimatePresence>
-                          </>
+                          </Fragment>
                         );
                       })
                     )}
@@ -2037,6 +2120,15 @@ export default function AdminDashboard() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                <button
+                  onClick={bulkSync}
+                  disabled={isBulkSyncing || isLoadingTransactions}
+                  className={`flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-slate-900 transition-all shadow-sm font-black text-xs tracking-widest uppercase ${isBulkSyncing ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  <ShieldCheck size={16} className={isBulkSyncing ? "animate-spin" : ""} />
+                  {isBulkSyncing ? "Processing..." : "Sync All Pending"}
+                </button>
+
                 <button
                   onClick={fetchTransactions}
                   disabled={isLoadingTransactions}
