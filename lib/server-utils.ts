@@ -596,14 +596,25 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   // 📦 Network Mapping
   const networkMapping: Record<string, string> = {
-    'mtn': 'MTN', // 🚀 SWITCHED FROM YELLO TO MTN FOR STABILITY/SPEED
+    'mtn': 'YELLO', 
     'airteltigo-ishare': 'AT_PREMIUM',
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
     'airteltigo-bigtime': 'AT_BIGTIME',
     'at': 'AT_PREMIUM'
   };
+  
+  const networkNumericMapping: Record<string, string> = {
+    'MTN': '1',
+    'YELLO': '1',
+    'TELECEL': '2',
+    'VODAFONE': '2',
+    'AT_PREMIUM': '3',
+    'AT_BIGTIME': '3'
+  };
+
   const networkKey = networkMapping[String(transaction.network || "").toLowerCase()] || transaction.network?.toUpperCase();
+  const networkId = networkNumericMapping[networkKey] || "1";
 
   // 📦 Capacity Normalization & Forensic Audit
   const rawCapacity = transaction.datahub_capacity || transaction.capacity || "";
@@ -612,7 +623,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   console.log(`📦 [${executionId}] Capacity Audit:`, { 
     raw: rawCapacity, 
     normalized: finalCapacity, 
-    network: networkKey 
+    network: networkKey,
+    network_id: networkId
   });
 
   // 🛡️ Strict Validation
@@ -632,10 +644,19 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   const shortId = (transaction.id || "").split("-")[0].toUpperCase();
   const externalRef = `DP-${shortId}-${Date.now().toString().slice(-4)}`;
 
+  // 🚀 ROBUST PAYLOAD: Using multiple key variations for compatibility with different API clones
   const payload = { 
-    networkKey, 
-    recipient, 
+    network: networkKey, 
+    networkKey: networkKey,
+    network_id: networkId,
+    network_code: networkId,
+    phone: recipient,
+    recipient: recipient,
+    mobile_number: recipient,
+    plan: finalCapacity,
+    plan_id: finalCapacity,
     capacity: finalCapacity, 
+    amount: transaction.amount,
     reference: transaction.id,
     external_reference: externalRef, 
     client_reference: externalRef,

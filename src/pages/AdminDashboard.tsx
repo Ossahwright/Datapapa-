@@ -4063,7 +4063,8 @@ export default function AdminDashboard() {
                           const net = e.target.value;
                           let key = "YELLO";
                           if (net === "Telecel") key = "TELECEL";
-                          if (net === "AirtelTigo") key = "AT_BIGTIME";
+                          if (net === "AirtelTigo iShare") key = "AT_PREMIUM";
+                          if (net === "AirtelTigo Bigtime") key = "AT_BIGTIME";
                           setNewBundle({
                             ...newBundle,
                             network: net,
@@ -4076,7 +4077,8 @@ export default function AdminDashboard() {
                       >
                         <option value="MTN">MTN</option>
                         <option value="Telecel">Telecel</option>
-                        <option value="AirtelTigo">AirtelTigo</option>
+                        <option value="AirtelTigo iShare">AirtelTigo iShare</option>
+                        <option value="AirtelTigo Bigtime">AirtelTigo Bigtime</option>
                       </select>
                     </div>
                     <div>
@@ -4288,7 +4290,8 @@ export default function AdminDashboard() {
                           const net = e.target.value;
                           let key = "YELLO" as any;
                           if (net === "Telecel") key = "TELECEL";
-                          if (net === "AirtelTigo") key = "AT_BIGTIME";
+                          if (net === "AirtelTigo iShare") key = "AT_PREMIUM";
+                          if (net === "AirtelTigo Bigtime") key = "AT_BIGTIME";
                           setForm({ ...form, network: net, network_key: key });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -4296,7 +4299,8 @@ export default function AdminDashboard() {
                       >
                         <option value="MTN">MTN</option>
                         <option value="Telecel">Telecel</option>
-                        <option value="AirtelTigo">AirtelTigo</option>
+                        <option value="AirtelTigo iShare">AirtelTigo iShare</option>
+                        <option value="AirtelTigo Bigtime">AirtelTigo Bigtime</option>
                       </select>
                     </div>
                     <div>

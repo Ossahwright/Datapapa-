@@ -9,7 +9,8 @@ import { openWhatsApp } from '../lib/whatsapp';
 const NETWORKS = [
   { id: 'mtn', name: 'MTN', color: 'bg-yellow-500', text: 'text-yellow-950', logo: 'https://i.postimg.cc/BvS8nyGS/download.jpg' },
   { id: 'telecel', name: 'Telecel', color: 'bg-red-600', text: 'text-white', logo: 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg' },
-  { id: 'airteltigo', name: 'AirtelTigo', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
+  { id: 'airteltigo-ishare', name: 'AT iShare', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
+  { id: 'airteltigo-bigtime', name: 'AT Bigtime', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
 ];
 
 interface BuyDataFormProps {
@@ -113,7 +114,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     .reduce((acc: any, b: any) => {
       let net = (b.network || b.network_key || '').toLowerCase();
       // Expanded normalization for DataHubGH keys
-      if (net === 'at' || net === 'airteltigo' || net === 'at_bigtime' || net === 'at_premium') net = 'airteltigo';
+      if (net === 'at' || net === 'airteltigo' || net === 'at_premium') net = 'airteltigo-ishare';
+      if (net === 'at_bigtime' || net === 'airteltigo-bigtime') net = 'airteltigo-bigtime';
       if (net === 'vodafone' || net === 'telecel') net = 'telecel';
       if (net === 'mtn' || net === 'yello') net = 'mtn';
 
