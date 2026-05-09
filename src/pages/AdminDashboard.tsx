@@ -38,10 +38,21 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
+import { calculateExecutionMetrics } from "../../lib/metrics";
 
 export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRow = (id: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const [currentView, setCurrentView] = useState<
     "dashboard" | "transactions" | "bundles" | "customers" | "settings" | "reports" | "system-health"
   >("dashboard");
@@ -1817,114 +1828,172 @@ export default function AdminDashboard() {
                         </td>
                       </tr>
                     ) : (
-                      rows.map((tx) => (
-                        <tr
-                          key={tx.id}
-                          className={`hover:bg-slate-50/80 transition-colors ${isStuck(tx) ? "bg-rose-50/50" : ""}`}
-                        >
-                          <td className="px-6 py-4">
-                            <span className="font-black text-slate-900 tracking-tight">
-                              {tx.network}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-slate-600">
-                            {tx.capacity}
-                          </td>
-                          <td className="px-6 py-4 font-mono text-xs">
-                            {tx.recipient_phone}
-                          </td>
-                          <td className="px-6 py-4 font-bold text-slate-900">
-                            ₵{tx.amount}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span
-                              className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                                tx.delivery_status === "delivered" ||
-                                tx.vtu_status === "success" ||
-                                tx.vtu_status === "delivered"
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : tx.delivery_status === "failed" ||
-                                      tx.vtu_status === "failed"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : tx.delivery_status === "delivering" ||
-                                        tx.vtu_status === "processing"
-                                      ? "bg-amber-100 text-amber-700 animate-pulse"
-                                      : "bg-slate-100 text-slate-500"
-                              }`}
+                      rows.map((tx) => {
+                        const { metrics, bottleneck } = calculateExecutionMetrics(tx) || { metrics: null, bottleneck: null };
+                        const isExpanded = expandedRows.has(tx.id);
+
+                        return (
+                          <>
+                            <tr
+                              key={tx.id}
+                              onClick={() => toggleRow(tx.id)}
+                              className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${isStuck(tx) ? "bg-rose-50/50" : ""} ${isExpanded ? "bg-slate-50/90" : ""}`}
                             >
-                              {tx.delivery_status === "delivered" ||
-                              tx.vtu_status === "delivered" ||
-                              tx.vtu_status === "success"
-                                ? "DELIVERED"
-                                : tx.delivery_status === "failed" ||
-                                    tx.vtu_status === "failed"
-                                  ? "FAILED"
-                                  : tx.delivery_status === "delivering" ||
-                                      tx.vtu_status === "processing"
-                                    ? "PROCESSING"
-                                    : tx.vtu_status || "PENDING"}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">
-                            {new Date(tx.created_at).toLocaleTimeString()}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() => retryVTU(tx.id)}
-                                disabled={
-                                  isRetryingVTU === tx.id ||
-                                  tx.delivery_status === "delivered" ||
-                                  tx.vtu_status === "delivered" ||
-                                  tx.vtu_status === "success" ||
-                                  tx.delivery_status === "delivering" ||
-                                  tx.vtu_status === "processing"
-                                }
-                                className={`p-1.5 rounded-lg transition-all shadow-sm ${
-                                  isRetryingVTU === tx.id ||
-                                  tx.delivery_status === "delivered" ||
-                                  tx.vtu_status === "delivered" ||
-                                  tx.vtu_status === "success" ||
-                                  tx.delivery_status === "delivering" ||
-                                  tx.vtu_status === "processing"
-                                    ? "bg-slate-50 text-slate-300 cursor-not-allowed"
-                                    : "bg-slate-100 text-slate-600 hover:bg-slate-900 hover:text-white"
-                                }`}
-                                title="Retry VTU"
-                              >
-                                <RefreshCw
-                                  size={14}
-                                  className={
-                                    isRetryingVTU === tx.id
-                                      ? "animate-spin"
-                                      : ""
-                                  }
-                                />
-                              </button>
-                              <button
-                                onClick={() => handleWhatsAppMessage(tx)}
-                                disabled={!isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
-                                className={`p-1.5 rounded-lg transition-all shadow-sm ${isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-slate-100 text-slate-600 hover:bg-emerald-500 hover:text-white" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
-                                title={isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
-                              >
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-2">
+                                  {isExpanded ? <ChevronRight size={12} className="rotate-90 text-slate-400" /> : <ChevronRight size={12} className="text-slate-400" />}
+                                  <span className="font-black text-slate-900 tracking-tight">
+                                    {tx.network}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-slate-600">
+                                {tx.capacity}
+                              </td>
+                              <td className="px-6 py-4 font-mono text-xs">
+                                {tx.recipient_phone}
+                              </td>
+                              <td className="px-6 py-4 font-bold text-slate-900">
+                                ₵{tx.amount}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                <span
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                    tx.delivery_status === "delivered" ||
+                                    tx.vtu_status === "success" ||
+                                    tx.vtu_status === "delivered"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : tx.delivery_status === "failed" ||
+                                          tx.vtu_status === "failed"
+                                        ? "bg-rose-100 text-rose-700"
+                                        : tx.delivery_status === "delivering" ||
+                                            tx.vtu_status === "processing"
+                                          ? "bg-amber-100 text-amber-700 animate-pulse"
+                                          : "bg-slate-100 text-slate-500"
+                                  }`}
                                 >
-                                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                  {tx.delivery_status === "delivered" ||
+                                  tx.vtu_status === "delivered" ||
+                                  tx.vtu_status === "success"
+                                    ? "DELIVERED"
+                                    : tx.delivery_status === "failed" ||
+                                        tx.vtu_status === "failed"
+                                      ? "FAILED"
+                                      : tx.delivery_status === "delivering" ||
+                                          tx.vtu_status === "processing"
+                                        ? "PROCESSING"
+                                        : tx.vtu_status || "PENDING"}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">
+                                {new Date(tx.created_at).toLocaleTimeString()}
+                              </td>
+                              <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => retryVTU(tx.id)}
+                                    disabled={
+                                      isRetryingVTU === tx.id ||
+                                      tx.delivery_status === "delivered" ||
+                                      tx.vtu_status === "delivered" ||
+                                      tx.vtu_status === "success" ||
+                                      tx.delivery_status === "delivering" ||
+                                      tx.vtu_status === "processing"
+                                    }
+                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${
+                                      isRetryingVTU === tx.id ||
+                                      tx.delivery_status === "delivered" ||
+                                      tx.vtu_status === "delivered" ||
+                                      tx.vtu_status === "success" ||
+                                      tx.delivery_status === "delivering" ||
+                                      tx.vtu_status === "processing"
+                                        ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                                        : "bg-slate-100 text-slate-600 hover:bg-slate-900 hover:text-white"
+                                    }`}
+                                    title="Retry VTU"
+                                  >
+                                    <RefreshCw
+                                      size={14}
+                                      className={
+                                        isRetryingVTU === tx.id
+                                          ? "animate-spin"
+                                          : ""
+                                      }
+                                    />
+                                  </button>
+                                  <button
+                                    onClick={() => handleWhatsAppMessage(tx)}
+                                    disabled={!isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-slate-100 text-slate-600 hover:bg-emerald-500 hover:text-white" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
+                                    title={isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
+                                  >
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                                    </svg>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                            <AnimatePresence>
+                              {isExpanded && metrics && (
+                                <tr key={`timing-${tx.id}`} className="bg-slate-50/50">
+                                  <td colSpan={7} className="px-6 py-4 pb-8">
+                                    <motion.div
+                                      initial={{ opacity: 0, height: 0 }}
+                                      animate={{ opacity: 1, height: "auto" }}
+                                      exit={{ opacity: 0, height: 0 }}
+                                      className="overflow-hidden"
+                                    >
+                                      <div className="grid grid-cols-5 gap-4 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                                        <div className="space-y-1">
+                                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Payment Verification</p>
+                                          <p className="text-sm font-black text-slate-700">{metrics.webhook_processing_seconds}s</p>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Provider Trigger</p>
+                                          <p className="text-sm font-black text-slate-700">{metrics.execution_trigger_seconds}s</p>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Provider Acceptance</p>
+                                          <p className="text-sm font-black text-slate-700">{metrics.provider_acceptance_seconds}s</p>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Delivery Duration</p>
+                                          <p className="text-sm font-black text-slate-700">{metrics.provider_delivery_minutes}m</p>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <p className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Total Fulfillment</p>
+                                          <p className="text-sm font-black text-slate-700">{metrics.total_fulfillment_minutes}m</p>
+                                        </div>
+                                      </div>
+                                      <div className="mt-4 flex items-center gap-3">
+                                        <div className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest ${bottleneck === "None detected" ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"}`}>
+                                          Condition: {bottleneck}
+                                        </div>
+                                        {tx.provider_reference && (
+                                          <div className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-mono font-bold">
+                                            PR: {tx.provider_reference}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </motion.div>
+                                  </td>
+                                </tr>
+                              )}
+                            </AnimatePresence>
+                          </>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

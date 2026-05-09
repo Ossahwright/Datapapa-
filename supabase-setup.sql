@@ -305,4 +305,11 @@ ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS provider_accepted_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS reconciliation_state TEXT;
 
+-- 📊 NEW TELEMETRY COLUMNS MIGRATION
+ALTER TABLE public.transactions
+  ADD COLUMN IF NOT EXISTS payment_verified_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS provider_execution_started_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reconciliation_completed_at TIMESTAMPTZ;
+
 -- End of script

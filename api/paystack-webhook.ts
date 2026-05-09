@@ -179,6 +179,10 @@ export default async function handler(req: any, res: any) {
     }
 
     // STEP 3 — HARDEN PAYMENT PROMOTION (FORCE SUCCESS)
+    console.log("=== PAYMENT VERIFIED ===");
+    const verificationTime = new Date().toISOString();
+    console.log(verificationTime);
+
     console.log("=== PROMOTING TRANSACTION STATUS ===");
     const { data: updateData, error: updateError } = await supabase
       .from("transactions")
@@ -186,7 +190,7 @@ export default async function handler(req: any, res: any) {
         paystack_receipt: paystackReference,
         payer_phone_number: customerPhone || transaction.payer_phone_number,
         status: "success",
-        payment_verified_at: new Date().toISOString(),
+        payment_verified_at: verificationTime,
         updated_at: new Date().toISOString()
       })
       .eq("id", transaction.id)

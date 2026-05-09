@@ -145,7 +145,8 @@ export default async function handler(req: any, res: any) {
     const vtuStatus = isSuccess ? "delivered" : "provider_rejected";
     const reconciliationState = isSuccess ? "completed" : "failed";
 
-    console.log(`📝 [Webhook] Converging truth to: ${vtuStatus} (${reconciliationState})`);
+    console.log("=== DELIVERY CONFIRMED ===");
+    console.log(timestamp);
 
     const { data: updatedRows, error: updateError } = await supabase
       .from("transactions")
@@ -154,7 +155,8 @@ export default async function handler(req: any, res: any) {
         vtu_status: vtuStatus,
         reconciliation_state: reconciliationState,
         delivery_updated_at: timestamp,
-        delivered_at: isSuccess ? timestamp : null, // Assuming delivered_at might be useful
+        delivered_at: isSuccess ? timestamp : null, 
+        reconciliation_completed_at: isSuccess ? timestamp : null,
         updated_at: timestamp,
         api_response: payload,
         external_reference: providerRef || tx.external_reference,

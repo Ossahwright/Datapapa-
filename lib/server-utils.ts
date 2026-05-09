@@ -433,6 +433,8 @@ Ref: ${tx.provider_reference || tx.reference || tx.id}
   }
 }
 
+import { calculateExecutionMetrics } from './metrics.js';
+
 export const VTU_STATUSES = {
   PENDING: 'pending',
   SUCCESS: 'success',
@@ -515,9 +517,9 @@ export async function reconcileTransaction(transactionId: string) {
      let newVtuStatus = tx.vtu_status;
      
      // ⏳ Time-based escalation
-     if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED; // 3h+
-     else if (age > 90 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING; // 90-180m
-     else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING; // 45-90m
+     if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED; // 6h+
+     else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING; // 3-6h
+     else if (age > 90 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING; // 90-180m
      else if (tx.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED) newVtuStatus = VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION; // Early transition
 
      if (newVtuStatus !== tx.vtu_status) {
@@ -569,14 +571,27 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   // 🛡️ STEP 3: PAYMENT VERIFICATION
   const isPaid = transaction.status === "success";
 
+  // Set provider execution started
+  const executionStartTime = new Date().toISOString();
+  console.log("=== PROVIDER EXECUTION STARTED ===");
+  console.log(executionStartTime);
+
   // Skip "in-progress" update for faster execution if from webhook/direct
   if (source !== "manual_retry") {
     // Fire and forget or skip
-    supabase.from("transactions").update({ vtu_status: 'processing', updated_at: new Date().toISOString() }).eq("id", transaction.id).then(({error}) => {
+    supabase.from("transactions").update({ 
+      vtu_status: 'processing', 
+      provider_execution_started_at: executionStartTime,
+      updated_at: new Date().toISOString() 
+    }).eq("id", transaction.id).then(({error}) => {
        if (error) console.error("Non-blocking status update failed", error);
     });
   } else {
-    await supabase.from("transactions").update({ vtu_status: 'provider_execution_started', updated_at: new Date().toISOString() }).eq("id", transaction.id);
+    await supabase.from("transactions").update({ 
+      vtu_status: 'provider_execution_started', 
+      provider_execution_started_at: executionStartTime,
+      updated_at: new Date().toISOString() 
+    }).eq("id", transaction.id);
   }
 
   // 🛡️ STEP 4: RECIPIENT NORMALIZATION
@@ -653,6 +668,9 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     );
 
     if (isAccepted || providerReference) {
+      const acceptanceTime = new Date().toISOString();
+      console.log("=== PROVIDER ACCEPTED ===");
+      console.log(acceptanceTime);
       console.log(`=== [${executionId}] PROVIDER ACCEPTED ===`);
       console.log(`✅ [${executionId}] ATOMIC COMMITTING REF:`, providerReference);
       
@@ -664,7 +682,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
           external_reference: providerReference,
           internal_reference: transaction.id,
           provider_payload: result,
-          provider_accepted_at: new Date().toISOString(),
+          provider_accepted_at: acceptanceTime,
           reconciliation_state: VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION,
           api_response: result,
           updated_at: new Date().toISOString()
