@@ -34,6 +34,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'success'>('idle');
+  const [deliveryStatus, setDeliveryStatus] = useState<'idle' | 'processing' | 'delivered' | 'failed'>('idle');
   const [countdown, setCountdown] = useState(0);
 
   const [supabaseReady] = useState(isSupabaseConfigured);
@@ -156,12 +157,18 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           const updated = payload.new;
 
           if (updated.id === currentTxId) {
-            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
-              alert("✅ Data delivered successfully");
+            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered") {
+              // We'll update state instead of an alert for better UI
+              setDeliveryStatus("delivered");
             }
 
-            if (updated.delivery_status === "failed" || updated.vtu_status === "failed") {
-              alert("❌ Delivery failed");
+            if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
+              setDeliveryStatus("processing");
+            }
+
+            if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected") {
+              setDeliveryStatus("failed");
+              alert("❌ Data delivery failed. Please contact support if you were debited.");
             }
           }
         }
@@ -173,8 +180,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     };
   }, [currentTxId]);
 
+  const [paystackRef, setPaystackRef] = useState<string>(`tx_${new Date().getTime()}`);
+
   const paystackConfig = useMemo(() => ({
-    reference: `tx_${new Date().getTime().toString()}`,
+    reference: paystackRef,
     email: 'customer@datapapa.com',
     amount: selectedBundleObj ? Math.round(selectedBundleObj.price * 100) : 0, 
     publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_test_dummy",
@@ -190,7 +199,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         { display_name: "Network", variable_name: "network", value: network }
       ]
     }
-  }), [currentTxId, phone, network, selectedBundleObj]);
+  }), [currentTxId, phone, network, selectedBundleObj, paystackRef]);
 
   const initializePayment = usePaystackPayment(paystackConfig);
 
@@ -250,7 +259,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setIsLoading(true);
 
     try {
-      // 1. Save transaction FIRST via Backend API (Server-Owned persistence)
+      // 1. Generate the reference FIRST so it stays stable
+      const clientRef = `tx_${new Date().getTime()}`;
+      setPaystackRef(clientRef); // Stabilize for the coming payment
+
+      // 2. Save transaction FIRST via Backend API (Server-Owned persistence)
       const { data: userData } = await supabase.auth.getUser();
       
       const sellingPrice = selectedBundleObj?.price || 0;
@@ -267,7 +280,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
         network_key: selectedBundleObj?.original?.network_key || network,
         datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
-        datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || ''
+        datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || '',
+        paystack_reference: clientRef
       };
 
       console.log("🚀 [Client] INITIATING SECURE TRANSACTION VIA BACKEND...");
@@ -336,8 +350,14 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                   transition={{ delay: 0.1 }}
                   className="flex justify-between items-center"
                 >
-                  <span>Status</span>
-                  <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded font-black text-[10px] animate-pulse">SUCCESSFUL</span>
+                  <span>Delivery</span>
+                  {deliveryStatus === 'delivered' ? (
+                    <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded font-black text-[10px]">DELIVERED</span>
+                  ) : deliveryStatus === 'failed' ? (
+                    <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded font-black text-[10px]">FAILED</span>
+                  ) : (
+                    <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-black text-[10px] animate-pulse">PROCESSING</span>
+                  )}
                 </motion.div>
                 <motion.div 
                   initial={{ opacity: 0, x: -10 }}

@@ -1009,22 +1009,37 @@ export default function AdminDashboard() {
 
     if (vtu === 'manual_review_required' || (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
       return { 
-        label: 'Reconciliation Required', 
+        label: 'Manual Review Required', 
         color: 'bg-amber-50 text-amber-700 border border-amber-300 font-bold', 
         icon: <RefreshCw size={10} className="mr-1" />, 
         reconcile: true 
       };
     }
-    if (vtu === 'success' || vtu === 'delivered' || vtu === 'completed') {
+    if (vtu === 'delivered' || vtu === 'completed') {
       return { label: 'Delivered', color: 'bg-emerald-100 text-emerald-700', icon: null };
     }
     if (vtu === 'provider_rejected' || vtu === 'failed') {
-      return { label: 'Provider Rejected', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
+      return { label: 'Delivery Failed', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
     }
     if (isStale) {
       return { label: 'Stale Processing', color: 'bg-amber-100 text-amber-700 font-bold animate-pulse', icon: <Clock size={10} className="mr-1" />, retry: true };
     }
-    if (["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "provider_execution_started", "processing"].includes(vtu)) {
+    
+    // Convergence Mappings
+    if (vtu === 'provider_accepted') {
+      return { label: 'Provider Accepted', color: 'bg-indigo-50 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
+    }
+    if (vtu === 'awaiting_provider_confirmation') {
+      return { label: 'Awaiting Confirmation', color: 'bg-indigo-50 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
+    }
+    if (vtu === 'reconciliation_pending') {
+      return { label: 'Reconciliation Pending', color: 'bg-amber-50 text-amber-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
+    }
+    if (vtu === 'delayed_provider_processing') {
+      return { label: 'Delayed Processing', color: 'bg-amber-50 text-amber-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
+    }
+
+    if (["provider_execution_started", "processing"].includes(vtu)) {
       return { 
         label: vtu.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), 
         color: 'bg-indigo-50 text-indigo-700', 

@@ -107,7 +107,7 @@ export default async function handler(req: any, res: any) {
     try {
       // 🛡️ FORCE fresh retry 
       const retryObject = { ...tx };
-      retryObject.status = "paid";
+      retryObject.status = "success";
       delete retryObject.external_reference;
 
       const result = await purchaseData(retryObject, "manual_retry");
@@ -119,9 +119,7 @@ export default async function handler(req: any, res: any) {
         const providerReference = result.provider_reference || result.external_reference || result.data?.reference || result.data?.id || result.reference;
         
         const updates: any = {
-           status: "paid",
-           payment_status: "paid",
-           api_status: "success",
+           status: "success",
            vtu_status: result.vtu_status || "provider_accepted",
            provider_reference: providerReference,
            external_reference: providerReference,

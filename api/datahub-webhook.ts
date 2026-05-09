@@ -1,4 +1,4 @@
-import { supabase, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
+import { supabase, syncWalletSilently, logWebhook, sendWhatsAppNotification, sendTelegramNotification } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside datahub-webhook");
 
@@ -123,28 +123,38 @@ export default async function handler(req: any, res: any) {
     console.log("Incoming Provider Status:", statusStr);
 
     const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL"].includes(statusStr);
-    const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED"].includes(statusStr);
+    const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(statusStr);
 
     if (!isSuccess && !isFailed) {
       console.log(`⏳ [Webhook] Intermediate state received (${statusStr}). Enforcing convergence...`);
       // Even for intermediate states, ensure we are in a valid waiting state
       if (!["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending"].includes(tx.vtu_status)) {
-         await supabase.from("transactions").update({ vtu_status: 'awaiting_provider_confirmation', updated_at: timestamp }).eq("id", tx.id);
+         await supabase.from("transactions").update({ 
+           vtu_status: 'awaiting_provider_confirmation', 
+           reconciliation_state: 'awaiting_provider_confirmation',
+           updated_at: timestamp 
+         }).eq("id", tx.id);
       }
       return res.status(200).json({ message: "Converged to waiting" });
     }
 
+    console.log(`=== DELIVERY CONFIRMATION RECEIVED ===`);
+    console.log("Provider Payload:", JSON.stringify(payload));
+
     const deliveryStatus = isSuccess ? "delivered" : "failed";
     const vtuStatus = isSuccess ? "delivered" : "provider_rejected";
+    const reconciliationState = isSuccess ? "completed" : "failed";
 
-    console.log(`📝 [Webhook] Converging truth to: ${deliveryStatus}`);
+    console.log(`📝 [Webhook] Converging truth to: ${vtuStatus} (${reconciliationState})`);
 
     const { data: updatedRows, error: updateError } = await supabase
       .from("transactions")
       .update({
         delivery_status: deliveryStatus,
         vtu_status: vtuStatus,
+        reconciliation_state: reconciliationState,
         delivery_updated_at: timestamp,
+        delivered_at: isSuccess ? timestamp : null, // Assuming delivered_at might be useful
         updated_at: timestamp,
         api_response: payload,
         external_reference: providerRef || tx.external_reference,
@@ -154,9 +164,23 @@ export default async function handler(req: any, res: any) {
       .select();
 
     if (updateError) {
-      console.error("❌ [Webhook] Supabase Update Error (Possible RLS?):", updateError.message);
-      console.log("RLS Error Details:", JSON.stringify(updateError));
+      console.error("❌ [Webhook] Supabase Update Error:", updateError.message);
       throw updateError;
+    }
+
+    if (isSuccess) {
+      console.log('=== VTU STATUS UPDATED TO DELIVERED ===');
+      // 📱 TRIGGER WHATSAPP ALERT (Non-blocking)
+      if (updatedRows && updatedRows[0]) {
+        sendWhatsAppNotification(updatedRows[0]).catch(err => {
+          console.error("❌ [WhatsApp Trigger] Failed:", err.message);
+        });
+        sendTelegramNotification(updatedRows[0]).catch(err => {
+          console.error("❌ [Telegram Trigger] Failed:", err.message);
+        });
+      }
+    } else {
+      console.log('=== VTU STATUS UPDATED TO REJECTED ===');
     }
 
     console.log("DB Update Result: SUCCESS");

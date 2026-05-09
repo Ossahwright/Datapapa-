@@ -25,7 +25,8 @@ export default async function handler(req: any, res: any) {
       capacity,
       network_key,
       datahub_network_key,
-      datahub_capacity
+      datahub_capacity,
+      paystack_reference
     } = req.body;
 
     const { data, error } = await supabase
@@ -42,6 +43,7 @@ export default async function handler(req: any, res: any) {
         network_key,
         datahub_network_key,
         datahub_capacity,
+        paystack_receipt: paystack_reference,
         created_at: new Date().toISOString()
       })
       .select()

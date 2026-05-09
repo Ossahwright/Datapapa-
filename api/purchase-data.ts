@@ -57,13 +57,18 @@ export default async function handler(req: any, res: any) {
     }
 
     if (finalTxData.status === "pending") {
-      console.warn("⚠️ [API] Transaction still pending after wait. Webhook might be slow. Purchase will be handled by webhook once payment is confirmed.");
+      console.warn("⚠️ [API] Transaction still pending after wait. Webhook might be slow.");
       return res.status(200).json({ 
         success: true, 
         message: "Payment verification in progress. Orders are processed automatically once payment is confirmed.",
         vtu_status: "pending",
         trace_id: finalTransactionId
       });
+    }
+
+    if (finalTxData.status !== "success") {
+      console.error(`❌ [API] Safety Block: Status is ${finalTxData.status}. Expected success.`);
+      return res.status(400).json({ success: false, error: `Payment not confirmed (${finalTxData.status})` });
     }
 
     console.log("=== API TRIGGERING purchaseData ===");

@@ -307,6 +307,122 @@ export async function logWebhook({
 }
 
 /**
+ * 📱 WHATSAPP NOTIFICATION HELPER (CallMeBot)
+ * Sends a non-blocking WhatsApp alert to the admin.
+ */
+export async function sendWhatsAppNotification(tx: any) {
+  const phone = process.env.CALLMEBOT_PHONE;
+  const apikey = process.env.CALLMEBOT_APIKEY;
+
+  if (!phone || !apikey) {
+    console.log("ℹ️ [WhatsApp] Skipping notification: Credentials not set.");
+    return;
+  }
+
+  try {
+    const amount = tx.amount_paid || tx.amount || 0;
+    const formattedAmount = `₵${Number(amount).toFixed(2)}`;
+    const dateStr = new Date(tx.created_at).toLocaleString('en-GB', { 
+      day: 'numeric', month: 'long', year: 'numeric', 
+      hour: 'numeric', minute: '2-digit', hour12: true 
+    });
+
+    const message = `🟢 *NEW SUCCESSFUL TRANSACTION*
+
+*Transaction Status:* Successful
+
+*Amount Paid:* ${formattedAmount}
+*Network Provider:* ${tx.network || 'Unknown'}
+*Data Bundle:* ${tx.bundle_name || tx.capacity || 'Data'}
+
+*Recipient Number:* ${tx.receiver_phone || tx.phone || 'N/A'}
+*Payer Number:* ${tx.sender_phone || tx.email || 'N/A'}
+
+*Transaction Ref:*
+${tx.provider_reference || tx.reference || tx.id}
+
+*Date & Time:*
+${dateStr}
+
+*Source:*
+DataPapa WebApp`;
+
+    const encodedMsg = encodeURIComponent(message);
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&apikey=${apikey}&text=${encodedMsg}`;
+
+    console.log(`📱 [WhatsApp] Sending alert for TX: ${tx.id}...`);
+    
+    // Non-blocking fire-and-forget (mostly)
+    axios.get(url).catch(err => {
+      console.error("❌ [WhatsApp] Failed to send notification:", err.message);
+    });
+
+  } catch (error: any) {
+    console.error("❌ [WhatsApp] Error formatting notification:", error.message);
+  }
+}
+
+/**
+ * 🤖 TELEGRAM NOTIFICATION HELPER
+ * Sends a non-blocking Telegram alert to the admin.
+ */
+export async function sendTelegramNotification(tx: any) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+
+  if (!botToken || !chatId) {
+    console.log("ℹ️ [Telegram] Skipping notification: Credentials not set.");
+    return;
+  }
+
+  try {
+    const amount = tx.amount_paid || tx.amount || 0;
+    const formattedAmount = `₵${Number(amount).toFixed(2)}`;
+    
+    // Clean and descriptive message format requested by user
+    const message = `
+🟢 NEW SUCCESSFUL TRANSACTION
+
+Amount: ${formattedAmount}
+Network: ${tx.network || 'Unknown'}
+Bundle: ${tx.bundle_name || tx.capacity || 'Data'}
+
+Recipient: ${tx.receiver_phone || tx.phone || 'N/A'}
+Payer: ${tx.sender_phone || tx.email || 'N/A'}
+
+Ref: ${tx.provider_reference || tx.reference || tx.id}
+`;
+
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+
+    console.log(`🤖 [Telegram] Sending alert for TX: ${tx.id}...`);
+    
+    // Using axios (already imported) for consistency
+    axios.post(url, {
+      chat_id: chatId,
+      text: message,
+    }).catch(err => {
+      console.error("❌ [Telegram] Failed to send notification:", err.response?.data || err.message);
+    });
+
+  } catch (error: any) {
+    console.error("❌ [Telegram] Error formatting notification:", error.message);
+  }
+}
+
+export const VTU_STATUSES = {
+  PENDING: 'pending',
+  SUCCESS: 'success',
+  PROVIDER_ACCEPTED: 'provider_accepted',
+  AWAITING_PROVIDER_CONFIRMATION: 'awaiting_provider_confirmation',
+  DELIVERED: 'delivered',
+  PROVIDER_REJECTED: 'provider_rejected',
+  RECONCILIATION_PENDING: 'reconciliation_pending',
+  MANUAL_REVIEW_REQUIRED: 'manual_review_required',
+  DELAYED_PROCESSING: 'delayed_provider_processing'
+};
+
+/**
  * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
  * We do not fabricate a fake polling status endpoint because DataHub does not have one we know.
  */
@@ -334,21 +450,52 @@ export async function reconcileTransaction(transactionId: string) {
     return { success: false, error: "Not found" };
   }
   
-  if (tx.vtu_status === "provider_accepted" || tx.vtu_status === "awaiting_provider_confirmation") {
-     const age = Date.now() - new Date(tx.updated_at).getTime();
-     const timestamp = new Date().toISOString();
-     
-     // Eventual Consistency Timestamps
-     // 0-45 mins: awaiting_provider_confirmation
-     // 45-90 min: delayed_provider_processing
-     // 90-180 min: reconciliation_pending
-     // 3h+: manual_review_required
+  const timestamp = new Date().toISOString();
+
+  // 🛡️ STEP 1: If pending, check Paystack Truth
+  if (tx.status === "pending" && tx.paystack_receipt) {
+    console.log(`🔍 [Reconcile] Checking Paystack for ref: ${tx.paystack_receipt}`);
+    try {
+      const psRes = await axios.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
+        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+      });
+      
+      if (psRes.data?.data?.status === "success") {
+        console.log(`✅ [Reconcile] Paystack matches success! Promoting to success.`);
+        const { error: updErr } = await supabase.from("transactions").update({
+          status: "success",
+          payment_verified_at: timestamp,
+          updated_at: timestamp
+        }).eq("id", transactionId);
+        
+        if (!updErr) {
+          // Re-fetch to get success state for purchaseData
+          const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
+          if (updatedTx) {
+            console.log(`🚀 [Reconcile] Triggering delayed delivery for ${transactionId}`);
+            await purchaseData(updatedTx, "reconciliation_sync");
+            return { success: true, status: "success", action: "delivered" };
+          }
+        }
+      } else {
+        console.log(`ℹ️ [Reconcile] Paystack status: ${psRes.data?.data?.status || 'unknown'}`);
+      }
+    } catch (err: any) {
+      console.error(`❌ [Reconcile] Paystack verify error:`, err.message);
+    }
+  }
+
+  // ⏳ STEP 2: Escalation logic for delivery states
+  if (tx.vtu_status === "provider_accepted" || tx.vtu_status === "awaiting_provider_confirmation" || tx.vtu_status === "processing" || tx.vtu_status === "delayed_provider_processing") {
+     const age = Date.now() - new Date(tx.updated_at || tx.created_at).getTime();
      
      let newVtuStatus = tx.vtu_status;
-     if (age > 3 * 60 * 60 * 1000) newVtuStatus = "manual_review_required";
-     else if (age > 90 * 60 * 1000) newVtuStatus = "reconciliation_pending";
-     else if (age > 45 * 60 * 1000) newVtuStatus = "delayed_provider_processing";
-     else if (tx.vtu_status === "provider_accepted") newVtuStatus = "awaiting_provider_confirmation";
+     
+     // ⏳ Time-based escalation
+     if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED; // 3h+
+     else if (age > 90 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING; // 90-180m
+     else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING; // 45-90m
+     else if (tx.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED) newVtuStatus = VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION; // Early transition
 
      if (newVtuStatus !== tx.vtu_status) {
          console.log(`⏳ [Reconcile] Escalating state for ${tx.id} from ${tx.vtu_status} to ${newVtuStatus}`);
@@ -356,18 +503,19 @@ export async function reconcileTransaction(transactionId: string) {
             vtu_status: newVtuStatus,
             updated_at: timestamp
          }).eq("id", transactionId);
-         return { success: true, status: newVtuStatus, raw: "webhook-driven" };
+         return { success: true, status: newVtuStatus };
      }
   }
 
-  return { success: true, status: tx.vtu_status, raw: "webhook-driven" };
+  return { success: true, status: tx.vtu_status || tx.status, message: "Sync complete" };
 }
 
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
-  console.log("=== DATAHUB EXECUTION START ===");
-  console.log("TRANSACTION:", transaction.id);
+  console.log("=== purchaseData ENTERED ===");
+  console.log("Transaction:", transaction.id);
+  console.log("Source:", source);
 
   // 🚀 FORENSIC TRACING: START
   const executionId = Math.random().toString(36).substring(7);
@@ -380,6 +528,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     capacity: transaction.capacity,
     timestamp: new Date().toISOString()
   });
+
+  console.log("=== DATAHUB EXECUTION START ===");
   
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
   if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === 'delivered') {
@@ -394,14 +544,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   }
 
   // 🛡️ STEP 3: PAYMENT VERIFICATION
-  const isPaid = 
-    transaction.status === "paid" || 
-    transaction.status === "payment_verified" || 
-    transaction.status === "success" || 
-    transaction.payment_status === "paid" || 
-    transaction.payment_status === "success" ||
-    source === "manual_retry" || 
-    source === "direct_api"; 
+  const isPaid = transaction.status === "success";
 
   console.log(`🛡️ [${executionId}] Security Audit:`, { 
     isPaid, 
@@ -410,8 +553,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     txVtuStatus: transaction.vtu_status 
   });
 
-  if (!isPaid) {
-    console.error(`❌ [${executionId}] Safety Reject: Payment not verified. Status:`, transaction.status);
+  if (!isPaid && source !== "manual_retry" && source !== "direct_api") {
+    console.error(`❌ [${executionId}] Safety Reject: Payment not verified as 'success'. Status:`, transaction.status);
     throw new Error(`Payment verification required: Current status is ${transaction.status}`);
   }
 
@@ -499,13 +642,13 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
-          vtu_status: 'provider_accepted',
+          vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
           provider_reference: providerReference,
           external_reference: providerReference,
           internal_reference: transaction.id,
           provider_payload: result,
           provider_accepted_at: new Date().toISOString(),
-          reconciliation_state: 'awaiting_provider_confirmation',
+          reconciliation_state: VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION,
           api_response: result,
           updated_at: new Date().toISOString()
         })
@@ -518,7 +661,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE:`, atomicError.message);
       }
 
-      return { success: true, vtu_status: 'provider_accepted', provider_reference: providerReference, external_reference: providerReference, ...result };
+      return { success: true, vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED, provider_reference: providerReference, external_reference: providerReference, ...result };
     }
 
     // Explicit Failure Handling
