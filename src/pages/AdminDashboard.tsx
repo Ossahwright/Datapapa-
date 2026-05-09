@@ -128,6 +128,8 @@ export default function AdminDashboard() {
   });
   const [secureSettings, setSecureSettings] = useState({
     datahub_api_key: "",
+    telegram_bot_token: "",
+    telegram_chat_id: "",
   });
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -3470,8 +3472,62 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       </div>
+                    </div>
+                  </div>
 
-                      <div id="templatePreview" className="space-y-4 pt-4">
+                  {/* Telegram Notifications Section */}
+                  <div className="pt-8 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="text-sky-600" size={20} />
+                        <h3 className="font-bold text-slate-900">
+                          Telegram Notifications
+                        </h3>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Telegram Bot Token
+                        </label>
+                        <input
+                          type="password"
+                          value={secureSettings.telegram_bot_token || ""}
+                          onChange={(e) =>
+                            setSecureSettings({
+                              ...secureSettings,
+                              telegram_bot_token: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-xs"
+                          placeholder="e.g. 123456:ABC-DEF..."
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Telegram Chat ID
+                        </label>
+                        <input
+                          type="text"
+                          value={secureSettings.telegram_chat_id || ""}
+                          onChange={(e) =>
+                            setSecureSettings({
+                              ...secureSettings,
+                              telegram_chat_id: e.target.value,
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-xs"
+                          placeholder="e.g. -100123456789"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2 italic">
+                      Automated alerts for successful transaction delivery will be sent to this chat.
+                    </p>
+                  </div>
+
+                  <div id="templatePreview" className="space-y-4 pt-4">
                         <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
                           Primary Quick Template
                         </label>
@@ -3501,10 +3557,8 @@ export default function AdminDashboard() {
                           WhatsApp restrictions and prevent spam.
                         </p>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* DataHub Integration Section */}
+                      {/* DataHub Integration Section */}
                   <div className="pt-8 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center gap-2">

@@ -106,46 +106,6 @@ export default async function handler(req: any, res: any) {
 
     console.log("DataHub purchase result", result);
 
-    if (result.success) {
-      if (!finalTransactionId) {
-        console.error("Missing finalTransactionId");
-      }
-
-      const providerReference = 
-        result?.provider_reference ||
-        result?.data?.reference ||
-        result?.reference ||
-        null;
-      
-      if (!providerReference) {
-        console.error("Missing providerReference");
-      }
-
-      const updatePayload: any = {
-        api_status: "success",
-        delivery_status: "processing",
-        provider_reference: providerReference,
-        external_reference: providerReference,
-        reconciliation_state: 'awaiting_provider_confirmation'
-      };
-
-      console.log("Updating transaction with SERVICE ROLE permissions", {
-        transaction_id: txData.id,
-        providerReference,
-        updatePayload
-      });
-
-      const { data: updatedTx, error: updateError } = await supabase
-        .from("transactions")
-        .update(updatePayload)
-        .eq("id", txData.id)
-        .select();
-
-      if (updateError) {
-        console.error("Transaction update error:", updateError);
-      }
-    }
-
     // Sync wallet in background
     syncWalletSilently().catch(console.error);
 

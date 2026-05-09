@@ -111,30 +111,10 @@ export default async function handler(req: any, res: any) {
       delete retryObject.external_reference;
 
       const result = await purchaseData(retryObject, "manual_retry");
-      console.log("=== REPURCHASE EXECUTION RESULT ===");
-      console.log(JSON.stringify(result, null, 2));
       
-      // Update transaction status if successful
-      if (result.success) {
-        const providerReference = result.provider_reference || result.external_reference || result.data?.reference || result.data?.id || result.reference;
-        
-        const updates: any = {
-           status: "success",
-           vtu_status: result.vtu_status || "provider_accepted",
-           provider_reference: providerReference,
-           external_reference: providerReference,
-           reconciliation_state: "awaiting_provider_confirmation",
-           updated_at: new Date().toISOString()
-        };
-        
-        await supabase.from("transactions").update(updates).eq("id", tx.id);
-      }
-
       // Sync wallet in background
       syncWalletSilently().catch(console.error);
 
-      // We return 200 even for logical failures so the frontend can read the JSON payload
-      // Otherwise Axios throws, and if standard parsing fails, it shows "Request failed with status code 400"
       return res.status(200).json(result);
     } catch (processErr: any) {
       console.error("[RetryVTU] Processing error:", processErr);

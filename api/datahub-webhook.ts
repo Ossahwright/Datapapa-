@@ -1,4 +1,4 @@
-import { supabase, syncWalletSilently, logWebhook, sendWhatsAppNotification, sendTelegramNotification } from '../lib/server-utils.js';
+import { supabase, syncWalletSilently, logWebhook, sendTelegramNotification } from '../lib/server-utils.js';
 
 console.log("server-utils loaded successfully inside datahub-webhook");
 
@@ -172,11 +172,8 @@ export default async function handler(req: any, res: any) {
 
     if (isSuccess) {
       console.log('=== VTU STATUS UPDATED TO DELIVERED ===');
-      // 📱 TRIGGER WHATSAPP ALERT (Non-blocking)
+      // 📱 TRIGGER TELEGRAM ALERT (Non-blocking)
       if (updatedRows && updatedRows[0]) {
-        sendWhatsAppNotification(updatedRows[0]).catch(err => {
-          console.error("❌ [WhatsApp Trigger] Failed:", err.message);
-        });
         sendTelegramNotification(updatedRows[0]).catch(err => {
           console.error("❌ [Telegram Trigger] Failed:", err.message);
         });

@@ -330,68 +330,30 @@ export async function logWebhook({
 }
 
 /**
- * 📱 WHATSAPP NOTIFICATION HELPER (CallMeBot)
- * Sends a non-blocking WhatsApp alert to the admin.
- */
-export async function sendWhatsAppNotification(tx: any) {
-  const phone = process.env.CALLMEBOT_PHONE;
-  const apikey = process.env.CALLMEBOT_APIKEY;
-
-  if (!phone || !apikey) {
-    console.log("ℹ️ [WhatsApp] Skipping notification: Credentials not set.");
-    return;
-  }
-
-  try {
-    const amount = tx.amount_paid || tx.amount || 0;
-    const formattedAmount = `₵${Number(amount).toFixed(2)}`;
-    const dateStr = new Date(tx.created_at).toLocaleString('en-GB', { 
-      day: 'numeric', month: 'long', year: 'numeric', 
-      hour: 'numeric', minute: '2-digit', hour12: true 
-    });
-
-    const message = `🟢 *NEW SUCCESSFUL TRANSACTION*
-
-*Transaction Status:* Successful
-
-*Amount Paid:* ${formattedAmount}
-*Network Provider:* ${tx.network || 'Unknown'}
-*Data Bundle:* ${tx.bundle_name || tx.capacity || 'Data'}
-
-*Recipient Number:* ${tx.receiver_phone || tx.phone || 'N/A'}
-*Payer Number:* ${tx.sender_phone || tx.email || 'N/A'}
-
-*Transaction Ref:*
-${tx.provider_reference || tx.reference || tx.id}
-
-*Date & Time:*
-${dateStr}
-
-*Source:*
-DataPapa WebApp`;
-
-    const encodedMsg = encodeURIComponent(message);
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&apikey=${apikey}&text=${encodedMsg}`;
-
-    console.log(`📱 [WhatsApp] Sending alert for TX: ${tx.id}...`);
-    
-    // Non-blocking fire-and-forget (mostly)
-    axios.get(url).catch(err => {
-      console.error("❌ [WhatsApp] Failed to send notification:", err.message);
-    });
-
-  } catch (error: any) {
-    console.error("❌ [WhatsApp] Error formatting notification:", error.message);
-  }
-}
-
-/**
  * 🤖 TELEGRAM NOTIFICATION HELPER
  * Sends a non-blocking Telegram alert to the admin.
  */
 export async function sendTelegramNotification(tx: any) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  let botToken = process.env.TELEGRAM_BOT_TOKEN;
+  let chatId = process.env.TELEGRAM_CHAT_ID;
+
+  // 🛡️ FALLBACK: Check Supabase settings if env vars are missing
+  if (!botToken || !chatId) {
+    try {
+      const { data } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'secure')
+        .maybeSingle();
+      
+      if (data?.value) {
+        botToken = botToken || data.value.telegram_bot_token;
+        chatId = chatId || data.value.telegram_chat_id;
+      }
+    } catch (err) {
+      console.error("[Telegram Config] Fallback fetch failed:", err);
+    }
+  }
 
   if (!botToken || !chatId) {
     console.log("ℹ️ [Telegram] Skipping notification: Credentials not set.");
@@ -532,6 +494,17 @@ export async function reconcileTransaction(transactionId: string) {
         updated_at: timestamp,
         api_response: poll.data
       }).eq("id", transactionId);
+
+      if (poll.isSuccess) {
+        // Fetch full record for notification
+        const { data: finalTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
+        if (finalTx) {
+          sendTelegramNotification(finalTx).catch(err => {
+            console.error("❌ [Telegram Reconcile Alert] Failed:", err.message);
+          });
+        }
+      }
+
       return { success: true, status: vtuStatus };
     }
 
@@ -654,14 +627,20 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     throw new Error(error);
   }
 
+  // 🚀 GENERATE CLEANER EXTERNAL REFERENCE
+  // Some providers (DataHub) prefer shorter or more searchable references
+  const shortId = (transaction.id || "").split("-")[0].toUpperCase();
+  const externalRef = `DP-${shortId}-${Date.now().toString().slice(-4)}`;
+
   const payload = { 
     networkKey, 
     recipient, 
     capacity: finalCapacity, 
     reference: transaction.id,
-    external_reference: transaction.id, // 🚀 REDUNDANT BUT ADDED FOR PROVIDER TRACING
-    request_id: transaction.id,         // 🚀 ADDED FOR ALTERNATIVE GATEWAYS
-    client_id: transaction.id           // 🚀 SOME CLONES USE THIS
+    external_reference: externalRef, 
+    client_reference: externalRef,
+    request_id: transaction.id,
+    client_id: transaction.id
   };
   console.log(`📡 [${executionId}] FINAL PROVIDER PAYLOAD:`, JSON.stringify(payload));
   const { apiKey, baseUrl } = await getDataHubConfig();
@@ -673,6 +652,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     console.log(`🚀 [${executionId}] Calling Provider API...`);
     const response = await apiClient.post(endpoint, payload, {
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "Accept": "application/json" },
+      timeout: 30000,
       validateStatus: () => true
     });
 
@@ -697,17 +677,14 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
     if (isAccepted || providerReference) {
       const acceptanceTime = new Date().toISOString();
-      console.log("=== PROVIDER ACCEPTED ===");
-      console.log(acceptanceTime);
-      console.log(`=== [${executionId}] PROVIDER ACCEPTED ===`);
-      console.log(`✅ [${executionId}] ATOMIC COMMITTING REF:`, providerReference);
+      console.log(`✅ [${executionId}] PROVIDER ACCEPTED. ATOMIC COMMITTING REF:`, providerReference);
       
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
           vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
-          provider_reference: providerReference || transaction.id, // Fallback to our ID if null
-          external_reference: providerReference || transaction.id,
+          provider_reference: providerReference || transaction.id,
+          external_reference: externalRef, // Using our cleaner searchable ref
           internal_reference: transaction.id,
           provider_payload: result,
           provider_accepted_at: acceptanceTime,
@@ -717,14 +694,28 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
         })
         .eq("id", transaction.id);
         
-      console.log(`=== [${executionId}] ACCEPTANCE COMMITTED ===`);
-      if (providerReference) console.log(`=== [${executionId}] PROVIDER REFERENCE SAVED ===`);
-      
       if (atomicError) {
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE:`, atomicError.message);
       }
 
-      return { success: true, vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED, provider_reference: providerReference, external_reference: providerReference, ...result };
+      // 🏎️ SWIFT DELIVERY ENFORCEMENT: Immediate Background Polling 
+      // Instead of waiting for webhook, we poll immediately and again after 15s/45s
+      // This bypasses webhook delays if the provider has already finished processing.
+      const triggerPolling = async () => {
+        const delays = [5000, 15000, 45000]; // 5s, 20s total, 65s total
+        for (const delay of delays) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          console.log(`🔄 [${executionId}] Swift Polling Attempt (${delay}ms)...`);
+          const pollResult = await reconcileTransaction(transaction.id);
+          if (pollResult.success && pollResult.status === "delivered") {
+            console.log(`🚀 [${executionId}] Swift Delivery Accomplished via Polling!`);
+            break;
+          }
+        }
+      };
+      triggerPolling().catch(err => console.error(`❌ [${executionId}] Swift Polling Error:`, err.message));
+
+      return { success: true, vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED, provider_reference: providerReference, external_reference: externalRef, ...result };
     }
 
     // Explicit Failure Handling
