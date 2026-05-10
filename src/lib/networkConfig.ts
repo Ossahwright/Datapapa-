@@ -63,8 +63,10 @@ export const findNetworkConfig = (identifier: string): NetworkInfo | undefined =
   if (byLabel) return byLabel;
 
   // 5. Special case for common legacy strings
-  if (clean === 'AIRTELTIGO' || clean === 'AT' || clean === 'AT_ISHARE') return NETWORK_CONFIG.AIRTELTIGO_PREMIUM;
-  if (clean === 'VODAFONE') return NETWORK_CONFIG.TELECEL;
+  if (clean === 'AIRTELTIGO' || clean === 'AT' || clean === 'AIRTEL_TIGO') return NETWORK_CONFIG.AIRTELTIGO_PREMIUM;
+  if (clean === 'AT_ISHARE' || clean === 'AIRTELTIGO_ISHARE') return NETWORK_CONFIG.AIRTELTIGO_PREMIUM;
+  if (clean === 'AT_BIGTIME' || clean === 'AIRTELTIGO_BIGTIME') return NETWORK_CONFIG.AIRTELTIGO_BIGTIME;
+  if (clean === 'VODAFONE' || clean === 'TELECEL_CASH') return NETWORK_CONFIG.TELECEL;
 
   return undefined;
 };

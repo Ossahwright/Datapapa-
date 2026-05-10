@@ -108,7 +108,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined)
     .reduce((acc: any, b: any) => {
       const netKey = b.network || b.network_key || '';
-      const config = findNetworkConfig(netKey);
+      
+      // 🚀 AT/TELECEL NORMALIZATION FIX
+      // Ensure we find the exact config if possible, fallback to provider match
+      let config = findNetworkConfig(netKey);
       
       if (!config) {
         console.warn(`⚠️ [Bundle Sync] Unknown network for bundle: ${netKey}`, b);
@@ -126,6 +129,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         name: b.description || '', 
         price: isNaN(sellingPrice) ? fallbackPrice : sellingPrice, 
         volume: b.capacity || b.volume || '',
+        network_key: b.network_key || config.networkKey,
         original: b 
       });
       return acc;
@@ -152,19 +156,14 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         },
         (payload) => {
           console.log("🔄 REALTIME UPDATE:", payload);
-
           const updated = payload.new;
-
           if (updated.id === currentTxId) {
             if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered") {
-              // We'll update state instead of an alert for better UI
               setDeliveryStatus("delivered");
             }
-
             if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
               setDeliveryStatus("processing");
             }
-
             if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected") {
               setDeliveryStatus("failed");
               alert("❌ Data delivery failed. Please contact support if you were debited.");
@@ -181,29 +180,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const [paystackRef, setPaystackRef] = useState<string>(`tx_${new Date().getTime()}`);
 
-  const paystackConfig = useMemo(() => ({
-    reference: paystackRef,
-    email: 'customer@datapapa.com',
-    amount: selectedBundleObj ? Math.round(selectedBundleObj.price * 100) : 0, 
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_test_dummy",
-    currency: 'GHS' as const,
-    // @ts-ignore
-    metadata: {
-      transaction_id: currentTxId,
-      phone: phone,
-      network: network,
-      bundle: selectedBundleObj?.volume,
-      custom_fields: [
-        { display_name: "Phone Number", variable_name: "phone", value: phone },
-        { display_name: "Network", variable_name: "network", value: network }
-      ]
-    }
-  }), [currentTxId, phone, network, selectedBundleObj, paystackRef]);
-
-  const initializePayment = usePaystackPayment(paystackConfig);
-
   const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("💰 PAYMENT SUCCESS CALLBACK");
+    console.log("💰 PAYMENT SUCCESS CALLBACK", paystackResponse);
     setPaymentStatus("success");
     setSuccess(true); 
     setIsLoading(false);
@@ -212,15 +190,9 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     try {
       const currentPaystackRef = paystackResponse.reference;
       setTransactionId(currentPaystackRef);
-
-      // Webhook automatically handles provider execution as per Step 7 STRICT restoration.
       console.log("✅ Payment successful. Awaiting webhook fulfillment...");
-      
     } catch (err: any) {
       console.error("Payment post-processing error:", err);
-    } finally {
-      setIsLoading(false);
-      // We don't null currentTxId here yet because we might need it for the summary if we chose to use it
     }
   };
 
@@ -238,16 +210,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   }, [countdown, success]);
 
   const handlePaymentClose = () => {
+    console.log("🔒 PAYSTACK WINDOW CLOSED");
     setIsLoading(false);
     setCurrentTxId(null);
   };
-
-  useEffect(() => {
-    if (currentTxId) {
-      // @ts-ignore
-      initializePayment({ onSuccess: handlePaymentSuccess, onClose: handlePaymentClose });
-    }
-  }, [currentTxId]);
 
   const handlePayment = async () => {
     if (!phone || phone.length < 10) {
@@ -337,6 +303,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       console.log("✅ Transaction created by Secure Backend:", tx.id);
 
       // 2. Now trigger Paystack via state update that fires useEffect
+      // NO PRE-FLIGHT CHECK HERE: We'll check in the component
       setCurrentTxId(tx.id);
     } catch (err: any) {
       console.error("Initialization error:", err);
@@ -689,6 +656,73 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           </div>
         </div>
       </div>
+
+      {/* 🚀 ROBUST PAYSTACK TRIGGER */}
+      {currentTxId && selectedBundleObj && (
+        <PaystackTrigger
+          transactionId={currentTxId}
+          amount={Math.round(selectedBundleObj.price * 100)}
+          reference={paystackRef}
+          phone={phone}
+          network={network}
+          bundleVolume={selectedBundleObj.volume}
+          onSuccess={handlePaymentSuccess}
+          onClose={handlePaymentClose}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * 🎯 ROBUST PAYSTACK INITIALIZER COMPONENT
+ * Ensures hook is called with absolutely fresh props and clean lifecycle.
+ */
+function PaystackTrigger({ 
+  transactionId, 
+  amount, 
+  reference, 
+  phone, 
+  network, 
+  bundleVolume, 
+  onSuccess, 
+  onClose 
+}: any) {
+  const config = {
+    reference,
+    email: 'customer@datapapa.com',
+    amount,
+    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541",
+    currency: 'GHS' as const,
+    metadata: {
+      transaction_id: transactionId,
+      phone: phone,
+      network: network,
+      bundle: bundleVolume,
+      custom_fields: [
+        { display_name: "Phone Number", variable_name: "phone", value: phone },
+        { display_name: "Network", variable_name: "network", value: network }
+      ]
+    }
+  };
+
+  const initializePayment = usePaystackPayment(config);
+
+  useEffect(() => {
+    console.log("🏗️ PaystackTrigger mounted. Initializing...", { 
+      amount, 
+      ref: reference,
+      tx: transactionId 
+    });
+    
+    if (amount > 0) {
+      // @ts-ignore
+      initializePayment(onSuccess, onClose);
+    } else {
+      console.error("❌ Cannot initialize Paystack with ZERO amount");
+      onClose();
+    }
+  }, []); // Only once on mount
+
+  return null;
 }
