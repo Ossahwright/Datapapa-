@@ -26,7 +26,13 @@ export default async function handler(req: any, res: any) {
       network_key,
       datahub_network_key,
       datahub_capacity,
-      paystack_reference
+      paystack_reference,
+      
+      // 🚀 NORMALIZED FIELDS
+      display_bundle,
+      internal_bundle_id,
+      provider_capacity,
+      provider_network_key
     } = req.body;
 
     const { data, error } = await supabase
@@ -44,7 +50,13 @@ export default async function handler(req: any, res: any) {
         datahub_network_key,
         datahub_capacity,
         paystack_receipt: paystack_reference,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+
+        // 🚀 STORAGE NORMALIZATION
+        display_bundle,
+        internal_bundle_id,
+        provider_capacity,
+        provider_network_key
       })
       .select()
       .single();

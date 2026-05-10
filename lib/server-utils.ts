@@ -14,6 +14,7 @@ const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
 import { findNetworkConfig } from './networkConfig.js';
+import { BUNDLE_CONFIG } from './bundleConfig.js';
 
 export const apiClient = axios.create({
   httpAgent,
@@ -631,48 +632,24 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
      throw new Error(error);
   }
 
-  // 📦 Network Mapping
-  const netConfig = findNetworkConfig(transaction.network);
+  // 🚀 AUTHENTIC TELECOM NORMALIZATION (STEP 5 & 8)
+  console.log("=== BUNDLE NORMALIZATION ===");
   
-  const networkNumericMapping: Record<string, string> = {
-    'MTN': '1',
-    'YELLO': '1',
-    'TELECEL': '2',
-    'VODAFONE': '2',
-    'AT_PREMIUM': '3',
-    'AT_BIGTIME': '3',
-    'AIRTELTIGO': '3',
-    'AT': '3'
-  };
+  // Prioritize pre-normalized fields from storage (Step 7)
+  const networkKey = transaction.provider_network_key || transaction.datahub_network_key || transaction.network_key;
+  const finalCapacity = transaction.provider_capacity || transaction.datahub_capacity || transaction.capacity;
 
-  const networkKey = netConfig?.networkKey;
-  const networkId = networkNumericMapping[networkKey || ""] || "1";
-
-  if (!networkKey) {
-    const error = `Safety Block: Could not determine networkKey for network: ${transaction.network}. Check network registry.`;
-    console.error(`❌ [${executionId}] ${error}`);
-    await supabase.from("transactions").update({ 
-      vtu_status: 'provider_rejected', 
-      error_message: error, 
-      updated_at: new Date().toISOString() 
-    }).eq("id", transaction.id);
-    throw new Error(error);
-  }
-
-  // 📦 Capacity Normalization & Forensic Audit
-  const rawCapacity = transaction.datahub_capacity || transaction.capacity || "";
-  const finalCapacity = normalizeDataHubPlan(rawCapacity);
-
-  console.log(`📦 [${executionId}] Capacity Audit:`, { 
-    raw: rawCapacity, 
-    normalized: finalCapacity, 
-    network: networkKey,
-    network_id: networkId
+  console.log(`=== [${executionId}] PROVIDER PAYLOAD INTEGRITY ===`);
+  console.log({
+    internal_bundle_id: transaction.internal_bundle_id,
+    display_bundle: transaction.display_bundle,
+    provider_network_key: networkKey,
+    provider_capacity: finalCapacity,
+    recipient: recipient
   });
 
-  // 🛡️ Strict Validation
-  if (!validateDataHubCapacity(finalCapacity)) {
-    const error = `Safety Block: Invalid capacity detected (${finalCapacity}). Provider expects raw GB values.`;
+  if (!networkKey || !finalCapacity) {
+    const error = `Safety Block: Missing Normalized Provider Keys. (NR: ${networkKey}, CAP: ${finalCapacity})`;
     console.error(`❌ [${executionId}] ${error}`);
     await supabase.from("transactions").update({ 
       vtu_status: 'provider_rejected', 
@@ -681,30 +658,34 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     }).eq("id", transaction.id);
     throw new Error(error);
   }
+
+  // 📦 Network Numeric Mapping (for DataHub API variants)
+  const networkNumericMapping: Record<string, string> = {
+    'YELLO': '1',
+    'VODA': '2',
+    'TELECEL': '2',
+    'AT_PREMIUM': '3',
+    'AT_BIGTIME': '3'
+  };
+  const networkId = networkNumericMapping[networkKey] || "1";
 
   // 🚀 GENERATE CLEANER EXTERNAL REFERENCE
   // Some providers (DataHub) prefer shorter or more searchable references
   const shortId = (transaction.id || "").split("-")[0].toUpperCase();
   const externalRef = `DP-${shortId}-${Date.now().toString().slice(-4)}`;
 
-  // 🚀 ROBUST PAYLOAD: Using multiple key variations for compatibility with different API clones
+  // 🚀 ROBUST PAYLOAD: Using authoritative normalized values
   const payload = { 
-    network: networkKey, 
     networkKey: networkKey,
     network_id: networkId,
-    network_code: networkId,
-    phone: recipient,
     recipient: recipient,
-    mobile_number: recipient,
-    plan: finalCapacity,
-    plan_id: finalCapacity,
+    phone: recipient, 
     capacity: finalCapacity, 
+    plan: finalCapacity, 
     amount: transaction.amount,
     reference: transaction.id,
-    external_reference: externalRef, 
-    client_reference: externalRef,
-    request_id: transaction.id,
-    client_id: transaction.id
+    external_reference: externalRef,
+    client_reference: externalRef
   };
   console.log(`📡 [${executionId}] FINAL PROVIDER PAYLOAD:`, JSON.stringify(payload));
   const { apiKey, baseUrl } = await getDataHubConfig();

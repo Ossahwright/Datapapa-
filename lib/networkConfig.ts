@@ -34,7 +34,7 @@ export const NETWORK_CONFIG: Record<NetworkId, NetworkInfo> = {
     id: "TELECEL",
     label: "Telecel",
     provider: "telecel",
-    networkKey: "TELECEL"
+    networkKey: "VODA"
   }
 };
 

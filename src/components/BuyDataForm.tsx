@@ -7,6 +7,7 @@ import axios from 'axios';
 import { openWhatsApp } from '../lib/whatsapp';
 
 import { NETWORK_CONFIG, NETWORKS, findNetworkConfig } from '../lib/networkConfig';
+import { BUNDLE_CONFIG, findNormalizedBundle } from '../lib/bundleConfig';
 
 interface BuyDataFormProps {
   settings: {
@@ -107,29 +108,31 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const allBundles = dbBundles
     .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined)
     .reduce((acc: any, b: any) => {
-      const netKey = b.network || b.network_key || '';
+      const dbNetKey = b.network || b.network_key || '';
+      const dbCapacity = b.capacity || b.volume || '';
       
-      // 🚀 AT/TELECEL NORMALIZATION FIX
-      // Ensure we find the exact config if possible, fallback to provider match
-      let config = findNetworkConfig(netKey);
+      // 🚀 AUTHENTIC TELECOM NORMALIZATION
+      const normalized = findNormalizedBundle(dbNetKey, dbCapacity);
       
-      if (!config) {
-        console.warn(`⚠️ [Bundle Sync] Unknown network for bundle: ${netKey}`, b);
+      if (!normalized) {
+        console.warn(`⚠️ [Bundle Normalization] FAILED for bundle: ${dbNetKey} ${dbCapacity}. Skipping.`, b);
         return acc;
       }
 
-      const netId = config.id;
+      const netId = normalized.networkId;
       if (!acc[netId]) acc[netId] = [];
       
       const sellingPrice = parseFloat(b.selling_price);
-      const fallbackPrice = parseFloat(b.price || 0);
+      const fallbackPrice = normalized.price;
       
       acc[netId].push({ 
-        id: b.id, 
-        name: b.description || '', 
+        id: normalized.id, // Using authoritative ID
+        db_id: b.id,
+        name: normalized.displayLabel, 
         price: isNaN(sellingPrice) ? fallbackPrice : sellingPrice, 
-        volume: b.capacity || b.volume || '',
-        network_key: b.network_key || config.networkKey,
+        volume: normalized.displayLabel,
+        provider_capacity: normalized.providerCapacity,
+        provider_network_key: normalized.providerNetworkKey,
         original: b 
       });
       return acc;
@@ -216,98 +219,106 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   };
 
   const handlePayment = async () => {
+    // 🚀 STEP 1: PAYMENT-LAYER PRE-FLIGHT VALIDATION (MINIMAL)
     if (!phone || phone.length < 10) {
-      setError('Please enter a valid phone number');
+      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
+      console.error("Reason: Invalid Recipient Phone", { phone });
+      setError('Please enter a valid recipient phone number');
       return;
     }
-    setError('');
+
+    if (!selectedBundleObj) {
+      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
+      console.error("Reason: No bundle selected");
+      setError('Please select a data bundle package');
+      return;
+    }
+
+    const amount = selectedBundleObj.price;
+    if (!amount || amount <= 0) {
+      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
+      console.error("Reason: Invalid Amount", { amount });
+      setError('Invalid bundle price. Please try another bundle.');
+      return;
+    }
+
     setIsLoading(true);
+    setError('');
 
     try {
-      // 🚀 STEP 1: RESOLVE NETWORK CONFIG
-      const netConfig = findNetworkConfig(network);
-      
-      console.log("=== NETWORK NORMALIZATION ===");
-      console.log("Input Network ID:", network);
-
-      if (!netConfig) {
-        console.error("=== NETWORK CONFIGURATION FAILURE ===");
-        console.error("Could not resolve config for:", network);
-        setError("Network configuration error. Please try again.");
-        setIsLoading(false);
-        return;
-      }
-
-      console.log("=== RESOLVED NETWORK CONFIG ===");
-      console.log(netConfig);
-
-      // 🚀 STEP 2: RESOLVE BUNDLE
-      const sellingPrice = selectedBundleObj?.price || 0;
-      if (!selectedBundleObj || sellingPrice <= 0) {
-        console.error("=== BUNDLE RESOLUTION FAILURE ===");
-        setError("Please select a valid data bundle.");
-        setIsLoading(false);
-        return;
-      }
-
-      console.log("=== BUNDLE RESOLVED ===");
-      console.log(selectedBundleObj);
+      console.log("=== PAYMENT-LAYER DECOUPLING ACTIVATED ===");
+      console.log("=== PAYSTACK INITIALIZATION START ===");
 
       const clientRef = `tx_${new Date().getTime()}`;
       setPaystackRef(clientRef);
 
       const { data: userData } = await supabase.auth.getUser();
-      const costPrice = parseFloat(selectedBundleObj?.original?.cost_price || '0') || 0;
-      const profit = Math.max(0, sellingPrice - costPrice);
 
-      const payload = {
+      // 🚀 STEP 2: ASSEMBLE TELECOM PAYLOAD (STRICTLY NON-BLOCKING FOR PAYMENT)
+      console.log("=== TELECOM ROUTING ISOLATION FLOW ===");
+      
+      // We attempt to gather all telecom metadata for storage, 
+      // but we do NOT let failure here block the payment initialization.
+      const netConfig = findNetworkConfig(network);
+      
+      const payload: any = {
         user_id: userData?.user?.id || null,
-        amount: sellingPrice,
-        profit: profit,
-        network: netConfig.id, // Store Normalized ID (MTN, AIRTELTIGO_PREMIUM, etc.)
+        amount: amount,
         recipient_phone: phone,
         payer_phone_number: payerPhone || phone,
-        capacity: selectedBundleObj.volume || selectedBundleObj.capacity,
-        
-        // 🚨 CRITICAL PROVIDER KEYS
-        network_key: netConfig.networkKey, // e.g. YELLO, AT_PREMIUM
-        datahub_network_key: netConfig.networkKey,
-        datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || '',
-        
-        // Audit Metadata
-        display_network: netConfig.label, 
-        provider_network_key: netConfig.networkKey,
-        internal_network_id: netConfig.id,
-        
-        paystack_reference: clientRef
+        paystack_reference: clientRef,
+        created_at: new Date().toISOString()
       };
 
-      console.log("=== PAYSTACK INITIALIZATION ===");
-      console.log("Payload:", payload);
-      
+      // Best-effort telecom metadata enrichment
+      if (netConfig) {
+        payload.display_network = netConfig.label;
+        payload.internal_network_id = netConfig.id;
+        payload.network = netConfig.id;
+      }
+
+      if (selectedBundleObj) {
+        payload.display_bundle = selectedBundleObj.volume;
+        payload.internal_bundle_id = selectedBundleObj.id;
+        payload.provider_network_key = selectedBundleObj.provider_network_key;
+        payload.provider_capacity = selectedBundleObj.provider_capacity;
+        payload.profit = Math.max(0, amount - (parseFloat(selectedBundleObj.original?.cost_price || '0') || 0));
+
+        // Registry Fallbacks
+        payload.network_key = selectedBundleObj.provider_network_key || netConfig?.networkKey;
+        payload.datahub_network_key = payload.network_key;
+        payload.datahub_capacity = selectedBundleObj.provider_capacity;
+        payload.capacity = selectedBundleObj.provider_capacity;
+      }
+
+      console.log("=== FINALIZED SERVER PAYLOAD ===");
+      console.log(payload);
+
+      // 🚀 STEP 3: INITIATE TRANSACTION STORAGE
       const response = await fetch("/api/initiate-transaction", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
       const initResult = await response.json();
-
       if (!response.ok || !initResult.success) {
-        throw new Error(initResult.error || "Failed to initiate transaction");
+        console.error("=== SERVER STORAGE FAILURE ===");
+        console.error(initResult);
+        throw new Error(initResult.error || "Failed to record transaction intent.");
       }
 
       const tx = initResult.transaction;
-      console.log("✅ Transaction created by Secure Backend:", tx.id);
+      console.log("✅ Intent recorded. Transaction ID:", tx.id);
 
-      // 2. Now trigger Paystack via state update that fires useEffect
-      // NO PRE-FLIGHT CHECK HERE: We'll check in the component
+      // 🚀 STEP 4: TRIGGER PAYMENT POPUP
+      console.log("=== PAYSTACK POPUP REQUESTED ===");
       setCurrentTxId(tx.id);
+      
     } catch (err: any) {
-      console.error("Initialization error:", err);
-      setError(err.message || 'Failed to initiate transaction. Please try again.');
+      console.error("=== PAYMENT FLOW FAILURE ===");
+      console.error(err);
+      setError(err.message || 'Transaction initialization failed.');
       setIsLoading(false);
     }
   };
@@ -709,6 +720,7 @@ function PaystackTrigger({
   const initializePayment = usePaystackPayment(config);
 
   useEffect(() => {
+    console.log("=== PAYSTACK INITIALIZATION START ===");
     console.log("🏗️ PaystackTrigger mounted. Initializing...", { 
       amount, 
       ref: reference,
@@ -718,6 +730,7 @@ function PaystackTrigger({
     if (amount > 0) {
       // @ts-ignore
       initializePayment(onSuccess, onClose);
+      console.log("=== PAYSTACK POPUP REQUESTED ===");
     } else {
       console.error("❌ Cannot initialize Paystack with ZERO amount");
       onClose();
