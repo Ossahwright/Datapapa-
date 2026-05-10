@@ -1449,11 +1449,23 @@ export default function AdminDashboard() {
       }
 
       if (filterStatus) {
-        query = query.eq("status", filterStatus);
+        if (filterStatus === "success") {
+          query = query.in("status", ["success", "paid", "completed", "payment_verified"]);
+        } else {
+          query = query.eq("status", filterStatus);
+        }
       }
 
       if (filterDelivery) {
-        query = query.eq("vtu_status", filterDelivery);
+        if (filterDelivery === "delivered") {
+          query = query.in("vtu_status", ["delivered", "completed"]);
+        } else if (filterDelivery === "failed") {
+          query = query.in("vtu_status", ["failed", "provider_rejected"]);
+        } else if (filterDelivery === "processing") {
+          query = query.in("vtu_status", ["processing", "provider_execution_started", "provider_accepted", "awaiting_provider_confirmation"]);
+        } else {
+          query = query.eq("vtu_status", filterDelivery);
+        }
       }
 
       if (filterDate) {
@@ -2308,6 +2320,20 @@ export default function AdminDashboard() {
                 </select>
 
                 <select
+                  value={filterStatus}
+                  onChange={(e) => {
+                    setFilterStatus(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">All Payment Status</option>
+                  <option value="success">Success / Paid</option>
+                  <option value="pending">Pending</option>
+                  <option value="failed">Failed</option>
+                </select>
+
+                <select
                   value={filterDelivery}
                   onChange={(e) => {
                     setFilterDelivery(e.target.value);
@@ -2328,12 +2354,14 @@ export default function AdminDashboard() {
                     setFilterStatus("");
                     setFilterDelivery("");
                     setSearchQuery("");
+                    setFilterDate("");
                     setCurrentPage(1);
                   }}
-                  className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                  className="p-2 text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1 group"
                   title="Clear Filters"
                 >
                   <FilterX size={18} />
+                  <span className="text-xs font-bold hidden group-hover:inline transition-all">Clear</span>
                 </button>
               </div>
             </header>
