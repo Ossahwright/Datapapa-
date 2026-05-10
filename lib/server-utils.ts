@@ -13,6 +13,8 @@ import https from 'https';
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
+import { findNetworkConfig } from './networkConfig.js';
+
 export const apiClient = axios.create({
   httpAgent,
   httpsAgent,
@@ -630,19 +632,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   }
 
   // 📦 Network Mapping
-  const networkMapping: Record<string, string> = {
-    'mtn': 'YELLO', 
-    'airteltigo-ishare': 'AT_PREMIUM',
-    'telecel': 'TELECEL',
-    'vodafone': 'TELECEL',
-    'airteltigo-bigtime': 'AT_BIGTIME',
-    'at': 'AT_PREMIUM',
-    'airteltigo': 'AT_PREMIUM',
-    'at-ishare': 'AT_PREMIUM',
-    'at-bigtime': 'AT_BIGTIME',
-    'airteltigo ishare': 'AT_PREMIUM',
-    'airteltigo bigtime': 'AT_BIGTIME'
-  };
+  const netConfig = findNetworkConfig(transaction.network);
   
   const networkNumericMapping: Record<string, string> = {
     'MTN': '1',
@@ -655,11 +645,11 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     'AT': '3'
   };
 
-  const networkKey = networkMapping[String(transaction.network || "").toLowerCase()] || transaction.network?.toUpperCase();
-  const networkId = networkNumericMapping[networkKey] || "1";
+  const networkKey = netConfig?.networkKey;
+  const networkId = networkNumericMapping[networkKey || ""] || "1";
 
   if (!networkKey) {
-    const error = `Safety Block: Could not determine networkKey for network: ${transaction.network}. Check network mapping.`;
+    const error = `Safety Block: Could not determine networkKey for network: ${transaction.network}. Check network registry.`;
     console.error(`❌ [${executionId}] ${error}`);
     await supabase.from("transactions").update({ 
       vtu_status: 'provider_rejected', 

@@ -6,12 +6,7 @@ import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw
 import axios from 'axios';
 import { openWhatsApp } from '../lib/whatsapp';
 
-const NETWORKS = [
-  { id: 'mtn', name: 'MTN', color: 'bg-yellow-500', text: 'text-yellow-950', logo: 'https://i.postimg.cc/BvS8nyGS/download.jpg' },
-  { id: 'telecel', name: 'Telecel', color: 'bg-red-600', text: 'text-white', logo: 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg' },
-  { id: 'airteltigo-ishare', name: 'AT iShare', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
-  { id: 'airteltigo-bigtime', name: 'AT Bigtime', color: 'bg-red-500', text: 'text-white', logo: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
-];
+import { NETWORK_CONFIG, NETWORKS, findNetworkConfig } from '../lib/networkConfig';
 
 interface BuyDataFormProps {
   settings: {
@@ -110,21 +105,23 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   }, [supabaseReady]);
 
   const allBundles = dbBundles
-    .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined) // More explicit active check
+    .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined)
     .reduce((acc: any, b: any) => {
-      let net = (b.network || b.network_key || '').toLowerCase();
-      // Expanded normalization for DataHubGH keys
-      if (net === 'at' || net === 'airteltigo' || net === 'at_premium') net = 'airteltigo-ishare';
-      if (net === 'at_bigtime' || net === 'airteltigo-bigtime') net = 'airteltigo-bigtime';
-      if (net === 'vodafone' || net === 'telecel') net = 'telecel';
-      if (net === 'mtn' || net === 'yello') net = 'mtn';
+      const netKey = b.network || b.network_key || '';
+      const config = findNetworkConfig(netKey);
+      
+      if (!config) {
+        console.warn(`⚠️ [Bundle Sync] Unknown network for bundle: ${netKey}`, b);
+        return acc;
+      }
 
-      if (!acc[net]) acc[net] = [];
+      const netId = config.id;
+      if (!acc[netId]) acc[netId] = [];
       
       const sellingPrice = parseFloat(b.selling_price);
       const fallbackPrice = parseFloat(b.price || 0);
       
-      acc[net].push({ 
+      acc[netId].push({ 
         id: b.id, 
         name: b.description || '', 
         price: isNaN(sellingPrice) ? fallbackPrice : sellingPrice, 
@@ -261,14 +258,39 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setIsLoading(true);
 
     try {
-      // 1. Generate the reference FIRST so it stays stable
-      const clientRef = `tx_${new Date().getTime()}`;
-      setPaystackRef(clientRef); // Stabilize for the coming payment
-
-      // 2. Save transaction FIRST via Backend API (Server-Owned persistence)
-      const { data: userData } = await supabase.auth.getUser();
+      // 🚀 STEP 1: RESOLVE NETWORK CONFIG
+      const netConfig = findNetworkConfig(network);
       
+      console.log("=== NETWORK NORMALIZATION ===");
+      console.log("Input Network ID:", network);
+
+      if (!netConfig) {
+        console.error("=== NETWORK CONFIGURATION FAILURE ===");
+        console.error("Could not resolve config for:", network);
+        setError("Network configuration error. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+
+      console.log("=== RESOLVED NETWORK CONFIG ===");
+      console.log(netConfig);
+
+      // 🚀 STEP 2: RESOLVE BUNDLE
       const sellingPrice = selectedBundleObj?.price || 0;
+      if (!selectedBundleObj || sellingPrice <= 0) {
+        console.error("=== BUNDLE RESOLUTION FAILURE ===");
+        setError("Please select a valid data bundle.");
+        setIsLoading(false);
+        return;
+      }
+
+      console.log("=== BUNDLE RESOLVED ===");
+      console.log(selectedBundleObj);
+
+      const clientRef = `tx_${new Date().getTime()}`;
+      setPaystackRef(clientRef);
+
+      const { data: userData } = await supabase.auth.getUser();
       const costPrice = parseFloat(selectedBundleObj?.original?.cost_price || '0') || 0;
       const profit = Math.max(0, sellingPrice - costPrice);
 
@@ -276,17 +298,26 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         user_id: userData?.user?.id || null,
         amount: sellingPrice,
         profit: profit,
-        network: network,
+        network: netConfig.id, // Store Normalized ID (MTN, AIRTELTIGO_PREMIUM, etc.)
         recipient_phone: phone,
         payer_phone_number: payerPhone || phone,
-        capacity: selectedBundleObj ? (selectedBundleObj.volume || selectedBundleObj.capacity) : undefined,
-        network_key: selectedBundleObj?.original?.network_key || network,
-        datahub_network_key: selectedBundleObj?.original?.datahub_network_key || selectedBundleObj?.original?.network_key,
+        capacity: selectedBundleObj.volume || selectedBundleObj.capacity,
+        
+        // 🚨 CRITICAL PROVIDER KEYS
+        network_key: netConfig.networkKey, // e.g. YELLO, AT_PREMIUM
+        datahub_network_key: netConfig.networkKey,
         datahub_capacity: selectedBundleObj?.original?.datahub_capacity || selectedBundleObj?.original?.volume || selectedBundleObj?.volume || selectedBundleObj?.capacity || '',
+        
+        // Audit Metadata
+        display_network: netConfig.label, 
+        provider_network_key: netConfig.networkKey,
+        internal_network_id: netConfig.id,
+        
         paystack_reference: clientRef
       };
 
-      console.log("🚀 [Client] INITIATING SECURE TRANSACTION VIA BACKEND...");
+      console.log("=== PAYSTACK INITIALIZATION ===");
+      console.log("Payload:", payload);
       
       const response = await fetch("/api/initiate-transaction", {
         method: "POST",
@@ -315,7 +346,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   };
 
   if (success) {
-    const selectedNetwork = NETWORKS.find(n => n.id === network);
+    const netConfig = findNetworkConfig(network);
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto">
         <motion.div
@@ -377,7 +408,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                   className="flex justify-between"
                 >
                   <span>Network</span>
-                  <span className="text-slate-900 font-bold">{selectedNetwork?.name}</span>
+                  <span className="text-slate-900 font-bold">{netConfig?.label}</span>
                 </motion.div>
                 <motion.div 
                   initial={{ opacity: 0, x: -10 }}
@@ -480,7 +511,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
               <h3 className="text-xl font-bold text-slate-900">Select Network</h3>
             </div>
             
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-0 sm:pl-12">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pl-0 sm:pl-12">
               {NETWORKS.map((net) => (
                 <button
                   key={net.id}
@@ -502,14 +533,22 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                     }`} />
                   </div>
 
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 overflow-hidden ${net.color} ${net.text}`}>
-                    {net.logo ? (
-                      <img src={net.logo} alt={net.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-xl">{net.name[0]}</span>
-                    )}
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 overflow-hidden ${
+                    net.id === 'MTN' ? 'bg-yellow-500 text-yellow-950' : 
+                    net.id === 'TELECEL' ? 'bg-red-600 text-white' : 
+                    'bg-red-500 text-white'
+                  }`}>
+                     <img 
+                       src={
+                        net.id === 'MTN' ? 'https://i.postimg.cc/BvS8nyGS/download.jpg' :
+                        net.id === 'TELECEL' ? 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg' :
+                        'https://i.postimg.cc/sfqT8kkW/images.jpg'
+                       } 
+                       alt={net.label} 
+                       className="w-full h-full object-cover" 
+                     />
                   </div>
-                  <span className="font-semibold text-slate-800 text-base">{net.name}</span>
+                  <span className="font-semibold text-slate-800 text-sm text-center">{net.label}</span>
                 </button>
               ))}
             </div>

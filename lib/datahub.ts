@@ -7,15 +7,17 @@
 import axios from "axios";
 import { supabase } from "./supabase.js";
 
+import { NETWORKS } from "./networkConfig.js";
+
 /**
  * Validates the payload before sending to DataHub
  */
 function validateDataHubPayload(payload: any) {
   const { networkKey, recipient, capacity } = payload;
 
-  const validNetworks = ["YELLO", "TELECEL", "AT_PREMIUM", "AT_BIGTIME"];
-  if (!validNetworks.includes(networkKey)) {
-    throw new Error(`Invalid networkKey: ${networkKey}. Must be one of: ${validNetworks.join(", ")}`);
+  const validNetworkKeys = NETWORKS.map(n => n.networkKey);
+  if (!validNetworkKeys.includes(networkKey)) {
+    throw new Error(`Invalid networkKey: ${networkKey}. Must be one of: ${validNetworkKeys.join(", ")}`);
   }
 
   if (!recipient || !recipient.match(/^0\d{9}$/)) {

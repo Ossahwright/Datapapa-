@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, FormEvent, Fragment } from "react";
 import { supabase } from "../lib/supabase";
+import { findNetworkConfig, NETWORKS } from "../lib/networkConfig";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
@@ -4253,24 +4254,20 @@ export default function AdminDashboard() {
                         value={newBundle.network || "MTN"}
                         onChange={(e) => {
                           const net = e.target.value;
-                          let key = "YELLO";
-                          if (net === "Telecel") key = "TELECEL";
-                          if (net === "AirtelTigo iShare") key = "AT_PREMIUM";
-                          if (net === "AirtelTigo Bigtime") key = "AT_BIGTIME";
+                          const config = findNetworkConfig(net);
                           setNewBundle({
                             ...newBundle,
                             network: net,
-                            network_key: key,
-                            datahub_network_key: key,
+                            network_key: config?.networkKey || "YELLO",
+                            datahub_network_key: config?.networkKey || "YELLO",
                           });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       >
-                        <option value="MTN">MTN</option>
-                        <option value="Telecel">Telecel</option>
-                        <option value="AirtelTigo iShare">AirtelTigo iShare</option>
-                        <option value="AirtelTigo Bigtime">AirtelTigo Bigtime</option>
+                        {NETWORKS.map(n => (
+                          <option key={n.id} value={n.label}>{n.label}</option>
+                        ))}
                       </select>
                     </div>
                     <div>
@@ -4480,19 +4477,20 @@ export default function AdminDashboard() {
                         value={form.network || "MTN"}
                         onChange={(e) => {
                           const net = e.target.value;
-                          let key = "YELLO" as any;
-                          if (net === "Telecel") key = "TELECEL";
-                          if (net === "AirtelTigo iShare") key = "AT_PREMIUM";
-                          if (net === "AirtelTigo Bigtime") key = "AT_BIGTIME";
-                          setForm({ ...form, network: net, network_key: key });
+                          const config = findNetworkConfig(net);
+                          setForm({ 
+                            ...form, 
+                            network: net, 
+                            network_key: config?.networkKey || "YELLO" as any,
+                            datahub_network_key: config?.networkKey || "YELLO" as any
+                          });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       >
-                        <option value="MTN">MTN</option>
-                        <option value="Telecel">Telecel</option>
-                        <option value="AirtelTigo iShare">AirtelTigo iShare</option>
-                        <option value="AirtelTigo Bigtime">AirtelTigo Bigtime</option>
+                        {NETWORKS.map(n => (
+                          <option key={n.id} value={n.label}>{n.label}</option>
+                        ))}
                       </select>
                     </div>
                     <div>
