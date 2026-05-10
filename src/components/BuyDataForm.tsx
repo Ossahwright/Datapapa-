@@ -199,25 +199,12 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     };
   }, [currentTxId]);
 
-  const [paystackRef, setPaystackRef] = useState<string>(`tx_${new Date().getTime()}`);
+  const [paystackConfig, setPaystackConfig] = useState<any>(null);
 
-  const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("💰 PAYMENT SUCCESS CALLBACK", paystackResponse);
-    setPaymentStatus("success");
-    setSuccess(true); 
-    setIsLoading(false);
-    setCountdown(10);
-    
-    try {
-      const currentPaystackRef = paystackResponse.reference;
-      setTransactionId(currentPaystackRef);
-      console.log("✅ Payment successful. Awaiting webhook fulfillment...");
-    } catch (err: any) {
-      console.error("Payment post-processing error:", err);
-    }
-  };
+  // 🛡️ DEFENSIVE PAYSTACK VALIDATION
+  const PAYSTACK_PUB_KEY = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
 
-  // Countdown timer effect
+  // Countdown timer effect for post-purchase UX
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (countdown > 0) {
@@ -230,33 +217,34 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     return () => clearTimeout(timer);
   }, [countdown, success]);
 
+  const handlePaymentSuccess = async (paystackResponse: any) => {
+    console.log("=== PAYSTACK CALLBACK RECEIVED ===");
+    console.log("💰 [Success] Reference:", paystackResponse.reference);
+    
+    setPaymentStatus("success");
+    setSuccess(true); 
+    setIsLoading(false);
+    setCountdown(10);
+    
+    setTransactionId(paystackResponse.reference);
+    console.log("✅ Payment successful. Awaiting webhook fulfillment...");
+    setPaystackConfig(null); // Clear config after success
+  };
+
   const handlePaymentClose = () => {
     console.log("🔒 PAYSTACK WINDOW CLOSED");
     setIsLoading(false);
-    setCurrentTxId(null);
+    setPaystackConfig(null); // Clear config on close
   };
 
   const handlePayment = async () => {
-    // 🚀 STEP 1: PAYMENT-LAYER PRE-FLIGHT VALIDATION (MINIMAL)
     if (!phone || phone.length < 10) {
-      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
-      console.error("Reason: Invalid Recipient Phone", { phone });
       setError('Please enter a valid recipient phone number');
       return;
     }
 
     if (!selectedBundleObj) {
-      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
-      console.error("Reason: No bundle selected");
       setError('Please select a data bundle package');
-      return;
-    }
-
-    const amount = selectedBundleObj.price;
-    if (!amount || amount <= 0) {
-      console.error("=== PAYMENT INITIALIZATION BLOCKED ===");
-      console.error("Reason: Invalid Amount", { amount });
-      setError('Invalid bundle price. Please try another bundle.');
       return;
     }
 
@@ -264,99 +252,37 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setError('');
 
     try {
-      console.log("=== PAYMENT-LAYER DECOUPLING ACTIVATED ===");
       console.log("=== PAYSTACK INITIALIZATION START ===");
-
-      // Create a stable reference for the entire session
-      const clientRef = `tx_${new Date().getTime()}_${Math.random().toString(36).substring(7)}`;
-      setPaystackRef(clientRef);
-
       const { data: { user } } = await supabase.auth.getUser();
 
-      // 🚀 STEP 2: ASSEMBLE TELECOM PAYLOAD (STRICTLY NON-BLOCKING FOR PAYMENT)
-      console.log("=== TELECOM ROUTING ISOLATION FLOW ===");
-      
-      const netConfig = findNetworkConfig(network);
-      
-      const payload: any = {
-        user_id: user?.id || null,
-        amount: amount,
-        recipient_phone: phone,
-        payer_phone_number: payerPhone || phone,
-        paystack_reference: clientRef,
-        created_at: new Date().toISOString(),
-        metadata: {
-          browser: navigator.userAgent,
-          platform: 'web_v2_resilient'
-        }
-      };
+      // 🚀 STEP 1: INITIALIZE AUTHORITATIVE INTENT
+      const response = await fetch("/api/paystack/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bundleId: selectedBundleObj.db_id || selectedBundleObj.id,
+          phone,
+          payerPhone: payerPhone || phone,
+          networkId: network,
+          userId: user?.id
+        }),
+      });
 
-      // Best-effort telecom metadata enrichment
-      if (netConfig) {
-        payload.display_network = netConfig.label;
-        payload.internal_network_id = netConfig.id;
-        payload.network = netConfig.id;
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Initialization failed");
       }
 
-      if (selectedBundleObj) {
-        payload.display_bundle = selectedBundleObj.volume;
-        payload.internal_bundle_id = selectedBundleObj.id;
-        payload.provider_network_key = selectedBundleObj.provider_network_key;
-        payload.provider_capacity = selectedBundleObj.provider_capacity;
-        
-        const costPrice = parseFloat(selectedBundleObj.original?.cost_price || '0') || 0;
-        payload.profit = Math.max(0, amount - costPrice);
-
-        // Registry Fallbacks
-        payload.network_key = selectedBundleObj.provider_network_key || netConfig?.networkKey;
-        payload.datahub_network_key = payload.network_key;
-        payload.datahub_capacity = selectedBundleObj.provider_capacity;
-        payload.capacity = selectedBundleObj.provider_capacity;
-      }
-
-      console.log("=== FINALIZED SERVER PAYLOAD ===");
-      console.log(payload);
-
-      // 🚀 STEP 3: INITIATE TRANSACTION STORAGE (RESILIENT RETRY)
-      let storageSuccess = false;
-      let tx = null;
-      let attempts = 0;
+      console.log("=== PAYMENT INTENT STORED ===");
+      console.log("✅ Reference:", result.config.reference);
       
-      while (!storageSuccess && attempts < 2) {
-        try {
-          const response = await fetch("/api/initiate-transaction", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-
-          const initResult = await response.json();
-          if (response.ok && initResult.success) {
-            tx = initResult.transaction;
-            storageSuccess = true;
-          } else {
-            attempts++;
-            if (attempts >= 2) throw new Error(initResult.error || "Failed to record transaction intent.");
-            console.warn("Retrying transaction storage...");
-          }
-        } catch (e) {
-          attempts++;
-          if (attempts >= 2) throw e;
-        }
-      }
-
-      if (!tx) throw new Error("Could not initialize transaction reference.");
-      
-      console.log("✅ Intent recorded. Transaction ID:", tx.id);
-
-      // 🚀 STEP 4: TRIGGER PAYMENT POPUP
-      console.log("=== PAYSTACK POPUP REQUESTED ===");
-      setCurrentTxId(tx.id);
+      // 🚀 STEP 2: SET CONFIG TO TRIGGER POPUP
+      setPaystackConfig(result.config);
       
     } catch (err: any) {
       console.error("=== PAYMENT FLOW FAILURE ===");
       console.error(err);
-      setError(err.message || 'Transaction initialization failed. Please try again.');
+      setError(err.message || 'Payment initialization failed. Please try again.');
       setIsLoading(false);
     }
   };
@@ -730,15 +656,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         </div>
       </div>
 
-      {/* 🚀 ROBUST PAYSTACK TRIGGER */}
-      {currentTxId && selectedBundleObj && (
+      {/* 🚀 HARDENED V2 PAYSTACK TRIGGER */}
+      {paystackConfig && (
         <PaystackTrigger
-          transactionId={currentTxId}
-          amount={Math.round(selectedBundleObj.price * 100)}
-          reference={paystackRef}
-          phone={phone}
-          network={network}
-          bundleVolume={selectedBundleObj.volume}
+          config={paystackConfig}
           onSuccess={handlePaymentSuccess}
           onClose={handlePaymentClose}
         />
@@ -748,69 +669,38 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 }
 
 /**
- * 🎯 ROBUST PAYSTACK INITIALIZER COMPONENT
- * Ensures hook is called with absolutely fresh props and clean lifecycle.
+ * 🎯 PRODUCTION-GRADE PAYSTACK INITIALIZER
+ * Responsibility: Execute popup immediately upon receiving valid authoritative config
  */
-function PaystackTrigger({ 
-  transactionId, 
-  amount, 
-  reference, 
-  phone, 
-  network, 
-  bundleVolume, 
-  onSuccess, 
-  onClose 
-}: any) {
-  // 🚀 HARDENED PAYSTACK CONFIGURATION
-  const publicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
+function PaystackTrigger({ config, onSuccess, onClose }: any) {
+  const PAYSTACK_PUB_KEY = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
   
-  const config = {
-    reference,
-    email: 'customer@datapapa.com',
-    amount, // In pesewas
-    publicKey,
-    currency: 'GHS' as const,
-    channels: ['card', 'mobile_money'],
-    metadata: {
-      transaction_id: transactionId,
-      phone: phone,
-      network: network,
-      bundle: bundleVolume,
-      platform: 'datapapa_v2',
-      custom_fields: [
-        { display_name: "Phone Number", variable_name: "phone", value: phone },
-        { display_name: "Network", variable_name: "network", value: network },
-        { display_name: "Bundle", variable_name: "bundle", value: bundleVolume }
-      ]
-    }
+  const paystackConfig = {
+    reference: config.reference,
+    email: config.email,
+    amount: config.amount,
+    publicKey: PAYSTACK_PUB_KEY,
+    currency: "GHS",
+    channels: ["mobile_money", "card"],
+    metadata: config.metadata
   };
 
-  const initializePayment = usePaystackPayment(config);
+  const initializePayment = usePaystackPayment(paystackConfig);
 
   useEffect(() => {
-    console.log("=== PAYSTACK INITIALIZATION START ===");
-    console.log("🏗️ Resilient PaystackTrigger mounted.", { 
-      amount, 
-      ref: reference,
-      tx: transactionId,
-      keyUsed: publicKey.substring(0, 7) + "..."
-    });
-    
-    // Safety check for amount
-    if (amount > 0) {
-      try {
-        // @ts-ignore
-        initializePayment(onSuccess, onClose);
-        console.log("=== PAYSTACK POPUP TRIGGERED SUCCESSFULLY ===");
-      } catch (err) {
-        console.error("❌ Critical Paystack Hook Failure:", err);
-        onClose();
-      }
-    } else {
-      console.error("❌ Aborting Payment: ZERO amount detected");
+    if (!PAYSTACK_PUB_KEY) {
+      console.error("❌ CRITICAL: Missing Paystack Public Key");
       onClose();
+      return;
     }
-  }, [transactionId]); // Only trigger when transactionId changes
+
+    console.log("=== PAYSTACK CONFIG VALIDATED ===");
+    console.log("=== PAYSTACK POPUP OPENED ===");
+    console.log("REF:", config.reference);
+    
+    // @ts-ignore
+    initializePayment(onSuccess, onClose);
+  }, []);
 
   return null;
 }
