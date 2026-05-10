@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, FormEvent, Fragment } from "r
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import toast, { Toaster } from "react-hot-toast";
 import { ReportsView } from "../components/reports/ReportsView";
 import { SystemHealthView } from "../components/admin/SystemHealthView";
 import {
@@ -70,6 +71,10 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalTransactions, setTotalTransactions] = useState(0);
+  const [dashboardPage, setDashboardPage] = useState(1);
+  const [totalDashboardTransactions, setTotalDashboardTransactions] = useState(0);
+  const [customerPage, setCustomerPage] = useState(1);
+  const [totalCustomerTransactions, setTotalCustomerTransactions] = useState(0);
 
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
@@ -239,12 +244,16 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchProviderSettings();
+    // Start with a sync
+    syncWalletSilently();
+
     // SAFE POLLING ARCHITECTURE
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchProviderSettings();
+        syncWalletSilently(); // Proactively sync from API
       }
-    }, 300000); // every 5m
+    }, 30000); // every 30s for real-time feel
 
     return () => clearInterval(interval);
   }, []);
@@ -302,6 +311,12 @@ export default function AdminDashboard() {
   // Today metrics effect
   useEffect(() => {
     const fetchKPI = async () => {
+      // Fetch total transactions for dashboard pagination
+      const { count: dashboardCount } = await supabase
+        .from("transactions")
+        .select("*", { count: "exact", head: true });
+      if (dashboardCount !== null) setTotalDashboardTransactions(dashboardCount);
+
       const { data, error } = await supabase.rpc("get_today_kpi");
       if (!error && data) {
         // RPC returns an array in some Supabase versions, or a single object if configured
@@ -361,13 +376,22 @@ export default function AdminDashboard() {
 
   // Real-time transactions effect
   useEffect(() => {
-    // initial load
-    supabase
-      .from("transactions")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50)
-      .then(({ data }) => setRows(data ?? []));
+    // initial load with pagination for dashboard
+    const fetchDashboardRows = async () => {
+      const from = (dashboardPage - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+      
+      const { data, count } = await supabase
+        .from("transactions")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
+      
+      setRows(data ?? []);
+      if (count !== null) setTotalDashboardTransactions(count);
+    };
+
+    fetchDashboardRows();
 
     // realtime
     const ch = supabase
@@ -375,17 +399,61 @@ export default function AdminDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
-        (p) => {
-          setRows((prev) => {
-            const newDoc = p.new as any;
-            if (!newDoc?.id) return prev;
+        (payload) => {
+          // Check if it's a failure event
+          const newTx = payload.new as any;
+          const oldTx = payload.old as any;
 
-            const idx = prev.findIndex((x) => x.id === newDoc.id);
-            if (idx === -1) return [newDoc, ...prev].slice(0, 50);
-            const copy = [...prev];
-            copy[idx] = newDoc;
-            return copy;
-          });
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const isFailedNow = (newTx.delivery_status === "failed" || newTx.vtu_status === "failed");
+            const wasFailedBefore = oldTx && (oldTx.delivery_status === "failed" || oldTx.vtu_status === "failed");
+
+            if (isFailedNow && !wasFailedBefore) {
+              // 🚨 Subtle notification
+              toast.error(
+                (t) => (
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                      <ShieldAlert size={20} />
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-slate-900">Transaction Failed</p>
+                      <p className="text-xs text-slate-500">
+                        {newTx.recipient_phone || "Unknown"} • {newTx.capacity} {newTx.network}
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        toast.dismiss(t.id);
+                        // Maybe scroll to row or open details?
+                      }}
+                      className="ml-4 p-1 hover:bg-slate-100 rounded-md transition-colors"
+                    >
+                      <X size={14} className="text-slate-400" />
+                    </button>
+                  </div>
+                ),
+                { 
+                  duration: 6000,
+                  position: "top-right",
+                  style: {
+                    padding: '8px 12px',
+                    borderRadius: '16px',
+                    background: '#fff',
+                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+                    border: '1px solid #f1f5f9'
+                  }
+                }
+              );
+
+              // 🎵 Subtle alert sound
+              const audio = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3");
+              audio.play().catch(() => {}); // Ignore errors if browser blocks autoplay
+            }
+          }
+
+          // For simplicity and since we have pagination now, just refresh the current page
+          fetchDashboardRows();
         },
       )
       .subscribe();
@@ -393,7 +461,7 @@ export default function AdminDashboard() {
     return () => {
       supabase.removeChannel(ch);
     };
-  }, []);
+  }, [dashboardPage]);
 
   const successRate = kpi.total
     ? ((kpi.success / kpi.total) * 100).toFixed(1)
@@ -676,19 +744,26 @@ export default function AdminDashboard() {
     }
   };
 
-  const viewCustomer = async (phone: string) => {
+  const viewCustomer = async (phone: string, page = 1) => {
     if (!phone || phone === "No phone recorded" || phone === "NONE") {
       setCustomerTransactions([]);
       setSelectedCustomerPhone("NONE");
+      setTotalCustomerTransactions(0);
       return;
     }
 
     setSelectedCustomerPhone(phone);
-    const { data, error } = await supabase
+    setCustomerPage(page);
+    
+    const from = (page - 1) * ITEMS_PER_PAGE;
+    const to = from + ITEMS_PER_PAGE - 1;
+
+    const { data, count, error } = await supabase
       .from("transactions")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("recipient_phone", phone)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(from, to);
 
     if (error) {
       console.error("View customer error:", error);
@@ -696,13 +771,14 @@ export default function AdminDashboard() {
     }
 
     setCustomerTransactions(data || []);
+    if (count !== null) setTotalCustomerTransactions(count);
   };
 
   useEffect(() => {
-    if (selectedCustomerPhone) {
-      viewCustomer(selectedCustomerPhone);
+    if (selectedCustomerPhone && selectedCustomerPhone !== "NONE") {
+      viewCustomer(selectedCustomerPhone, customerPage);
     }
-  }, [selectedCustomerPhone]);
+  }, [selectedCustomerPhone, customerPage]);
 
   const fetchBundles = useCallback(async () => {
     setIsLoadingBundles(true);
@@ -1502,6 +1578,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+      <Toaster />
       {/* Mobile Header */}
       <div className="md:hidden bg-slate-900 text-white h-16 px-4 flex items-center justify-between sticky top-0 z-30 shadow-md">
         <div className="flex items-center">
@@ -1682,7 +1759,7 @@ export default function AdminDashboard() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
           >
-            <header className="mb-8 flex justify-between items-end">
+            <header className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">
                   System Overview
@@ -1696,17 +1773,31 @@ export default function AdminDashboard() {
                   )}
                 </p>
               </div>
-              <button
-                onClick={refreshAll}
-                disabled={isLoadingTransactions}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-all shadow-sm font-bold text-xs uppercase tracking-wider"
-              >
-                <RefreshCw
-                  size={14}
-                  className={isLoadingTransactions ? "animate-spin" : ""}
-                />
-                <span>Refresh Data</span>
-              </button>
+
+              <div className="flex items-center gap-4">
+                {/* Prominent Wallet Balance */}
+                <div className="bg-indigo-600 px-4 py-2 rounded-xl shadow-lg shadow-indigo-200 border border-indigo-500 flex flex-col justify-center min-w-[160px]">
+                  <div className="flex items-center gap-2 text-indigo-100 font-bold text-[10px] uppercase tracking-widest mb-0.5">
+                    <Wallet size={12} />
+                    DataHub Balance
+                  </div>
+                  <div className="text-white text-xl font-black">
+                    ₵{dataHubBalance !== null ? Number(dataHubBalance).toFixed(2) : "---"}
+                  </div>
+                </div>
+
+                <button
+                  onClick={refreshAll}
+                  disabled={isLoadingTransactions}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-all shadow-sm font-bold text-xs uppercase tracking-wider h-full self-stretch"
+                >
+                  <RefreshCw
+                    size={14}
+                    className={isLoadingTransactions ? "animate-spin" : ""}
+                  />
+                  <span>Refresh Data</span>
+                </button>
+              </div>
             </header>
 
             {/* Health Grid */}
@@ -1857,7 +1948,7 @@ export default function AdminDashboard() {
                   </h3>
                 </div>
                 <div className="text-[10px] font-bold text-slate-400 uppercase">
-                  Limit: Last 50 Events
+                  Page {dashboardPage} of {Math.ceil(totalDashboardTransactions / ITEMS_PER_PAGE) || 1}
                 </div>
               </div>
               <div className="overflow-x-auto">
@@ -1880,7 +1971,7 @@ export default function AdminDashboard() {
                           colSpan={7}
                           className="px-6 py-20 text-center text-slate-400 italic"
                         >
-                          Waiting for live data...
+                          No transactions recorded yet.
                         </td>
                       </tr>
                     ) : (
@@ -2083,6 +2174,52 @@ export default function AdminDashboard() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Dashboard Pagination Controls */}
+              {totalDashboardTransactions > 0 && (
+                <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between text-xs bg-slate-50/30">
+                  <div className="text-slate-500 font-medium">
+                    Showing{" "}
+                    <span className="font-bold text-slate-900 border-b border-indigo-200">
+                      {(dashboardPage - 1) * ITEMS_PER_PAGE + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-bold text-slate-900 border-b border-indigo-200">
+                      {Math.min(
+                        dashboardPage * ITEMS_PER_PAGE,
+                        totalDashboardTransactions,
+                      )}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-bold text-slate-900">
+                      {totalDashboardTransactions}
+                    </span>{" "}
+                    events
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setDashboardPage((p) => Math.max(1, p - 1))}
+                      disabled={dashboardPage === 1 || isLoadingTransactions}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm uppercase tracking-tighter"
+                    >
+                      <ChevronLeft size={14} />
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setDashboardPage((p) => p + 1)}
+                      disabled={
+                        dashboardPage >=
+                          Math.ceil(totalDashboardTransactions / ITEMS_PER_PAGE) ||
+                        isLoadingTransactions
+                      }
+                      className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm uppercase tracking-tighter"
+                    >
+                      Next
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -4005,6 +4142,33 @@ export default function AdminDashboard() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+                
+                {/* Customer Modal Pagination */}
+                {totalCustomerTransactions > ITEMS_PER_PAGE && (
+                  <div className="mt-8 flex items-center justify-between px-2">
+                    <div className="text-xs text-slate-500 font-medium">
+                      Page {customerPage} of {Math.ceil(totalCustomerTransactions / ITEMS_PER_PAGE)}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCustomerPage(p => Math.max(1, p - 1))}
+                        disabled={customerPage === 1}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-600 hover:bg-slate-200 disabled:opacity-50 transition-all text-xs"
+                      >
+                        <ChevronLeft size={14} />
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setCustomerPage(p => p + 1)}
+                        disabled={customerPage >= Math.ceil(totalCustomerTransactions / ITEMS_PER_PAGE)}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-600 hover:bg-slate-200 disabled:opacity-50 transition-all text-xs"
+                      >
+                        Next
+                        <ChevronRight size={14} />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
