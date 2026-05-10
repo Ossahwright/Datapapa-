@@ -43,38 +43,31 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const supportEmail = settings?.support_email || "support@datapapa.com";
 
   const fetchBundles = async (retryCount = 0) => {
-
     if (supabaseReady) {
       if (retryCount === 0) setIsLoadingBundles(true);
       setLoadError('');
       try {
-        const { data, error } = await supabase.from('bundles').select('*').order('capacity', { ascending: true });
+        const { data, error } = await supabase
+          .from('bundles')
+          .select('*')
+          .eq('is_active', true) // Only fetch active ones originally
+          .order('selling_price', { ascending: true });
+          
         if (error) {
-          if ((error.message?.includes('Lock broken') || error.message?.includes('steal')) && retryCount < 3) {
-            console.log(`Supabase lock error, retrying (${retryCount + 1}/3)...`);
-            setTimeout(() => fetchBundles(retryCount + 1), 500);
-            return;
-          }
-          console.error("Supabase error fetching bundles:", error.message);
-          setLoadError(error.message);
+          throw error;
         } else if (data) {
+          console.log("🚀 [Bundle Sync] Fetched authoritative bundles:", data.length);
           setDbBundles(data);
         }
-      } catch (err: any) {
-        let msg = err.message || 'Unknown error occurred';
-        if ((msg.includes('Lock broken') || msg.includes('steal')) && retryCount < 3) {
-          console.log(`Supabase lock abort error, retrying (${retryCount + 1}/3)...`);
-          setTimeout(() => fetchBundles(retryCount + 1), 500);
+      } catch (error: any) {
+        if ((error.message?.includes('Lock broken') || error.message?.includes('steal')) && retryCount < 3) {
+          console.warn(`⚠️ Supabase lock error, retrying (${retryCount + 1}/3)...`);
+          setTimeout(() => fetchBundles(retryCount + 1), 700);
           return;
         }
-        console.error("Failed to fetch bundles:", err);
-        if (msg.includes('Failed to fetch')) {
-          msg = "Connectivity issue: Could not reach the data server. Please check your internet or try again later.";
-        }
-        setLoadError(msg);
+        console.error("❌ [Bundle Sync] Critical error:", error.message);
+        setLoadError(error.message || 'Failed to sync bundles with server');
       } finally {
-        // If we didn't return early to retry, then we are done loading
-        // For clarity, we'll just check if it's not retrying. But since we 'return' on retry, reaching here means we finished!
         setIsLoadingBundles(false);
       }
     } else {
@@ -85,19 +78,26 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   useEffect(() => {
     fetchBundles();
 
+    // 🚀 REAL-TIME BUNDLE ORCHESTRATION
+    // We subscribe to all bundle changes to keep the UI in perfect sync with the provider
     let channel: any;
     if (supabaseReady) {
       channel = supabase
-        .channel('public:bundles:live:buy')
+        .channel('bundles-realtime-sync')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'bundles' },
           (payload) => {
-            console.log("Bundles realtime update:", payload);
+            console.log("⚡ [Real-time] Bundle change detected:", payload.eventType);
+            
+            // OPTIMIZED: Instead of full refetch, we could update state, 
+            // but for data integrity as a telecom app, a clean refetch is safer
             fetchBundles();
           }
         )
-        .subscribe();
+        .subscribe((status) => {
+          console.log("📡 Bundle Realtime Status:", status);
+        });
     }
 
     return () => {
@@ -105,38 +105,56 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     };
   }, [supabaseReady]);
 
-  const allBundles = dbBundles
-    .filter(b => b.is_active === true || b.is_active === null || b.is_active === undefined)
-    .reduce((acc: any, b: any) => {
-      const dbNetKey = b.network || b.network_key || '';
-      const dbCapacity = b.capacity || b.volume || '';
-      
-      // 🚀 AUTHENTIC TELECOM NORMALIZATION
-      const normalized = findNormalizedBundle(dbNetKey, dbCapacity);
-      
-      if (!normalized) {
-        console.warn(`⚠️ [Bundle Normalization] FAILED for bundle: ${dbNetKey} ${dbCapacity}. Skipping.`, b);
-        return acc;
-      }
+  const allBundles = useMemo(() => {
+    return dbBundles
+      .filter(b => b.is_active === true)
+      .reduce((acc: any, b: any) => {
+        const dbNetKey = (b.network || b.network_key || '').toUpperCase();
+        const dbCapacity = (b.capacity || b.volume || '').toUpperCase();
+        
+        // 🚀 ATTEMPT AUTHORITATIVE NORMALIZATION
+        const normalized = findNormalizedBundle(dbNetKey, dbCapacity);
+        
+        let bundleItem: any;
+        let netId: string;
 
-      const netId = normalized.networkId;
-      if (!acc[netId]) acc[netId] = [];
-      
-      const sellingPrice = parseFloat(b.selling_price);
-      const fallbackPrice = normalized.price;
-      
-      acc[netId].push({ 
-        id: normalized.id, // Using authoritative ID
-        db_id: b.id,
-        name: normalized.displayLabel, 
-        price: isNaN(sellingPrice) ? fallbackPrice : sellingPrice, 
-        volume: normalized.displayLabel,
-        provider_capacity: normalized.providerCapacity,
-        provider_network_key: normalized.providerNetworkKey,
-        original: b 
-      });
-      return acc;
-    }, {});
+        if (normalized) {
+          netId = normalized.networkId;
+          bundleItem = {
+            id: normalized.id,
+            db_id: b.id,
+            name: normalized.displayLabel,
+            price: parseFloat(b.selling_price) || normalized.price,
+            volume: normalized.displayLabel,
+            provider_capacity: normalized.providerCapacity,
+            provider_network_key: normalized.providerNetworkKey,
+            is_normalized: true,
+            original: b
+          };
+        } else {
+          // 🚀 ALTERNATIVE APPROACH: DIRECT DB SYNC (ROCK SOLID FALLBACK)
+          // If not in local config, we trust the DB values 100%
+          const netConfig = findNetworkConfig(dbNetKey);
+          netId = netConfig?.id || dbNetKey;
+          
+          bundleItem = {
+            id: `db_${b.id}`,
+            db_id: b.id,
+            name: b.name || `${dbCapacity} Bundle`,
+            price: parseFloat(b.selling_price) || 0,
+            volume: b.volume || dbCapacity,
+            provider_capacity: b.datahub_capacity || b.provider_capacity || dbCapacity,
+            provider_network_key: b.datahub_network_key || b.provider_network_key || dbNetKey,
+            is_normalized: false,
+            original: b
+          };
+        }
+
+        if (!acc[netId]) acc[netId] = [];
+        acc[netId].push(bundleItem);
+        return acc;
+      }, {});
+  }, [dbBundles]);
 
   const currentBundles = network 
     ? [...(allBundles[network] || [])].sort((a: any, b: any) => a.price - b.price) 
@@ -249,25 +267,28 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       console.log("=== PAYMENT-LAYER DECOUPLING ACTIVATED ===");
       console.log("=== PAYSTACK INITIALIZATION START ===");
 
-      const clientRef = `tx_${new Date().getTime()}`;
+      // Create a stable reference for the entire session
+      const clientRef = `tx_${new Date().getTime()}_${Math.random().toString(36).substring(7)}`;
       setPaystackRef(clientRef);
 
-      const { data: userData } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
 
       // 🚀 STEP 2: ASSEMBLE TELECOM PAYLOAD (STRICTLY NON-BLOCKING FOR PAYMENT)
       console.log("=== TELECOM ROUTING ISOLATION FLOW ===");
       
-      // We attempt to gather all telecom metadata for storage, 
-      // but we do NOT let failure here block the payment initialization.
       const netConfig = findNetworkConfig(network);
       
       const payload: any = {
-        user_id: userData?.user?.id || null,
+        user_id: user?.id || null,
         amount: amount,
         recipient_phone: phone,
         payer_phone_number: payerPhone || phone,
         paystack_reference: clientRef,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        metadata: {
+          browser: navigator.userAgent,
+          platform: 'web_v2_resilient'
+        }
       };
 
       // Best-effort telecom metadata enrichment
@@ -282,7 +303,9 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         payload.internal_bundle_id = selectedBundleObj.id;
         payload.provider_network_key = selectedBundleObj.provider_network_key;
         payload.provider_capacity = selectedBundleObj.provider_capacity;
-        payload.profit = Math.max(0, amount - (parseFloat(selectedBundleObj.original?.cost_price || '0') || 0));
+        
+        const costPrice = parseFloat(selectedBundleObj.original?.cost_price || '0') || 0;
+        payload.profit = Math.max(0, amount - costPrice);
 
         // Registry Fallbacks
         payload.network_key = selectedBundleObj.provider_network_key || netConfig?.networkKey;
@@ -294,21 +317,36 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       console.log("=== FINALIZED SERVER PAYLOAD ===");
       console.log(payload);
 
-      // 🚀 STEP 3: INITIATE TRANSACTION STORAGE
-      const response = await fetch("/api/initiate-transaction", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      // 🚀 STEP 3: INITIATE TRANSACTION STORAGE (RESILIENT RETRY)
+      let storageSuccess = false;
+      let tx = null;
+      let attempts = 0;
+      
+      while (!storageSuccess && attempts < 2) {
+        try {
+          const response = await fetch("/api/initiate-transaction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
 
-      const initResult = await response.json();
-      if (!response.ok || !initResult.success) {
-        console.error("=== SERVER STORAGE FAILURE ===");
-        console.error(initResult);
-        throw new Error(initResult.error || "Failed to record transaction intent.");
+          const initResult = await response.json();
+          if (response.ok && initResult.success) {
+            tx = initResult.transaction;
+            storageSuccess = true;
+          } else {
+            attempts++;
+            if (attempts >= 2) throw new Error(initResult.error || "Failed to record transaction intent.");
+            console.warn("Retrying transaction storage...");
+          }
+        } catch (e) {
+          attempts++;
+          if (attempts >= 2) throw e;
+        }
       }
 
-      const tx = initResult.transaction;
+      if (!tx) throw new Error("Could not initialize transaction reference.");
+      
       console.log("✅ Intent recorded. Transaction ID:", tx.id);
 
       // 🚀 STEP 4: TRIGGER PAYMENT POPUP
@@ -318,7 +356,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     } catch (err: any) {
       console.error("=== PAYMENT FLOW FAILURE ===");
       console.error(err);
-      setError(err.message || 'Transaction initialization failed.');
+      setError(err.message || 'Transaction initialization failed. Please try again.');
       setIsLoading(false);
     }
   };
@@ -534,51 +572,75 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
           {/* STEP 2: BUNDLE */}
           <div className={`relative transition-opacity duration-300 ${!network ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
-             <div className="flex items-center gap-4 mb-6">
-              <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold ${bundle ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
-                {bundle ? <CheckCircle2 size={18} /> : '2'}
+             <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-4">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold ${bundle ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
+                  {bundle ? <CheckCircle2 size={18} /> : '2'}
+                </div>
+                <h3 className="text-xl font-bold text-slate-900">Choose Bundle</h3>
               </div>
-              <h3 className="text-xl font-bold text-slate-900">Choose Bundle</h3>
+              {network && (
+                <button 
+                  onClick={() => fetchBundles()} 
+                  disabled={isLoadingBundles}
+                  className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-1.5 hover:text-indigo-700 transition-colors"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingBundles ? 'animate-spin' : ''}`} />
+                  Sync
+                </button>
+              )}
             </div>
             
             <div className="pl-0 sm:pl-12">
               {isLoadingBundles ? (
                 <div className="flex flex-col items-center justify-center py-6 text-slate-500 bg-slate-50 rounded-2xl border-2 border-slate-100">
-                  <RefreshCw className="h-6 w-6 animate-spin text-indigo-500 mb-2" />
-                  <span className="text-sm font-medium">Loading packages from database...</span>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+                    <span className="text-sm font-black uppercase tracking-tighter">Live Connection Established</span>
+                  </div>
+                  <span className="text-xs font-bold text-slate-400">Syncing with Supabase table...</span>
                 </div>
               ) : loadError ? (
                 <div className="p-4 bg-red-50 text-red-700 border-2 border-red-100 rounded-2xl flex flex-col items-center text-center">
                   <AlertCircle className="h-6 w-6 text-red-500 mb-2" />
                   <p className="font-semibold mb-1">Failed to load bundles</p>
                   <p className="text-sm opacity-80 mb-3">{loadError}</p>
-                  <button onClick={fetchBundles} className="text-xs font-bold uppercase tracking-wider bg-red-100 px-3 py-1.5 rounded-lg hover:bg-red-200 transition-colors">
+                  <button onClick={() => fetchBundles()} className="text-xs font-bold uppercase tracking-wider bg-red-100 px-3 py-1.5 rounded-lg hover:bg-red-200 transition-colors">
                     Try Again
                   </button>
                 </div>
               ) : (
-                <div className="relative rounded-2xl shadow-sm">
+                <div className="relative">
                   <select
                     id="bundle-select"
                     value={bundle}
                     onChange={(e) => setBundle(e.target.value)}
-                    className="block w-full appearance-none rounded-2xl border-2 py-4 px-5 pr-12 text-slate-900 font-medium text-lg outline-none transition-all cursor-pointer bg-white border-slate-100 hover:border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10"
+                    className="block w-full appearance-none rounded-2xl border-2 py-4 px-5 pr-12 text-slate-900 font-black text-xl outline-none transition-all cursor-pointer bg-white border-slate-100 hover:border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/10 shadow-sm"
                   >
                     <option value="" disabled>Select a data bundle</option>
                     {currentBundles.map((b: any) => (
                       <option key={b.id} value={b.id}>
-                        {b.volume} - {b.name} (₵{b.price.toFixed(2)})
+                        {b.volume} Data Package - {currency} {b.price.toFixed(2)}
                       </option>
                     ))}
                   </select>
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-5">
                     <ChevronDown className="h-5 w-5 text-slate-400" aria-hidden="true" />
                   </div>
+                  
+                  {currentBundles.length > 0 && (
+                    <div className="mt-2 flex items-center gap-1.5 px-1">
+                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentBundles.length} Bundles Synced Locally</span>
+                    </div>
+                  )}
                 </div>
               )}
               {network && !isLoadingBundles && !loadError && currentBundles.length === 0 && (
-                <div className="mt-4 p-4 text-slate-500 text-center border-2 border-dashed border-slate-200 rounded-2xl">
-                  No bundles available for this network in the database.
+                <div className="mt-4 p-6 text-slate-400 text-center border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center">
+                  <AlertCircle size={32} className="mb-2 opacity-20" />
+                  <p className="text-sm font-bold">NO PACKAGES FOUND</p>
+                  <p className="text-[10px] uppercase font-bold tracking-widest opacity-60">There are no bundles for {findNetworkConfig(network)?.label} in the database.</p>
                 </div>
               )}
             </div>
@@ -699,20 +761,26 @@ function PaystackTrigger({
   onSuccess, 
   onClose 
 }: any) {
+  // 🚀 HARDENED PAYSTACK CONFIGURATION
+  const publicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
+  
   const config = {
     reference,
     email: 'customer@datapapa.com',
-    amount,
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541",
+    amount, // In pesewas
+    publicKey,
     currency: 'GHS' as const,
+    channels: ['card', 'mobile_money'],
     metadata: {
       transaction_id: transactionId,
       phone: phone,
       network: network,
       bundle: bundleVolume,
+      platform: 'datapapa_v2',
       custom_fields: [
         { display_name: "Phone Number", variable_name: "phone", value: phone },
-        { display_name: "Network", variable_name: "network", value: network }
+        { display_name: "Network", variable_name: "network", value: network },
+        { display_name: "Bundle", variable_name: "bundle", value: bundleVolume }
       ]
     }
   };
@@ -721,21 +789,28 @@ function PaystackTrigger({
 
   useEffect(() => {
     console.log("=== PAYSTACK INITIALIZATION START ===");
-    console.log("🏗️ PaystackTrigger mounted. Initializing...", { 
+    console.log("🏗️ Resilient PaystackTrigger mounted.", { 
       amount, 
       ref: reference,
-      tx: transactionId 
+      tx: transactionId,
+      keyUsed: publicKey.substring(0, 7) + "..."
     });
     
+    // Safety check for amount
     if (amount > 0) {
-      // @ts-ignore
-      initializePayment(onSuccess, onClose);
-      console.log("=== PAYSTACK POPUP REQUESTED ===");
+      try {
+        // @ts-ignore
+        initializePayment(onSuccess, onClose);
+        console.log("=== PAYSTACK POPUP TRIGGERED SUCCESSFULLY ===");
+      } catch (err) {
+        console.error("❌ Critical Paystack Hook Failure:", err);
+        onClose();
+      }
     } else {
-      console.error("❌ Cannot initialize Paystack with ZERO amount");
+      console.error("❌ Aborting Payment: ZERO amount detected");
       onClose();
     }
-  }, []); // Only once on mount
+  }, [transactionId]); // Only trigger when transactionId changes
 
   return null;
 }
