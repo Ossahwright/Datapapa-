@@ -409,6 +409,37 @@ export const VTU_STATUSES = {
   DELAYED_PROCESSING: 'delayed_provider_processing'
 };
 
+// Polling helper with exponential backoff for 429s
+async function fetchWithRetry(endpoint: string, options: any, maxRetries = 3) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const response = await apiClient.request({
+        url: endpoint,
+        ...options,
+        validateStatus: () => true
+      });
+
+      if (response.status === 429 && attempt < maxRetries - 1) {
+        const wait = Math.pow(2, attempt) * 1000;
+        console.warn(`⚠️ [429 Rate Limit] Retrying in ${wait}ms (Attempt ${attempt + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, wait));
+        attempt++;
+        continue;
+      }
+      return response;
+    } catch (err: any) {
+      if (attempt < maxRetries - 1) {
+        attempt++;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 /**
  * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
  * Attempts to poll DataHub API for real-time status truth.
@@ -431,7 +462,8 @@ export async function checkProviderTransactionStatus(tx: any) {
   for (const endpoint of endpoints) {
     try {
       console.log(`🔍 [Reconciliation] Polling DataHub: ${endpoint}`);
-      const response = await apiClient.get(endpoint, {
+      const response = await fetchWithRetry(endpoint, {
+        method: 'GET',
         headers: { "X-API-Key": apiKey, "Accept": "application/json" },
         timeout: 10000
       });
@@ -443,6 +475,9 @@ export async function checkProviderTransactionStatus(tx: any) {
         const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(status);
         
         return { success: true, isSuccess, isFailed, providerStatus: status, data: result };
+      }
+      if (response.status === 429) {
+        return { error: "Rate limited by provider", rateLimited: true };
       }
     } catch (err) { }
   }
@@ -601,7 +636,12 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     'telecel': 'TELECEL',
     'vodafone': 'TELECEL',
     'airteltigo-bigtime': 'AT_BIGTIME',
-    'at': 'AT_PREMIUM'
+    'at': 'AT_PREMIUM',
+    'airteltigo': 'AT_PREMIUM',
+    'at-ishare': 'AT_PREMIUM',
+    'at-bigtime': 'AT_BIGTIME',
+    'airteltigo ishare': 'AT_PREMIUM',
+    'airteltigo bigtime': 'AT_BIGTIME'
   };
   
   const networkNumericMapping: Record<string, string> = {
@@ -610,11 +650,24 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     'TELECEL': '2',
     'VODAFONE': '2',
     'AT_PREMIUM': '3',
-    'AT_BIGTIME': '3'
+    'AT_BIGTIME': '3',
+    'AIRTELTIGO': '3',
+    'AT': '3'
   };
 
   const networkKey = networkMapping[String(transaction.network || "").toLowerCase()] || transaction.network?.toUpperCase();
   const networkId = networkNumericMapping[networkKey] || "1";
+
+  if (!networkKey) {
+    const error = `Safety Block: Could not determine networkKey for network: ${transaction.network}. Check network mapping.`;
+    console.error(`❌ [${executionId}] ${error}`);
+    await supabase.from("transactions").update({ 
+      vtu_status: 'provider_rejected', 
+      error_message: error, 
+      updated_at: new Date().toISOString() 
+    }).eq("id", transaction.id);
+    throw new Error(error);
+  }
 
   // 📦 Capacity Normalization & Forensic Audit
   const rawCapacity = transaction.datahub_capacity || transaction.capacity || "";
@@ -671,10 +724,11 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   try {
     console.log(`🚀 [${executionId}] Calling Provider API...`);
-    const response = await apiClient.post(endpoint, payload, {
+    const response = await fetchWithRetry(endpoint, {
+      method: "POST",
+      data: payload,
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "Accept": "application/json" },
-      timeout: 30000,
-      validateStatus: () => true
+      timeout: 30000
     });
 
     const result = response.data;

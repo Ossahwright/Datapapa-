@@ -13,9 +13,9 @@ import { supabase } from "./supabase.js";
 function validateDataHubPayload(payload: any) {
   const { networkKey, recipient, capacity } = payload;
 
-  const validNetworks = ["YELLO", "TELECEL", "AT", "AT_PREMIUM", "AT_BIGTIME"];
+  const validNetworks = ["YELLO", "TELECEL", "AT_PREMIUM", "AT_BIGTIME"];
   if (!validNetworks.includes(networkKey)) {
-    throw new Error(`Invalid networkKey: ${networkKey}. Must be one of ${validNetworks.join(", ")}`);
+    throw new Error(`Invalid networkKey: ${networkKey}. Must be one of: ${validNetworks.join(", ")}`);
   }
 
   if (!recipient || !recipient.match(/^0\d{9}$/)) {

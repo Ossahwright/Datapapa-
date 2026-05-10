@@ -21,13 +21,17 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ success: false, error: 'Unauthorized: Admin access required' });
   }
 
-  // Rate Limiting: Max 5 retries per minute per IP
+  // Rate Limiting: Max 20 retries per minute per IP for Admins, 5 for others
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
   const now = Date.now();
   let calls = globalRateLimit.get(ip) || [];
   calls = calls.filter(t => now - t < 60000);
-  if (calls.length >= 5) {
-    return res.status(429).json({ success: false, error: 'Too many retry attempts. Please wait 1 minute.' });
+  const limit = isAuthorized ? 20 : 5;
+  if (calls.length >= limit) {
+    return res.status(429).json({ 
+      success: false, 
+      error: `Too many retry attempts. Max ${limit} per minute. Please wait.` 
+    });
   }
   calls.push(now);
   globalRateLimit.set(ip, calls);
