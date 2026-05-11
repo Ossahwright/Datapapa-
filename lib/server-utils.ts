@@ -510,10 +510,15 @@ export async function reconcileTransaction(transactionId: string) {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
       });
       if (psRes.data?.data?.status === "success") {
-        await supabase.from("transactions").update({ status: "success", payment_verified_at: timestamp, updated_at: timestamp }).eq("id", transactionId);
+        await supabase.from("transactions").update({ 
+          status: "payment_success", 
+          payment_verified_at: timestamp, 
+          updated_at: timestamp 
+        }).eq("id", transactionId);
+        
         const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
         if (updatedTx) await purchaseData(updatedTx, "reconciliation_sync");
-        return { success: true, status: "success" };
+        return { success: true, status: "payment_success" };
       }
     } catch (err) {}
   }
@@ -524,7 +529,10 @@ export async function reconcileTransaction(transactionId: string) {
     const poll = await checkProviderTransactionStatus(tx);
     if (poll.success && (poll.isSuccess || poll.isFailed)) {
       const vtuStatus = poll.isSuccess ? "delivered" : "provider_rejected";
+      const finalStatus = poll.isSuccess ? "fulfilled" : "failed";
+
       await supabase.from("transactions").update({
+        status: finalStatus,
         vtu_status: vtuStatus,
         delivery_status: poll.isSuccess ? "delivered" : "failed",
         delivered_at: poll.isSuccess ? timestamp : null,
@@ -607,6 +615,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   if (source !== "manual_retry") {
     // Fire and forget or skip
     supabase.from("transactions").update({ 
+      status: 'fulfillment_processing',
       vtu_status: 'processing', 
       provider_execution_started_at: executionStartTime,
       updated_at: new Date().toISOString() 
@@ -615,6 +624,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     });
   } else {
     await supabase.from("transactions").update({ 
+      status: 'fulfillment_processing',
       vtu_status: 'provider_execution_started', 
       provider_execution_started_at: executionStartTime,
       updated_at: new Date().toISOString() 
@@ -728,6 +738,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
+          status: 'fulfillment_processing',
           vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
           provider_reference: providerReference || transaction.id,
           external_reference: externalRef, // Using our cleaner searchable ref
@@ -771,6 +782,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     
     try {
       await supabase.from("transactions").update({ 
+        status: 'failed',
         vtu_status: 'provider_rejected', 
         error_message: lastError,
         updated_at: new Date().toISOString(),

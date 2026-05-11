@@ -28,12 +28,13 @@ export default async function handler(req: any, res: any) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
-    if (txData.status === "processing") {
-      return res.json({ message: "Already processing" });
+    if (txData.status === "fulfillment_processing" || txData.status === "fulfilled") {
+      return res.json({ message: "Already processing or completed" });
     }
 
-    if (txData.status === "success") {
-      return res.json({ message: "Already completed" });
+    if (txData.status === "payment_success" && txData.status !== "fulfilled") {
+      // Re-trigger fulfillment if needed
+      console.log("♻️ [API] Payment confirmed but not fulfilled. Proceeding...");
     }
 
     // Update payer phone if provided
@@ -42,10 +43,10 @@ export default async function handler(req: any, res: any) {
     }
 
     // Use the unified logic from server-utils.ts
-    // 🛡️ SPEED OPTIMIZATION: If pending, check Paystack Truth directly to avoid waiting for webhook
+    // 🛡️ SPEED OPTIMIZATION: If initialized, check Paystack Truth directly to avoid waiting for webhook
     let finalTxData = txData;
-    if (txData.status === "pending") {
-      console.log("⏳ [API] Transaction pending. Verifying with Paystack directly for speed...");
+    if (txData.status === "initialized" || txData.status === "payment_pending") {
+      console.log("⏳ [API] Transaction in early state. Verifying with Paystack directly for speed...");
       try {
         const psRes = await supabase.from('transactions').select('paystack_receipt').eq('id', finalTransactionId).single();
         const receipt = txData.paystack_receipt || psRes.data?.paystack_receipt;
@@ -60,7 +61,7 @@ export default async function handler(req: any, res: any) {
             const { data: promoted } = await supabase
               .from('transactions')
               .update({ 
-                status: 'success', 
+                status: 'payment_success', 
                 payment_verified_at: new Date().toISOString(),
                 updated_at: new Date().toISOString() 
               })
@@ -74,8 +75,8 @@ export default async function handler(req: any, res: any) {
         console.error("Paystack direct verify failed in purchase-data logic:", err);
       }
       
-      // Fallback: If still pending after direct check, wait a tiny bit (max 1s) as a safety buffer
-      if (finalTxData.status === "pending") {
+      // Fallback: If still not success after direct check, wait a tiny bit (max 1s) as a safety buffer
+      if (finalTxData.status === "initialized") {
         await new Promise(r => setTimeout(r, 800));
         const { data: refreshedTx } = await supabase
           .from('transactions')
@@ -86,18 +87,19 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    if (finalTxData.status === "pending") {
+    if (finalTxData.status === "initialized" || finalTxData.status === "payment_pending") {
       console.warn("⚠️ [API] Transaction still pending after wait. Webhook might be slow.");
       return res.status(200).json({ 
         success: true, 
         message: "Payment verification in progress. Orders are processed automatically once payment is confirmed.",
-        vtu_status: "pending",
+        status: finalTxData.status,
         trace_id: finalTransactionId
       });
     }
 
-    if (finalTxData.status !== "success") {
-      console.error(`❌ [API] Safety Block: Status is ${finalTxData.status}. Expected success.`);
+    const isConfirmed = finalTxData.status === "payment_success" || finalTxData.status === "fulfillment_processing" || finalTxData.status === "fulfilled";
+    if (!isConfirmed) {
+      console.error(`❌ [API] Safety Block: Status is ${finalTxData.status}. Expected payment confirmation.`);
       return res.status(400).json({ success: false, error: `Payment not confirmed (${finalTxData.status})` });
     }
 

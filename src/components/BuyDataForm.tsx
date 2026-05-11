@@ -199,10 +199,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     };
   }, [currentTxId]);
 
-  const [paystackConfig, setPaystackConfig] = useState<any>(null);
-
-  // 🛡️ DEFENSIVE PAYSTACK VALIDATION
-  const PAYSTACK_PUB_KEY = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
+  const AUTHORITATIVE_PUB_KEY = "";
+  const rawKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+  const PAYSTACK_PUB_KEY = (!rawKey || rawKey === "" || rawKey.includes("VITE_")) 
+    ? AUTHORITATIVE_PUB_KEY 
+    : rawKey;
 
   // Countdown timer effect for post-purchase UX
   useEffect(() => {
@@ -217,6 +218,36 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     return () => clearTimeout(timer);
   }, [countdown, success]);
 
+  const [paystackRef, setPaystackRef] = useState<string>(`DP-${Date.now()}`);
+
+  const paystackConfig = {
+    reference: paystackRef,
+    email: 'customer@datapapa.com',
+    amount: Math.round((selectedBundleObj?.price || 0) * 100),
+    publicKey: PAYSTACK_PUB_KEY,
+    currency: 'GHS',
+    channels: ['mobile_money', 'card'],
+    metadata: {
+      phone,
+      network,
+      bundle: selectedBundleObj?.volume,
+      bundle_id: selectedBundleObj?.db_id || selectedBundleObj?.id,
+      platform: 'datapapa_v2_sync'
+    }
+  };
+
+  // @ts-ignore
+  const initializePayment = usePaystackPayment(paystackConfig);
+
+  // Sync reference whenever selection changes to ensure unique refs per attempt
+  useEffect(() => {
+    if (selectedBundleObj) {
+      const newRef = `DP-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      setPaystackRef(newRef);
+      console.log("🆕 [Reference Generated]:", newRef);
+    }
+  }, [selectedBundleObj?.id, phone]);
+
   const handlePaymentSuccess = async (paystackResponse: any) => {
     console.log("=== PAYSTACK CALLBACK RECEIVED ===");
     console.log("💰 [Success] Reference:", paystackResponse.reference);
@@ -228,34 +259,18 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     
     setTransactionId(paystackResponse.reference);
     console.log("✅ Payment successful. Awaiting webhook fulfillment...");
-    setPaystackConfig(null); // Clear config after success
   };
 
   const handlePaymentClose = () => {
     console.log("🔒 PAYSTACK WINDOW CLOSED");
     setIsLoading(false);
-    setPaystackConfig(null); // Clear config on close
   };
 
-  const handlePayment = async () => {
-    if (!phone || phone.length < 10) {
-      setError('Please enter a valid recipient phone number');
-      return;
-    }
-
-    if (!selectedBundleObj) {
-      setError('Please select a data bundle package');
-      return;
-    }
-
-    setIsLoading(true);
-    setError('');
-
+  const createPaymentIntent = async (ref: string) => {
     try {
-      console.log("=== PAYSTACK INITIALIZATION START ===");
+      console.log("📝 [Async] Recording intent for ref:", ref);
       const { data: { user } } = await supabase.auth.getUser();
-
-      // 🚀 STEP 1: INITIALIZE AUTHORITATIVE INTENT
+      
       const response = await fetch("/api/paystack/initialize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -264,25 +279,68 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           phone,
           payerPhone: payerPhone || phone,
           networkId: network,
-          userId: user?.id
+          userId: user?.id,
+          reference: ref // Force authoritative override
         }),
       });
-
+      
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Initialization failed");
+        console.error("❌ Intent Recording Failed:", result.error);
+      } else {
+        console.log("✅ Intent recorded successfully.");
       }
+    } catch (err) {
+      console.error("❌ Background Intent sync failed:", err);
+    }
+  };
 
-      console.log("=== PAYMENT INTENT STORED ===");
-      console.log("✅ Reference:", result.config.reference);
+  const handlePayment = () => {
+    console.log("=== BUTTON CLICK DETECTED ===");
+    
+    // 1. VALIDATION (SYNC)
+    if (!phone || phone.length < 10) {
+      setError('Please enter a valid recipient phone number');
+      console.error("=== PAYMENT BLOCKED: Invalid Phone ===");
+      return;
+    }
+
+    if (!selectedBundleObj) {
+      setError('Please select a data bundle package');
+      console.error("=== PAYMENT BLOCKED: No Bundle ===");
+      return;
+    }
+
+    if (!PAYSTACK_PUB_KEY || PAYSTACK_PUB_KEY.length < 5) {
+      setError('Server configuration error. Please contact support.');
+      console.error("=== PAYMENT BLOCKED: Missing Public Key ===");
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+
+    try {
+      console.log("=== PAYSTACK INITIALIZATION START ===");
+      console.log("📍 Amount:", paystackConfig.amount);
+      console.log("📍 Ref:", paystackRef);
+      console.log("📍 Key:", PAYSTACK_PUB_KEY.substring(0, 10) + "...");
+
+      // 🚀 THE MAGIC: SYNCHRONOUS TRIGGER
+      // No awaits, no fetches, no delays. Direct from user event.
+      // @ts-ignore
+      initializePayment(handlePaymentSuccess, handlePaymentClose);
       
-      // 🚀 STEP 2: SET CONFIG TO TRIGGER POPUP
-      setPaystackConfig(result.config);
-      
+      console.log("=== PAYSTACK POPUP REQUESTED ===");
+
+      // 🚀 STEP 2: BACKGROUND SYNC (FIRE AND FORGET)
+      // This happens while the user sees the popup loading.
+      createPaymentIntent(paystackRef);
+
     } catch (err: any) {
-      console.error("=== PAYMENT FLOW FAILURE ===");
+      console.error("=== PAYSTACK INIT FAILURE ===");
       console.error(err);
-      setError(err.message || 'Payment initialization failed. Please try again.');
+      setError('Could not launch payment window. Please try again.');
       setIsLoading(false);
     }
   };
@@ -655,52 +713,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           </div>
         </div>
       </div>
-
-      {/* 🚀 HARDENED V2 PAYSTACK TRIGGER */}
-      {paystackConfig && (
-        <PaystackTrigger
-          config={paystackConfig}
-          onSuccess={handlePaymentSuccess}
-          onClose={handlePaymentClose}
-        />
-      )}
     </div>
   );
-}
-
-/**
- * 🎯 PRODUCTION-GRADE PAYSTACK INITIALIZER
- * Responsibility: Execute popup immediately upon receiving valid authoritative config
- */
-function PaystackTrigger({ config, onSuccess, onClose }: any) {
-  const PAYSTACK_PUB_KEY = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_live_8d8dd295e02fd6a55f8461a33055f5d0a94b4541";
-  
-  const paystackConfig = {
-    reference: config.reference,
-    email: config.email,
-    amount: config.amount,
-    publicKey: PAYSTACK_PUB_KEY,
-    currency: "GHS",
-    channels: ["mobile_money", "card"],
-    metadata: config.metadata
-  };
-
-  const initializePayment = usePaystackPayment(paystackConfig);
-
-  useEffect(() => {
-    if (!PAYSTACK_PUB_KEY) {
-      console.error("❌ CRITICAL: Missing Paystack Public Key");
-      onClose();
-      return;
-    }
-
-    console.log("=== PAYSTACK CONFIG VALIDATED ===");
-    console.log("=== PAYSTACK POPUP OPENED ===");
-    console.log("REF:", config.reference);
-    
-    // @ts-ignore
-    initializePayment(onSuccess, onClose);
-  }, []);
-
-  return null;
 }
