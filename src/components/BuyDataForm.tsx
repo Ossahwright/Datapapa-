@@ -227,12 +227,25 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     publicKey: PAYSTACK_PUB_KEY,
     currency: 'GHS',
     channels: ['mobile_money', 'card'],
+    phone: phone,
     metadata: {
       phone,
       network,
       bundle: selectedBundleObj?.volume,
       bundle_id: selectedBundleObj?.db_id || selectedBundleObj?.id,
-      platform: 'datapapa_v2_sync'
+      platform: 'datapapa_v2_sync',
+      custom_fields: [
+        {
+          display_name: "Mobile Number",
+          variable_name: "phone",
+          value: phone
+        },
+        {
+          display_name: "Network",
+          variable_name: "network",
+          value: network
+        }
+      ]
     }
   };
 
@@ -328,8 +341,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
       // 🚀 THE MAGIC: SYNCHRONOUS TRIGGER
       // No awaits, no fetches, no delays. Direct from user event.
-      // @ts-ignore
-      initializePayment(handlePaymentSuccess, handlePaymentClose);
+      initializePayment({
+        config: paystackConfig,
+        onSuccess: handlePaymentSuccess, 
+        onClose: handlePaymentClose
+      });
       
       console.log("=== PAYSTACK POPUP REQUESTED ===");
 

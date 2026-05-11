@@ -2787,7 +2787,7 @@ export default function AdminDashboard() {
                     {isLoadingBundles ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
@@ -2797,7 +2797,7 @@ export default function AdminDashboard() {
                     ) : bundles.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
