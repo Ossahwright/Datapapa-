@@ -1,5 +1,5 @@
 import { supabase, purchaseData, syncWalletSilently, apiClient } from '../lib/server-utils.js';
-import { PAYMENT_STATUSES, VTU_STATUSES, EXECUTION_SOURCES } from '../lib/constants.js';
+import { PAYMENT_STATUSES, VTU_STATUSES, EXECUTION_SOURCES, API_ROUTES, LOG_MARKERS } from '../lib/constants.js';
 
 console.log("server-utils loaded successfully inside purchase-data");
 
@@ -105,6 +105,25 @@ export default async function handler(req: any, res: any) {
     }
 
     console.log("=== API TRIGGERING purchaseData ===");
+    
+    // 🚀 STEP 9 — IMPLEMENT PURCHASE SAFETY GATING
+    try {
+      const healthRes = await fetch(`http://localhost:3000${API_ROUTES.PROVIDER_HEALTH}`);
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        if (health.status === "outage") {
+          console.error(LOG_MARKERS.PURCHASE_GATING_ACTIVATED);
+          return res.status(503).json({ 
+            success: false, 
+            error: "Data provider currently experiencing issues. Purchases temporarily paused.",
+            retry_after: 60
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("⚠️ [API] Health check failed, proceeding with caution:", e);
+    }
+
     const result = await purchaseData(finalTxData, EXECUTION_SOURCES.DIRECT_API);
 
     console.log("DataHub purchase result", result);

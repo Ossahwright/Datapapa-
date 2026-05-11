@@ -8,6 +8,7 @@ export const API_ROUTES = Object.freeze({
   PAYSTACK_WEBHOOK: "/api/paystack-webhook",
   DATAHUB_WEBHOOK: "/api/datahub-webhook",
   PAYSTACK_INITIALIZE: "/api/paystack/initialize",
+  PROVIDER_HEALTH: "/api/provider-health",
   INITIATE_TRANSACTION: "/api/initiate-transaction",
   ADMIN_TX_ACTION: "/api/admin-tx-action",
   SYNC_WALLET: "/api/sync-datahub-wallet",
@@ -72,9 +73,21 @@ export const NETWORK_KEYS = Object.freeze({
   VODA: "VODA"
 });
 
+export const PROVIDER_HEALTH = Object.freeze({
+  OPERATIONAL: "operational",
+  DEGRADED: "degraded",
+  OUTAGE: "outage",
+  UNREACHABLE: "unreachable"
+});
+
 export const LOG_MARKERS = Object.freeze({
   PAYSTACK_WEBHOOK_HIT: "=== PAYSTACK WEBHOOK ROUTE HIT ===",
   PAYMENT_PROMOTED: "=== PAYMENT STATUS PROMOTED ===",
   VTU_EXECUTION_STARTED: "=== VTU EXECUTION STARTED ===",
-  DELIVERY_CONFIRMED: "=== DELIVERY CONFIRMED ==="
+  DELIVERY_CONFIRMED: "=== DELIVERY CONFIRMED ===",
+  PROVIDER_HEALTH_CHECK_START: "=== PROVIDER HEALTH CHECK START ===",
+  PROVIDER_STATUS_RECEIVED: "=== PROVIDER STATUS RECEIVED ===",
+  PROVIDER_DEGRADED: "=== PROVIDER DEGRADED ===",
+  PROVIDER_OUTAGE_DETECTED: "=== PROVIDER OUTAGE DETECTED ===",
+  PURCHASE_GATING_ACTIVATED: "=== PURCHASE GATING ACTIVATED ==="
 });

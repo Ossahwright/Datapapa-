@@ -226,6 +226,8 @@ export default function AdminDashboard() {
   };
 
   const [providerSettings, setProviderSettings] = useState<any>(null);
+  const [providerHealth, setProviderHealth] = useState<any>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
 
   const fetchProviderSettings = async () => {
     try {
@@ -358,12 +360,12 @@ export default function AdminDashboard() {
 
   // Health check effect
   useEffect(() => {
-    loadHealth();
+    fetchProviderHealth();
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        loadHealth();
+        fetchProviderHealth();
       }
-    }, 300000); // 5m
+    }, 60000); // 🚀 STEP 12 — AUTO-REFRESH EVERY 60s
     return () => clearInterval(t);
   }, []);
 
@@ -1320,6 +1322,18 @@ export default function AdminDashboard() {
 
   const [isDeletingTx, setIsDeletingTx] = useState(false);
 
+  const fetchProviderHealth = async () => {
+    try {
+      setIsCheckingHealth(true);
+      const res = await axios.get(API_ROUTES.PROVIDER_HEALTH);
+      setProviderHealth(res.data);
+    } catch (err) {
+      console.error("Health check failed:", err);
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
   const handleWhatsAppMessage = (tx: any) => {
     // 🛡️ STRICT PRIORITY: Always target the human recipient first
     const rawPhone = tx.recipient_phone || tx.payer_phone_number || tx.phone || "";
@@ -2016,6 +2030,103 @@ export default function AdminDashboard() {
                   Unauthorized attempts
                 </p>
               </div>
+            </div>
+
+            {/* Provider Health Panel */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-8">
+              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
+                <div className="flex items-center gap-2">
+                  <Activity size={18} className="text-indigo-500" />
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">
+                    Provider Operational Intelligence
+                  </h3>
+                </div>
+                <div className="flex items-center gap-3">
+                  {isCheckingHealth && (
+                    <RefreshCw size={14} className="animate-spin text-slate-400" />
+                  )}
+                  <span className="text-[10px] font-bold text-slate-400 uppercase">
+                    Last Global Probe: {providerHealth?.last_checked_at ? new Date(providerHealth.last_checked_at).toLocaleTimeString() : 'Never'}
+                  </span>
+                </div>
+              </div>
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {/* DataHub Core State */}
+                <div className="bg-slate-50/50 rounded-xl p-4 border border-slate-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">DataHubGH Core API</span>
+                    <div className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-tighter ${
+                      providerHealth?.services?.api === 'healthy' ? "bg-emerald-100 text-emerald-700" :
+                      providerHealth?.services?.api === 'degraded' ? "bg-amber-100 text-amber-700" :
+                      "bg-rose-100 text-rose-700"
+                    }`}>
+                      {providerHealth?.services?.api || 'Checking'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${
+                      providerHealth?.status === 'operational' ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" :
+                      providerHealth?.status === 'degraded' ? "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" :
+                      providerHealth?.status === 'outage' ? "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]" :
+                      "bg-slate-300 animate-pulse"
+                    }`} />
+                    <span className="text-xl font-black text-slate-900 capitalize italic">
+                      {providerHealth?.status || 'Initiating...'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Fulfillment Engine */}
+                <div className="bg-slate-50/50 rounded-xl p-4 border border-slate-100 text-center flex flex-col justify-center">
+                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Telemetry Latency</div>
+                   <div className="text-3xl font-black text-slate-900">
+                     {providerHealth?.latency || 0}<span className="text-sm font-normal text-slate-400 font-mono">ms</span>
+                   </div>
+                   <div className="mt-2 text-[8px] font-bold text-slate-400 uppercase">Provider Response Orbit</div>
+                </div>
+
+                {/* Safety Indicators */}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-emerald-50/50 border border-emerald-100">
+                    <span className="text-[10px] font-bold text-emerald-700 uppercase">Voucher Purchase</span>
+                    <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
+                      providerHealth?.services?.voucherPurchase === 'healthy' ? "bg-emerald-500 text-white" : "bg-rose-500 text-white"
+                    }`}>
+                      {providerHealth?.services?.voucherPurchase || 'WAIT'}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-blue-50/50 border border-blue-100">
+                    <span className="text-[10px] font-bold text-blue-700 uppercase">Provider Database</span>
+                    <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
+                      providerHealth?.services?.database === 'healthy' ? "bg-blue-500 text-white" : "bg-rose-500 text-white"
+                    }`}>
+                      {providerHealth?.services?.database || 'WAIT'}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-violet-50/50 border border-violet-100">
+                    <span className="text-[10px] font-bold text-violet-700 uppercase">Paystack Webhook</span>
+                    <div className="px-2 py-0.5 rounded bg-violet-500 text-white text-[8px] font-black uppercase">
+                      CONNECTED
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-indigo-50/50 border border-indigo-100">
+                    <span className="text-[10px] font-bold text-indigo-700 uppercase">Supabase Cloud</span>
+                    <div className="px-2 py-0.5 rounded bg-indigo-500 text-white text-[8px] font-black uppercase">
+                      HEALTHY
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {providerHealth?.status === 'outage' && (
+                <div className="bg-rose-600 text-white px-6 py-3 flex items-center gap-3 animate-pulse">
+                  <ShieldAlert size={20} />
+                  <div className="flex-1">
+                    <p className="text-xs font-black uppercase tracking-widest">Global Outage Detected: Fulfillment Gated</p>
+                    <p className="text-[10px] opacity-80">Safety protocol activated. No new transactions will be sent to the provider until service is restored.</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Live Feed */}

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePaystackPayment } from 'react-paystack';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import axios from 'axios';
 import { openWhatsApp } from '../lib/whatsapp';
 
@@ -39,6 +39,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'success'>('idle');
   const [deliveryStatus, setDeliveryStatus] = useState<'idle' | 'processing' | 'delivered' | 'failed'>('idle');
   const [countdown, setCountdown] = useState(0);
+  const [providerStatus, setProviderStatus] = useState<'operational' | 'degraded' | 'outage' | 'checking'>('checking');
 
   const [supabaseReady] = useState(isSupabaseConfigured);
   
@@ -83,6 +84,19 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   useEffect(() => {
     fetchBundles();
+
+    const fetchProviderHealth = async () => {
+      try {
+        const res = await axios.get(API_ROUTES.PROVIDER_HEALTH);
+        setProviderStatus(res.data.status);
+      } catch (err) {
+        console.warn("Health check failed in client:", err);
+        setProviderStatus('degraded'); // Fail gracefully to degraded
+      }
+    };
+
+    fetchProviderHealth();
+    const healthInterval = setInterval(fetchProviderHealth, 60000); // Check once a minute
 
     // 🚀 REAL-TIME BUNDLE ORCHESTRATION
     // We subscribe to all bundle changes to keep the UI in perfect sync with the provider
@@ -444,7 +458,19 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
             Buy Data in 3 Steps
           </h2>
-          {!supabaseReady && (
+          
+          {/* 🚀 STEP 9 — IMPLEMENT PURCHASE SAFETY GATING UI */}
+          {providerStatus === 'outage' && (
+            <div className="mt-6 mx-auto animate-pulse flex items-center gap-3 p-4 bg-rose-50 text-rose-700 border-2 border-rose-100 rounded-2xl text-left">
+              <ShieldAlert className="h-6 w-6 text-rose-600 shrink-0" />
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest leading-none mb-1">Service Disruption Detected</p>
+                <p className="text-[11px] font-bold leading-tight opacity-80">Data provider currently experiencing issues. Purchases temporarily paused to protect your funds.</p>
+              </div>
+            </div>
+          )}
+
+          {!supabaseReady && providerStatus !== 'outage' && (
             <div className="mt-4 mx-auto inline-flex items-center gap-2 px-3 py-1 text-xs font-medium text-amber-800 bg-amber-50 rounded-full border border-amber-200">
               <AlertCircle size={14} />
               Preview Mode (Demo Transactions)
@@ -638,19 +664,21 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
                   <button
                     onClick={handlePayment}
-                    disabled={isLoading || phone.length < 10}
+                    disabled={isLoading || phone.length < 10 || providerStatus === 'outage'}
                     className="w-full relative flex flex-col items-center justify-center rounded-2xl bg-slate-900 px-8 py-4 text-base font-bold text-white shadow-xl hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                   >
                     <div className="flex items-center">
                       {isLoading ? (
                         <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" />
+                      ) : providerStatus === 'outage' ? (
+                        <XCircle className="-ml-1 mr-2 h-5 w-5 text-rose-400" />
                       ) : (
                         <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="none">
                           <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 18C8.69 18 6 15.31 6 12C6 8.69 8.69 6 12 6C15.31 6 18 8.69 18 12C18 15.31 15.31 18 12 18Z" fill="currentColor" fillOpacity="0.3"/>
                           <path d="M12 8C9.79 8 8 9.79 8 12C8 14.21 9.79 16 12 16C14.21 16 16 14.21 16 12C16 9.79 14.21 8 12 8ZM12 14C10.9 14 10 13.1 10 12C10 10.9 10.9 10 12 10C13.1 10 14 10.9 14 12C14 13.1 13.1 14 12 14Z" fill="currentColor"/>
                         </svg>
                       )}
-                      {isLoading ? 'Processing Payment...' : `Pay securely with Paystack`}
+                      {isLoading ? 'Processing Payment...' : providerStatus === 'outage' ? 'Purchases Paused' : `Pay securely with Paystack`}
                     </div>
                   </button>
                   <p className="text-center text-[11px] sm:text-xs font-bold text-slate-600 mt-3 animate-pulse">
