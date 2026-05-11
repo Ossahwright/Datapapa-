@@ -1,17 +1,22 @@
 /**
- * 🛡️ PAYSTACK V2 AUTHORITATIVE WEBHOOK
+ * 🛡️ PAYSTACK AUTHORITATIVE WEBHOOK (STABILIZED)
  * Responsibility: Handle payment verification and trigger fulfillment.
- * State Machine: initialized -> payment_success -> fulfillment_processing -> fulfilled | failed
+ * Path: api/paystack-webhook.ts -> /api/paystack-webhook
  */
 
-import { supabase, purchaseData } from '../../lib/server-utils.js';
+import { supabase, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
+  console.log("=== PAYSTACK WEBHOOK ROUTE HIT ===");
   console.log("=== PAYSTACK WEBHOOK RECEIVED ===");
   
+  // SUPPORTED METHODS ONLY
   if (req.method !== 'POST') {
-    return res.status(405).send('Method Not Allowed');
+    console.warn(`⚠️ [Webhook] Method ${req.method} not allowed`);
+    return res.status(405).json({
+      error: "Method not allowed"
+    });
   }
 
   // STEP 1: VALIDATE PAYLOAD INTEGRITY
@@ -27,7 +32,7 @@ export default async function handler(req: any, res: any) {
       return res.status(500).send("Misconfigured Server");
     }
 
-    // 2. SIGNATURE VERIFICATION (STRICT)
+    // STEP 2: VERIFY PAYSTACK SIGNATURE AUTHORITATIVELY
     const signature = req.headers["x-paystack-signature"];
     const bodyStr = req.rawBody || JSON.stringify(req.body);
     
@@ -45,7 +50,10 @@ export default async function handler(req: any, res: any) {
     const event = req.body;
     if (event.event !== "charge.success") {
       console.log(`ℹ️ [Webhook] Ignoring event: ${event.event}`);
-      return res.status(200).send("Event Ignored");
+      return res.status(200).json({
+        success: true,
+        message: "Event ignored"
+      });
     }
 
     console.log("=== PAYMENT VERIFIED ===");
@@ -57,7 +65,7 @@ export default async function handler(req: any, res: any) {
       try { metadata = JSON.parse(metadata); } catch(e) { /* ignore */ }
     }
 
-    // 3. DETERMINISTIC TRANSACTION LOOKUP (STRICT FALLBACK PRIORITY)
+    // STEP 3: IMPLEMENT DETERMINISTIC TRANSACTION LOOKUP (STRICT FALLBACK PRIORITY)
     console.log("=== TRANSACTION LOOKUP START ===");
     const transactionIdFromMetadata = metadata?.transaction_id;
     const paystackReference = reference;
@@ -101,7 +109,10 @@ export default async function handler(req: any, res: any) {
       console.error("=== TRANSACTION NOT FOUND ===");
       console.error("❌ [Webhook] Potential Orphaned Payment. No match for reference:", reference);
       // Important: Still return 200 to Paystack so they stop retrying, but log for admin.
-      return res.status(200).send("Orphaned Payment Logged");
+      return res.status(200).json({
+        success: false,
+        error: "Orphaned Payment Logged"
+      });
     }
 
     return processTransaction(tx, paystackData, res);
@@ -113,21 +124,27 @@ export default async function handler(req: any, res: any) {
 }
 
 async function processTransaction(tx: any, paystackData: any, res: any) {
-  // 10. IDEMPOTENCY PROTECTION
+  // STEP 10: IMPLEMENT WEBHOOK IDEMPOTENCY
   if (tx.payment_status === "success" && tx.provider_execution_started_at) {
     console.log(`♻️ === DUPLICATE WEBHOOK IGNORED (Tx: ${tx.id}) ===`);
-    return res.status(200).send("Already Processed");
+    return res.status(200).json({
+      success: true,
+      message: "Already Processed"
+    });
   }
 
   // If already fulfilled, definitely ignore
   if (tx.status === 'fulfilled' || tx.vtu_status === 'delivered') {
     console.log(`♻️ [Idempotency] Transaction ${tx.id} already fulfilled.`);
-    return res.status(200).send("Already Processed");
+    return res.status(200).json({
+      success: true,
+      message: "Already Processed"
+    });
   }
 
   console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> success`);
 
-  // 4. STRICT PAYMENT STATUS PROMOTION
+  // STEP 4: STRICT PAYMENT STATUS PROMOTION
   const { error: updateError } = await supabase
     .from("transactions")
     .update({
@@ -143,10 +160,12 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   if (updateError) {
     console.error("❌ [Webhook] Failed to update payment status:", updateError);
-    return res.status(500).send("DB Error");
+    return res.status(500).json({
+      error: "DB Error"
+    });
   }
 
-  // 5. VERIFY DATABASE PERSISTENCE (STRICT RE-FETCH)
+  // STEP 5: VERIFY DATABASE PERSISTENCE (STRICT RE-FETCH)
   const { data: updatedTx, error: verifyError } = await supabase
     .from('transactions')
     .select('*')
@@ -155,13 +174,15 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   if (verifyError || !updatedTx) {
     console.error("❌ [Webhook] Convergence Verification Failed:", verifyError);
-    return res.status(500).send("Database Verification Failed");
+    return res.status(500).json({
+      error: "Database Verification Failed"
+    });
   }
 
   console.log("=== PAYMENT STATUS PROMOTED ===");
   console.log(`Validated Status: ${updatedTx.payment_status} | Status: ${updatedTx.status}`);
 
-  // 6. AUTOMATIC VTU EXECUTION
+  // STEP 6: AUTOMATIC VTU EXECUTION
   console.log("=== VTU EXECUTION STARTED ===");
   
   try {
@@ -170,7 +191,10 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     
     if (result.success) {
       console.log("=== TRANSACTION COMPLETED (SUCCESS) ===");
-      return res.status(200).send("OK");
+      return res.status(200).json({
+        success: true,
+        message: "OK"
+      });
     } else {
       console.error("❌ [Webhook] VTU Execution Failed:", result.error);
       // STEP 11: Persist failures safely
@@ -179,7 +203,10 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
         error_message: result.error,
         updated_at: new Date().toISOString()
       }).eq("id", tx.id);
-      return res.status(200).send("Payment Proccessed, VTU Failed Managed");
+      return res.status(200).json({
+        success: false,
+        message: "Payment Processed, VTU Failed Managed"
+      });
     }
   } catch (error: any) {
     console.error("❌ [Webhook] Critical VTU Unhandled Crash:", error);
@@ -188,6 +215,9 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
       error_message: "Fulfillment system crash: " + error.message,
       updated_at: new Date().toISOString()
     }).eq("id", tx.id);
-    return res.status(200).send("Payment Proccessed, Execution Crashed Managed");
+    return res.status(200).json({
+      success: false,
+      message: "Payment Processed, Execution Crashed Managed"
+    });
   }
 }
