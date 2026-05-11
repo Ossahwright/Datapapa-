@@ -32,7 +32,7 @@ export default async function handler(req: any, res: any) {
       return res.json({ message: "Already processing or completed" });
     }
 
-    if (txData.status === "payment_success" && txData.status !== "fulfilled") {
+    if ((txData.status === "payment_success" || txData.status === "success") && txData.status !== "fulfilled") {
       // Re-trigger fulfillment if needed
       console.log("♻️ [API] Payment confirmed but not fulfilled. Proceeding...");
     }
@@ -97,7 +97,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const isConfirmed = finalTxData.status === "payment_success" || finalTxData.status === "fulfillment_processing" || finalTxData.status === "fulfilled";
+    const isConfirmed = finalTxData.status === "payment_success" || finalTxData.status === "success" || finalTxData.status === "fulfillment_processing" || finalTxData.status === "fulfilled";
     if (!isConfirmed) {
       console.error(`❌ [API] Safety Block: Status is ${finalTxData.status}. Expected payment confirmation.`);
       return res.status(400).json({ success: false, error: `Payment not confirmed (${finalTxData.status})` });

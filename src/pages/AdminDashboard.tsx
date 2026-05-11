@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, FormEvent, Fragment } from "react";
-import { supabase } from "../lib/supabase";
+import { supabase, getSafeSession } from "../lib/supabase";
 import { findNetworkConfig, NETWORKS } from "../lib/networkConfig";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
@@ -395,13 +395,25 @@ export default function AdminDashboard() {
 
     fetchDashboardRows();
 
+    const handleRefetch = () => {
+      fetchDashboardRows();
+      // If the parent has `fetchTransactions`, we dispatch to it or we can do it generically. Oh wait, `fetchTransactions` is defined elsewhere.
+    };
+    window.addEventListener('refetch-transactions', handleRefetch);
+
     // realtime
     const ch = supabase
-      .channel("tx-live")
+      .channel("transactions-live")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
         (payload) => {
+          console.log("=== REALTIME TRANSACTION UPDATE ===");
+          console.log(payload);
+
+          // Trigger a re-fetch to respect pagination and filters
+          window.dispatchEvent(new CustomEvent('refetch-transactions'));
+
           // Check if it's a failure event
           const newTx = payload.new as any;
           const oldTx = payload.old as any;
@@ -427,7 +439,6 @@ export default function AdminDashboard() {
                     <button 
                       onClick={() => {
                         toast.dismiss(t.id);
-                        // Maybe scroll to row or open details?
                       }}
                       className="ml-4 p-1 hover:bg-slate-100 rounded-md transition-colors"
                     >
@@ -453,15 +464,13 @@ export default function AdminDashboard() {
               audio.play().catch(() => {}); // Ignore errors if browser blocks autoplay
             }
           }
-
-          // For simplicity and since we have pagination now, just refresh the current page
-          fetchDashboardRows();
         },
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(ch);
+      window.removeEventListener('refetch-transactions', handleRefetch);
     };
   }, [dashboardPage]);
 
@@ -487,7 +496,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     const checkServer = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { session } = await getSafeSession();
         const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
         const res = await axios.get("/api/health", { headers });
         if (res.status === 200) setServerStatus("up");
@@ -510,9 +519,9 @@ export default function AdminDashboard() {
 
     const checkUser = async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { session, error } = await getSafeSession();
+
+        if (error) throw error;
 
         if (!session || !session.user) {
           if (isMounted) {
@@ -588,16 +597,31 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    let delayDebounceFn: NodeJS.Timeout;
+    
     if (currentView === "transactions") {
-      const delayDebounceFn = setTimeout(() => {
+      delayDebounceFn = setTimeout(() => {
         fetchTransactions();
       }, 300);
-      return () => clearTimeout(delayDebounceFn);
+      
+      const handleRefetchTransactions = () => {
+        fetchTransactions();
+      };
+      window.addEventListener('refetch-transactions', handleRefetchTransactions);
+
+      return () => {
+        clearTimeout(delayDebounceFn);
+        window.removeEventListener('refetch-transactions', handleRefetchTransactions);
+      };
     } else if (currentView === "customers") {
       fetchCustomers();
     } else if (currentView === "settings") {
       fetchSettings();
     }
+    
+    return () => {
+      if (delayDebounceFn) clearTimeout(delayDebounceFn);
+    };
   }, [currentView, searchQuery, currentPage]);
 
   const fetchSettings = async () => {
@@ -1196,14 +1220,17 @@ export default function AdminDashboard() {
       return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
     }
     if (isPaid) {
-      return { 
-        label: 'Payment Verified', 
-        color: 'bg-blue-100 text-blue-700', 
-        icon: <Clock size={10} className="mr-1" />,
-        retry: !vtu || vtu === 'pending'
-      };
+      if (vtu === 'pending' || !vtu || vtu === 'initialized') {
+        return { 
+          label: 'Pending', 
+          color: 'bg-blue-100 text-blue-700', 
+          icon: <Clock size={10} className="mr-1" />,
+          retry: true
+        };
+      }
     }
-    return { label: tx.status || 'Pending', color: 'bg-slate-100 text-slate-700', icon: null };
+    const fallbackLabel = tx.status === 'initialized' ? 'Initialized' : (tx.status || 'Pending');
+    return { label: fallbackLabel, color: 'bg-slate-100 text-slate-700', icon: null };
   };
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [txToDelete, setTxToDelete] = useState<any>(null);
@@ -1504,39 +1531,6 @@ export default function AdminDashboard() {
   ]);
 
   useEffect(() => {
-    const txChannel = supabase
-      .channel("admin-transactions")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "transactions",
-        },
-        (payload) => {
-          console.log("🔄 ADMIN REALTIME:", payload);
-
-          if (payload.eventType === "UPDATE") {
-            setTransactions((prev) =>
-              prev.map((t) =>
-                t.id === payload.new.id ? { ...t, ...payload.new } : t,
-              ),
-            );
-          } else if (payload.eventType === "INSERT") {
-            // We could prepend, but pagination makes this tricky
-            // For simplicity, just refresh
-            fetchTransactions();
-          } else if (payload.eventType === "DELETE") {
-            setTransactions((prev) =>
-              prev.filter((t) => t.id !== payload.old.id),
-            );
-          }
-
-          fetchDashboardStats();
-        },
-      )
-      .subscribe();
-
     const bundlesChannel = supabase
       .channel("bundles-sync")
       .on(
@@ -1569,7 +1563,6 @@ export default function AdminDashboard() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(txChannel);
       supabase.removeChannel(bundlesChannel);
       supabase.removeChannel(customersChannel);
     };
@@ -1953,7 +1946,7 @@ export default function AdminDashboard() {
             </div>
 
             {/* Live Feed */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
               <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></div>
@@ -2368,7 +2361,7 @@ export default function AdminDashboard() {
               </div>
             </header>
 
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
               <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
@@ -2495,7 +2488,7 @@ export default function AdminDashboard() {
                               >
                                 {tx.status === "success" || tx.status === "paid"
                                   ? "Success"
-                                  : tx.status || "N/A"}
+                                  : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -2763,7 +2756,7 @@ export default function AdminDashboard() {
               })}
             </div>
 
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
               <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
@@ -4166,7 +4159,7 @@ export default function AdminDashboard() {
                                       : "bg-slate-100 text-slate-700"
                               }`}
                             >
-                              {tx.status || "N/A"}
+                              {tx.status === "success" || tx.status === "paid" ? "Success" : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                             </span>
                           </div>
                         </div>

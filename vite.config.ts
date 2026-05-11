@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => {
                       buffers.push(chunk);
                     }
                     const data = Buffer.concat(buffers).toString();
+                    (req as any).rawBody = data;
                     if (data) {
                       try {
                         (req as any).body = JSON.parse(data);

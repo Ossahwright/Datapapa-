@@ -12,3 +12,25 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storageKey: 'datapapa-auth-token',
   },
 });
+
+/**
+ * Safely gets the session and handles the common "Refresh Token Not Found" error
+ * which happens when the local storage session is stale or invalid.
+ */
+export const getSafeSession = async () => {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      if (error.message?.includes('Refresh Token Not Found') || error.message?.includes('Auth session missing') || error.status === 400) {
+        console.warn('Stale session detected, signing out...');
+        await supabase.auth.signOut();
+        return { session: null, error: null };
+      }
+      return { session: null, error };
+    }
+    return { session: data.session, error: null };
+  } catch (err) {
+    console.error('Session retrieval failed:', err);
+    return { session: null, error: err };
+  }
+};

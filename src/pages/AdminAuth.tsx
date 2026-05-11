@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, getSafeSession } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Lock, Mail, AlertCircle, ShieldCheck, Eye, EyeOff, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -18,7 +18,11 @@ export default function AdminAuth() {
   useEffect(() => {
     // Check if already logged in on initial load
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { session, error } = await getSafeSession();
+      if (error) {
+        console.error("Session check error:", error);
+        return;
+      }
       if (session) {
         // If session exists, try to verify role quickly
         const { data: profile } = await supabase

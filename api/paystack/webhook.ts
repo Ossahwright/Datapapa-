@@ -93,14 +93,19 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> payment_success`);
 
-  // 4. ATOMIC UPDATE TO PAYMENT_SUCCESS
+    console.log("=== PAYMENT STATUS PROMOTED ===");
+    console.log("=== VTU EXECUTION STARTED ===");
+
+  // 4. ATOMIC UPDATE TO SUCCESS
   // We only update if the transaction is still in a pre-payment state
   const { data: updatedTx, error: updateError } = await supabase
     .from("transactions")
     .update({
-      status: "payment_success", // STATE MACHINE
+      status: "success", // STATE MACHINE
       paystack_receipt: paystackData.reference,
       webhook_verified: true,
+      payment_status: "success", // Also update payment_status if it exists
+      vtu_status: "pending",
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })

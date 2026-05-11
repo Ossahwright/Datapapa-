@@ -5,6 +5,7 @@ console.log("server-utils loaded successfully inside datahub-webhook");
 export default async function handler(req: any, res: any) {
   const timestamp = new Date().toISOString();
   console.log(`=== [${timestamp}] DATAHUB WEBHOOK BOOTED ===`);
+  console.log("=== WEBHOOK RECEIVED ===");
   console.log("WEBHOOK METHOD:", req.method);
   console.log("WEBHOOK HEADERS:", JSON.stringify(req.headers));
   console.log("WEBHOOK USER-AGENT:", req.headers["user-agent"] || "unknown");
@@ -126,6 +127,7 @@ export default async function handler(req: any, res: any) {
     const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(statusStr);
 
     if (!isSuccess && !isFailed) {
+      console.log(`=== PROVIDER ACCEPTED ===`);
       console.log(`⏳ [Webhook] Intermediate state received (${statusStr}). Enforcing convergence...`);
       // Even for intermediate states, ensure we are in a valid waiting state
       if (!["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending"].includes(tx.vtu_status)) {

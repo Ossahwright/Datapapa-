@@ -19,7 +19,8 @@ export default async function handler(req: any, res: any) {
       payerPhone, 
       networkId, 
       userId,
-      platform = 'web_v2'
+      platform = 'web_v2',
+      reference: clientReference
     } = req.body;
 
     // 1. STERN VALIDATION
@@ -50,7 +51,7 @@ export default async function handler(req: any, res: any) {
     // 3. GENERATE DETERMINISTIC REFERENCE
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(7);
-    const reference = `DP-${timestamp}-${random}`;
+    const reference = clientReference || `DP-${timestamp}-${random}`;
 
     // 4. PERSIST INTENT (IDEMPOTENT CREATION)
     console.log("📝 Persisting transaction intent...");

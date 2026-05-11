@@ -60,7 +60,22 @@ export default function App() {
       let user = existingUser;
       
       if (!user) {
-        const { data } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getUser();
+        
+        if (error) {
+          // If refresh token is missing or invalid, clear everything
+          if (
+            error.message?.includes('Refresh Token Not Found') ||
+            error.message?.includes('Auth session missing')
+          ) {
+            console.warn('Auth issue detected in App.tsx, signing out...');
+            await supabase.auth.signOut();
+            setUserRole(null);
+            return;
+          }
+          throw error;
+        }
+        
         user = data?.user;
       }
       

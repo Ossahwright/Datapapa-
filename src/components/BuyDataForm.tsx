@@ -8,6 +8,7 @@ import { openWhatsApp } from '../lib/whatsapp';
 
 import { NETWORK_CONFIG, NETWORKS, findNetworkConfig } from '../lib/networkConfig';
 import { BUNDLE_CONFIG, findNormalizedBundle } from '../lib/bundleConfig';
+import { TransactionReceiptCard, TransactionStatus } from './payment/TransactionReceiptCard';
 
 interface BuyDataFormProps {
   settings: {
@@ -161,10 +162,41 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     : [];
   const selectedBundleObj = currentBundles.find((b: any) => String(b.id) === String(bundle));
 
-  const [currentTxId, setCurrentTxId] = useState<string | null>(null);
-
   useEffect(() => {
-    if (!currentTxId) return;
+    if (!transactionId) return;
+
+    let pollingInterval: NodeJS.Timeout;
+    
+    const fetchLatestTransactionState = async () => {
+      try {
+        const { data: updated } = await supabase
+          .from("transactions")
+          .select("delivery_status, vtu_status")
+          .or(`internal_reference.eq."${transactionId}",id.eq."${transactionId}"`)
+          .maybeSingle();
+
+        if (updated) {
+          if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
+            setDeliveryStatus("delivered");
+            clearInterval(pollingInterval);
+          } else if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
+            setDeliveryStatus("processing");
+          } else if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected" || updated.vtu_status === "failed") {
+            setDeliveryStatus("failed");
+            clearInterval(pollingInterval);
+          }
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    };
+
+    // Step 6: 🚀 Post-Payment Active Polling
+    // Bridges webhook latency, realtime propagation timing, and provider execution startup
+    pollingInterval = setInterval(fetchLatestTransactionState, 3000);
+
+    // Initial fetch just to be safe
+    fetchLatestTransactionState();
 
     const channel = supabase
       .channel("transactions-status")
@@ -176,28 +208,34 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           table: "transactions",
         },
         (payload) => {
-          console.log("🔄 REALTIME UPDATE:", payload);
+          console.log("🔄 REALTIME UPDATE VISIBLE:", payload);
           const updated = payload.new;
-          if (updated.id === currentTxId) {
-            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered") {
+          if (updated.internal_reference === transactionId || updated.id === transactionId) {
+            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
               setDeliveryStatus("delivered");
-            }
-            if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
+              clearInterval(pollingInterval);
+            } else if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
               setDeliveryStatus("processing");
-            }
-            if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected") {
+            } else if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected" || updated.vtu_status === "failed") {
               setDeliveryStatus("failed");
-              alert("❌ Data delivery failed. Please contact support if you were debited.");
+              clearInterval(pollingInterval);
             }
           }
         }
       )
       .subscribe();
 
+    // Auto-stop polling after 30 seconds
+    const timeout = setTimeout(() => {
+      clearInterval(pollingInterval);
+    }, 30000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(pollingInterval);
+      clearTimeout(timeout);
     };
-  }, [currentTxId]);
+  }, [transactionId]);
 
   const AUTHORITATIVE_PUB_KEY = "";
   const rawKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
@@ -362,142 +400,25 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   if (success) {
     const netConfig = findNetworkConfig(network);
+    
+    // Determine the general status for the receipt card
+    let receiptStatus: TransactionStatus = 'processing';
+    if (deliveryStatus === 'delivered' || deliveryStatus === 'success') receiptStatus = 'success';
+    if (deliveryStatus === 'failed') receiptStatus = 'failed';
+
     return (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="bg-white rounded-[2.5rem] shadow-2xl p-6 md:p-8 border border-slate-100 max-w-lg mx-auto w-full relative overflow-hidden my-auto"
-        >
-          <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
-          
-          <div className="flex flex-col items-center">
-            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: "spring", stiffness: 200, damping: 20 }}
-              >
-                <CheckCircle2 className="w-10 h-10 text-green-600" />
-              </motion.div>
-            </div>
-            
-            <h2 className="text-3xl font-black text-slate-900 tracking-tight">TRANSACTION SUCCESS</h2>
-            <p className="text-slate-500 text-xs font-bold mt-1 uppercase tracking-[0.2em]">Official Receipt • {appName}</p>
-            
-            {/* Main Receipt Content */}
-            <div className="w-full mt-8 bg-slate-50 rounded-3xl p-6 border border-slate-200/60 relative">
-              {/* Cut-out circles for receipt look */}
-              <div className="absolute top-1/2 -left-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
-              <div className="absolute top-1/2 -right-3 w-6 h-6 bg-white rounded-full border border-slate-200/60 -translate-y-1/2" />
-              
-              <div className="space-y-4 font-mono text-xs text-slate-600 uppercase">
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.1 }}
-                  className="flex justify-between items-center"
-                >
-                  <span>Delivery</span>
-                  {deliveryStatus === 'delivered' ? (
-                    <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded font-black text-[10px]">DELIVERED</span>
-                  ) : deliveryStatus === 'failed' ? (
-                    <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded font-black text-[10px]">FAILED</span>
-                  ) : (
-                    <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-black text-[10px] animate-pulse">PROCESSING</span>
-                  )}
-                </motion.div>
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.2 }}
-                  className="flex justify-between"
-                >
-                  <span>Date & Time</span>
-                  <span className="text-slate-900 font-bold">{new Date().toLocaleString()}</span>
-                </motion.div>
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.3 }}
-                  className="flex justify-between"
-                >
-                  <span>Network</span>
-                  <span className="text-slate-900 font-bold">{netConfig?.label}</span>
-                </motion.div>
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.4 }}
-                  className="flex justify-between"
-                >
-                  <span>Bundle</span>
-                  <span className="text-slate-900 font-bold truncate max-w-[150px] text-right">{selectedBundleObj?.volume}</span>
-                </motion.div>
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.5 }}
-                  className="flex justify-between"
-                >
-                  <span>Recipient</span>
-                  <span className="text-slate-900 font-bold text-sm tracking-tighter">{phone}</span>
-                </motion.div>
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.6 }}
-                  className="flex justify-between"
-                >
-                  <span>Payer</span>
-                  <span className="text-slate-900 font-bold">{payerPhone || phone}</span>
-                </motion.div>
-                
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.7 }}
-                  className="pt-4 border-t border-dashed border-slate-300"
-                >
-                  <div className="flex justify-between items-center text-base">
-                    <span className="font-bold text-slate-400">Amount Paid</span>
-                    <span className="text-indigo-600 font-black text-xl">GHS {selectedBundleObj?.price.toFixed(2)}</span>
-                  </div>
-                </motion.div>
-              </div>
-            </div>
-
-            <div className="mt-6 flex flex-col items-center gap-2">
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Transaction Reference</div>
-              <div className="text-[10px] font-mono text-slate-400 break-all text-center px-4 bg-slate-50 py-2 rounded-lg border border-slate-100">{transactionId}</div>
-            </div>
-
-            <div className="mt-8 flex flex-col items-center w-full gap-4">
-              <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
-                Refreshing in <span className="text-indigo-600 font-bold tabular-nums">{countdown}s</span>...
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-                <button
-                  onClick={() => {
-                    window.location.reload();
-                  }}
-                  className="px-6 py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-lg shadow-slate-200 flex items-center justify-center gap-2"
-                >
-                  Continue Now
-                </button>
-                <button
-                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
-                  className="px-6 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 flex items-center justify-center gap-2"
-                >
-                  Support
-                </button>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </div>
+      <TransactionReceiptCard
+        status={receiptStatus}
+        amount={selectedBundleObj?.price || 0}
+        network={netConfig?.label}
+        bundle={selectedBundleObj?.volume}
+        recipient={phone}
+        reference={transactionId}
+        appName={appName}
+        onReturnHome={() => window.location.reload()}
+        onRetry={() => window.location.reload()}
+        onSupport={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
+      />
     );
   }
 
