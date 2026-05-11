@@ -509,7 +509,9 @@ export async function reconcileTransaction(transactionId: string) {
       });
       if (psRes.data?.data?.status === PAYMENT_STATUSES.SUCCESS) {
         await supabase.from("transactions").update({ 
-          status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
+          status: PAYMENT_STATUSES.SUCCESS, 
+          payment_status: PAYMENT_STATUSES.SUCCESS,
+          webhook_verified: true,
           payment_verified_at: timestamp, 
           updated_at: timestamp 
         }).eq("id", transactionId);
@@ -596,24 +598,24 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     throw new Error(`Unauthorized purchase execution source: ${source}`);
   }
 
-  // 🛡️ STEP 3: STRICT PAYMENT VERIFICATION
-  // The user requested: STRICTLY require: transaction.status === "success"
-  const isPaid = transaction.status === PAYMENT_STATUSES.SUCCESS;
+  // 🛡️ STEP 3 & 8 — HARDEN purchaseData() EXECUTION GUARD
+  // The user requested: STRICTLY require: transaction.status === "success" AND payment_status === "success"
+  const isPaid = transaction.status === PAYMENT_STATUSES.SUCCESS && transaction.payment_status === PAYMENT_STATUSES.SUCCESS;
   
   if (!isPaid) {
-    const error = `Safety Block: Cannot fulfill transaction. Must be '${PAYMENT_STATUSES.SUCCESS}'. Current: ${transaction.status}`;
+    const error = `Safety Block: Blocked: Payment not authoritatively verified. Must be '${PAYMENT_STATUSES.SUCCESS}'. Current status: ${transaction.status}, payment_status: ${transaction.payment_status}`;
     console.error(`❌ [${executionId}] ${error}`);
     throw new Error(error);
   }
 
   // 🛡️ STEP 3.5: ATOMIC FULFILLMENT LOCK
   // We transition from 'success' to 'fulfillment_processing'
+  // Note: We stay in 'processing' VTU state for now; the "Truthful" provider_execution_started is set in a moment.
   const { data: lockedTx, error: lockError } = await supabase
     .from("transactions")
     .update({ 
       status: VTU_STATUSES.FULFILLMENT_PROCESSING,
       vtu_status: VTU_STATUSES.PROCESSING,
-      provider_execution_started_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
@@ -637,21 +639,11 @@ export async function purchaseData(transaction: any, source: string = "unknown")
      throw new Error(error);
   }
 
-  // 🚀 AUTHENTIC TELECOM NORMALIZATION (STEP 5 & 8)
+  // 🚀 AUTHENTIC TELECOM NORMALIZATION
   console.log("=== BUNDLE NORMALIZATION ===");
   
-  // Prioritize pre-normalized fields from storage (Step 7)
   const networkKey = transaction.provider_network_key || transaction.datahub_network_key || transaction.network_key;
   const finalCapacity = transaction.provider_capacity || transaction.datahub_capacity || transaction.capacity;
-
-  console.log(`=== [${executionId}] PROVIDER PAYLOAD INTEGRITY ===`);
-  console.log({
-    internal_bundle_id: transaction.internal_bundle_id,
-    display_bundle: transaction.display_bundle,
-    provider_network_key: networkKey,
-    provider_capacity: finalCapacity,
-    recipient: recipient
-  });
 
   if (!networkKey || !finalCapacity) {
     const error = `Safety Block: Missing Normalized Provider Keys. (NR: ${networkKey}, CAP: ${finalCapacity})`;
@@ -664,7 +656,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     throw new Error(error);
   }
 
-  // 📦 Network Numeric Mapping (for DataHub API variants)
+  // 📦 Network Numeric Mapping
   const networkNumericMapping: Record<string, string> = {
     [NETWORK_KEYS.MTN]: '1',
     [NETWORK_KEYS.VODA]: '2',
@@ -675,11 +667,10 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   const networkId = networkNumericMapping[networkKey] || "1";
 
   // 🚀 GENERATE CLEANER EXTERNAL REFERENCE
-  // Some providers (DataHub) prefer shorter or more searchable references
   const shortId = (transaction.id || "").split("-")[0].toUpperCase();
   const externalRef = `DP-${shortId}-${Date.now().toString().slice(-4)}`;
 
-  // 🚀 ROBUST PAYLOAD: Using authoritative normalized values
+  // 🚀 ROBUST PAYLOAD
   const payload = { 
     networkKey: networkKey,
     network_id: networkId,
@@ -692,13 +683,22 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     external_reference: externalRef,
     client_reference: externalRef
   };
-  console.log(`📡 [${executionId}] FINAL PROVIDER PAYLOAD:`, JSON.stringify(payload));
   const { apiKey, baseUrl } = await getDataHubConfig();
   if (!apiKey) throw new Error("DataHub API key is missing");
 
   const endpoint = `${baseUrl.replace(/\/+$/, "")}/data-purchase`;
 
+  // 🚀 STEP 10 — IMPLEMENT EXECUTION TIMESTAMP INTEGRITY
+  // Update state IMMEDIATELY BEFORE actual DataHub API request
+  await supabase.from("transactions").update({
+    vtu_status: VTU_STATUSES.PROVIDER_EXECUTION_STARTED,
+    provider_execution_started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }).eq("id", transaction.id);
+
+  // 🚀 STEP 9 — IMPLEMENT PROVIDER EXECUTION TRUTH LOGGING
   try {
+    console.log("=== REAL DATAHUB EXECUTION START ===");
     console.log(`🚀 [${executionId}] Calling Provider API...`);
     const response = await fetchWithRetry(endpoint, {
       method: "POST",
@@ -707,6 +707,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       timeout: 30000
     });
 
+    console.log("=== DATAHUB RESPONSE RECEIVED ===");
     const result = response.data;
     console.log(`📡 [${executionId}] Provider Response:`, response.status, JSON.stringify(result));
 

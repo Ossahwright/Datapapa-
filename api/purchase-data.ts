@@ -62,7 +62,9 @@ export default async function handler(req: any, res: any) {
             const { data: promoted } = await supabase
               .from('transactions')
               .update({ 
-                status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
+                status: PAYMENT_STATUSES.SUCCESS,
+                payment_status: PAYMENT_STATUSES.SUCCESS,
+                webhook_verified: true,
                 payment_verified_at: new Date().toISOString(),
                 updated_at: new Date().toISOString() 
               })

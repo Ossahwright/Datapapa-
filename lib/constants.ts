@@ -53,7 +53,8 @@ export const RECONCILIATION_STATES = Object.freeze({
   MANUAL_REVIEW_REQUIRED: "manual_review_required",
   AWAITING_PROVIDER_CONFIRMATION: "awaiting_provider_confirmation",
   COMPLETED: "completed",
-  FAILED: "failed"
+  FAILED: "failed",
+  PAYMENT_VERIFICATION_FAILED: "payment_verification_failed"
 });
 
 
