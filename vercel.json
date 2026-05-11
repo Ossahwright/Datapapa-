@@ -1,4 +1,8 @@
 {
   "buildCommand": "vite build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/paystack-webhook", "destination": "/api/paystack-webhook.ts" },
+    { "source": "/api/(.*)", "destination": "/api/$1" }
+  ]
 }

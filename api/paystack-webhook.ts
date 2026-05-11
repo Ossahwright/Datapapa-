@@ -7,38 +7,57 @@
 import { supabase, purchaseData } from '../lib/server-utils.js';
 import crypto from 'crypto';
 
+// 🛡️ Vercel Config: Need the raw body for Paystack signature verification
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// Helper to read the raw body from the request stream
+async function readRawBody(req: any): Promise<string> {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export default async function handler(req: any, res: any) {
   console.log("=== PAYSTACK WEBHOOK ROUTE HIT ===");
-  console.log("=== PAYSTACK WEBHOOK RECEIVED ===");
   
   // SUPPORTED METHODS ONLY
   if (req.method !== 'POST') {
     console.warn(`⚠️ [Webhook] Method ${req.method} not allowed`);
     return res.status(405).json({
-      error: "Method not allowed"
+      error: "Method not allowed. Webhook requires POST."
     });
   }
 
-  // STEP 1: VALIDATE PAYLOAD INTEGRITY
-  if (!req.body || !req.body.event || !req.body.data) {
-    console.error("❌ [Webhook] Malformed Payload Received");
-    return res.status(400).send("Malformed Payload");
-  }
+  const timestamp = new Date().toISOString();
+  console.log(`=== [${timestamp}] PAYSTACK WEBHOOK RECEIVED ===`);
 
   try {
     const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
     if (!PAYSTACK_SECRET_KEY) {
       console.error("❌ [Webhook] Missing PAYSTACK_SECRET_KEY");
-      return res.status(500).send("Misconfigured Server");
+      return res.status(500).send("Misconfigured Server: Missing Secret Key");
     }
 
-    // STEP 2: VERIFY PAYSTACK SIGNATURE AUTHORITATIVELY
-    const signature = req.headers["x-paystack-signature"];
-    const bodyStr = req.rawBody || JSON.stringify(req.body);
+    // STEP 5 — VERIFY RAW BODY HANDLING
+    // We read the raw body once and use it for both signature and JSON parsing
+    const rawBodyData = await readRawBody(req);
     
+    if (!rawBodyData) {
+      console.error("❌ [Webhook] Empty Body Received");
+      return res.status(400).send("Empty Payload");
+    }
+
+    // STEP 2 — VERIFY PAYSTACK SIGNATURE AUTHORITATIVELY
+    const signature = req.headers["x-paystack-signature"];
     const hash = crypto
       .createHmac("sha512", PAYSTACK_SECRET_KEY)
-      .update(bodyStr)
+      .update(rawBodyData)
       .digest("hex");
 
     if (hash !== signature) {
@@ -47,7 +66,21 @@ export default async function handler(req: any, res: any) {
     }
     console.log("=== PAYSTACK SIGNATURE VERIFIED ===");
 
-    const event = req.body;
+    // Parse the body now that we verified the signature
+    let event: any;
+    try {
+      event = JSON.parse(rawBodyData);
+    } catch (e: any) {
+      console.error("❌ [Webhook] Failed to parse JSON:", e.message);
+      return res.status(400).send("Invalid JSON");
+    }
+
+    // STEP 1 — HARDEN PAYSTACK WEBHOOK ENTRYPOINT
+    if (!event.event || !event.data) {
+      console.error("❌ [Webhook] Malformed Payload Structure");
+      return res.status(400).send("Malformed Payload Structure");
+    }
+
     if (event.event !== "charge.success") {
       console.log(`ℹ️ [Webhook] Ignoring event: ${event.event}`);
       return res.status(200).json({
@@ -65,7 +98,7 @@ export default async function handler(req: any, res: any) {
       try { metadata = JSON.parse(metadata); } catch(e) { /* ignore */ }
     }
 
-    // STEP 3: IMPLEMENT DETERMINISTIC TRANSACTION LOOKUP (STRICT FALLBACK PRIORITY)
+    // STEP 3 — IMPLEMENT DETERMINISTIC TRANSACTION LOOKUP
     console.log("=== TRANSACTION LOOKUP START ===");
     const transactionIdFromMetadata = metadata?.transaction_id;
     const paystackReference = reference;
@@ -83,7 +116,7 @@ export default async function handler(req: any, res: any) {
       if (tx) console.log(`=== TRANSACTION FOUND (Metadata ID: ${tx.id}) ===`);
     }
 
-    // Priority 2: paystack_receipt
+    // Priority 2: paystack_receipt (matching reference)
     if (!tx && paystackReference) {
       const { data } = await supabase
         .from("transactions")
@@ -119,7 +152,7 @@ export default async function handler(req: any, res: any) {
 
   } catch (error: any) {
     console.error("❌ [Webhook] Critical Failure:", error);
-    return res.status(500).send("Webhook Error");
+    return res.status(500).send("Webhook Execution Error: " + error.message);
   }
 }
 
