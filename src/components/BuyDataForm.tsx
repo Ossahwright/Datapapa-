@@ -342,7 +342,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       // 🚀 THE MAGIC: SYNCHRONOUS TRIGGER
       // No awaits, no fetches, no delays. Direct from user event.
       initializePayment({
-        config: paystackConfig,
         onSuccess: handlePaymentSuccess, 
         onClose: handlePaymentClose
       });
