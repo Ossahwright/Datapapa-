@@ -8,10 +8,16 @@ import { supabase, purchaseData } from '../../lib/server-utils.js';
 import crypto from 'crypto';
 
 export default async function handler(req: any, res: any) {
-  console.log("=== WEBHOOK RECEIVED ===");
+  console.log("=== PAYSTACK WEBHOOK RECEIVED ===");
   
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
+  }
+
+  // STEP 1: VALIDATE PAYLOAD INTEGRITY
+  if (!req.body || !req.body.event || !req.body.data) {
+    console.error("❌ [Webhook] Malformed Payload Received");
+    return res.status(400).send("Malformed Payload");
   }
 
   try {
@@ -21,7 +27,7 @@ export default async function handler(req: any, res: any) {
       return res.status(500).send("Misconfigured Server");
     }
 
-    // 1. SIGNATURE VERIFICATION (STRICT)
+    // 2. SIGNATURE VERIFICATION (STRICT)
     const signature = req.headers["x-paystack-signature"];
     const bodyStr = req.rawBody || JSON.stringify(req.body);
     
@@ -31,9 +37,10 @@ export default async function handler(req: any, res: any) {
       .digest("hex");
 
     if (hash !== signature) {
-      console.error("❌ [Webhook] Invalid Signature Detected");
+      console.error("❌ [Webhook] INVALID PAYSTACK SIGNATURE");
       return res.status(401).send("Invalid Signature");
     }
+    console.log("=== PAYSTACK SIGNATURE VERIFIED ===");
 
     const event = req.body;
     if (event.event !== "charge.success") {
@@ -50,30 +57,51 @@ export default async function handler(req: any, res: any) {
       try { metadata = JSON.parse(metadata); } catch(e) { /* ignore */ }
     }
 
-    const transactionId = metadata?.transaction_id;
-    console.log(`🔗 Correlating reference: ${reference} -> Tx: ${transactionId}`);
+    // 3. DETERMINISTIC TRANSACTION LOOKUP (STRICT FALLBACK PRIORITY)
+    console.log("=== TRANSACTION LOOKUP START ===");
+    const transactionIdFromMetadata = metadata?.transaction_id;
+    const paystackReference = reference;
+    
+    let tx = null;
 
-    // 2. TRANSACTION RETRIEVAL
-    const { data: tx, error: fetchError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("id", transactionId)
-      .single();
-
-    if (fetchError || !tx) {
-      // Fallback search by reference if metadata correlation fails
-      const { data: fallbackTx } = await supabase
+    // Priority 1: metadata.transaction_id
+    if (transactionIdFromMetadata) {
+      const { data } = await supabase
         .from("transactions")
         .select("*")
-        .eq("internal_reference", reference)
+        .eq("id", transactionIdFromMetadata)
         .maybeSingle();
-      
-      if (!fallbackTx) {
-        console.error("❌ [Webhook] Potential Orphaned Payment. No match for reference:", reference);
-        // Important: Still return 200 to Paystack so they stop retrying, but log for admin.
-        return res.status(200).send("Orphaned Payment Logged");
-      }
-      return processTransaction(fallbackTx, paystackData, res);
+      tx = data;
+      if (tx) console.log(`=== TRANSACTION FOUND (Metadata ID: ${tx.id}) ===`);
+    }
+
+    // Priority 2: paystack_receipt
+    if (!tx && paystackReference) {
+      const { data } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("paystack_receipt", paystackReference)
+        .maybeSingle();
+      tx = data;
+      if (tx) console.log(`=== TRANSACTION FOUND (Paystack RefMatch ID: ${tx.id}) ===`);
+    }
+
+    // Priority 3: reference (internal_reference)
+    if (!tx && paystackReference) {
+      const { data } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("internal_reference", paystackReference)
+        .maybeSingle();
+      tx = data;
+      if (tx) console.log(`=== TRANSACTION FOUND (Internal RefMatch ID: ${tx.id}) ===`);
+    }
+
+    if (!tx) {
+      console.error("=== TRANSACTION NOT FOUND ===");
+      console.error("❌ [Webhook] Potential Orphaned Payment. No match for reference:", reference);
+      // Important: Still return 200 to Paystack so they stop retrying, but log for admin.
+      return res.status(200).send("Orphaned Payment Logged");
     }
 
     return processTransaction(tx, paystackData, res);
@@ -85,79 +113,81 @@ export default async function handler(req: any, res: any) {
 }
 
 async function processTransaction(tx: any, paystackData: any, res: any) {
-  // 3. IDEMPOTENCY PROTECTION
-  if (tx.status === 'fulfilled' || tx.status === 'fulfillment_processing' || tx.webhook_verified) {
-    console.log(`♻️ [Idempotency] Transaction ${tx.id} already processed.`);
+  // 10. IDEMPOTENCY PROTECTION
+  if (tx.payment_status === "success" && tx.provider_execution_started_at) {
+    console.log(`♻️ === DUPLICATE WEBHOOK IGNORED (Tx: ${tx.id}) ===`);
     return res.status(200).send("Already Processed");
   }
 
-  console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> payment_success`);
+  // If already fulfilled, definitely ignore
+  if (tx.status === 'fulfilled' || tx.vtu_status === 'delivered') {
+    console.log(`♻️ [Idempotency] Transaction ${tx.id} already fulfilled.`);
+    return res.status(200).send("Already Processed");
+  }
 
-    console.log("=== PAYMENT STATUS PROMOTED ===");
-    console.log("=== VTU EXECUTION STARTED ===");
+  console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> success`);
 
-  // 4. ATOMIC UPDATE TO SUCCESS
-  // We only update if the transaction is still in a pre-payment state
-  const { data: updatedTx, error: updateError } = await supabase
+  // 4. STRICT PAYMENT STATUS PROMOTION
+  const { error: updateError } = await supabase
     .from("transactions")
     .update({
-      status: "success", // STATE MACHINE
+      status: "success", // AUTHORITATIVE PROMOTION
+      payment_status: "success",
       paystack_receipt: paystackData.reference,
       webhook_verified: true,
-      payment_status: "success", // Also update payment_status if it exists
-      vtu_status: "pending",
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", tx.id)
-    .in("status", ["initialized", "payment_pending"])
-    .select()
-    .single();
+    .in("status", ["initialized", "payment_pending", "pending"]); // Allow pending too for safety
 
-  if (updateError || !updatedTx) {
-    // If updateError is null but updatedTx is null, it means the status already moved (idempotency)
-    if (!updateError && !updatedTx) {
-       console.log(`♻️ [Idempotency] Transaction ${tx.id} already moved past payment_pending.`);
-       return res.status(200).send("Already Processed");
-    }
+  if (updateError) {
     console.error("❌ [Webhook] Failed to update payment status:", updateError);
     return res.status(500).send("DB Error");
   }
 
-  // 5. QUEUE FULFILLMENT (IMMEDIATE EXECUTION IN THIS SERVERLESS CONTEXT)
-  console.log("=== FULFILLMENT QUEUED ===");
+  // 5. VERIFY DATABASE PERSISTENCE (STRICT RE-FETCH)
+  const { data: updatedTx, error: verifyError } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('id', tx.id)
+    .single();
+
+  if (verifyError || !updatedTx) {
+    console.error("❌ [Webhook] Convergence Verification Failed:", verifyError);
+    return res.status(500).send("Database Verification Failed");
+  }
+
+  console.log("=== PAYMENT STATUS PROMOTED ===");
+  console.log(`Validated Status: ${updatedTx.payment_status} | Status: ${updatedTx.status}`);
+
+  // 6. AUTOMATIC VTU EXECUTION
+  console.log("=== VTU EXECUTION STARTED ===");
   
   try {
-    // 6. TELECOM EXECUTION
-    // purchaseData now handles its own atomic fulfillment_processing lock internally
+    // purchaseData handles its own atomicity for fulfillment_processing
     const result = await purchaseData(updatedTx, "paystack_v2_webhook");
     
     if (result.success) {
-      console.log("=== TRANSACTION COMPLETED ===");
-      await supabase.from("transactions").update({ 
-        status: "fulfilled", // FINAL STATE
-        delivery_status: "delivered",
-        vtu_status: "delivered",
-        updated_at: new Date().toISOString()
-      }).eq("id", tx.id);
+      console.log("=== TRANSACTION COMPLETED (SUCCESS) ===");
+      return res.status(200).send("OK");
     } else {
-      console.error("❌ [Fulfillment] Telecom Provider Rejection:", result.error);
+      console.error("❌ [Webhook] VTU Execution Failed:", result.error);
+      // STEP 11: Persist failures safely
       await supabase.from("transactions").update({ 
-        status: "failed",
+        reconciliation_state: "payment_verified_execution_failed",
         error_message: result.error,
-        delivery_status: "failed",
-        vtu_status: "failed",
         updated_at: new Date().toISOString()
       }).eq("id", tx.id);
+      return res.status(200).send("Payment Proccessed, VTU Failed Managed");
     }
   } catch (error: any) {
-    console.error("❌ [Fulfillment] Execution Unhandled Crash:", error);
+    console.error("❌ [Webhook] Critical VTU Unhandled Crash:", error);
     await supabase.from("transactions").update({ 
-      status: "failed",
+      reconciliation_state: "payment_verified_execution_failed",
       error_message: "Fulfillment system crash: " + error.message,
       updated_at: new Date().toISOString()
     }).eq("id", tx.id);
+    return res.status(200).send("Payment Proccessed, Execution Crashed Managed");
   }
-
-  return res.status(200).send("OK");
 }

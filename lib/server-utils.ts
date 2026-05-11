@@ -573,48 +573,38 @@ export async function reconcileTransaction(transactionId: string) {
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
-  console.log("=== purchaseData ENTERED ===");
+  console.log("=== VTU EXECUTION STARTED ===");
   console.log("Transaction:", transaction.id);
   console.log("Source:", source);
 
   // 🚀 FORENSIC TRACING: START
   const executionId = Math.random().toString(36).substring(7);
   console.log(`=== [${executionId}] PROVIDER EXECUTION START ===`);
-  console.log({
-    source,
-    transaction_id: transaction.id,
-    recipient: transaction.recipient_phone,
-    networkKey: transaction.network,
-    capacity: transaction.capacity,
-    timestamp: new Date().toISOString()
-  });
-
-  console.log("=== DATAHUB EXECUTION START ===");
   
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
   if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === 'delivered') {
-    console.log(`📡 [${executionId}] Transaction has provider footprint. Switching to Reconciliation mode.`);
+    console.log(`📡 [${executionId}] Transaction has provider footprint. Skipping to Reconciliation mode.`);
     return reconcileTransaction(transaction.id);
   }
 
   // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
-  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api"];
+  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api", "paystack_v2_webhook"];
   if (!allowedSources.includes(source)) {
     throw new Error(`Unauthorized purchase execution source: ${source}`);
   }
 
-  // 🛡️ STEP 3: PAYMENT VERIFICATION
-  const isPaid = transaction.status === "payment_success" || transaction.status === "success" || transaction.status === "fulfilled";
+  // 🛡️ STEP 3: STRICT PAYMENT VERIFICATION
+  // The user requested: STRICTLY require: transaction.status === "success"
+  const isPaid = transaction.status === "success";
   
   if (!isPaid) {
-    const error = `Safety Block: Cannot fulfill unpaid transaction. Status: ${transaction.status}`;
+    const error = `Safety Block: Cannot fulfill transaction. Must be 'success'. Current: ${transaction.status}`;
     console.error(`❌ [${executionId}] ${error}`);
     throw new Error(error);
   }
 
   // 🛡️ STEP 3.5: ATOMIC FULFILLMENT LOCK
-  // We only proceed if we can successfully transition from payment_success to fulfillment_processing
-  // This prevents double-fulfillment from race conditions between API and Webhook
+  // We transition from 'success' to 'fulfillment_processing'
   const { data: lockedTx, error: lockError } = await supabase
     .from("transactions")
     .update({ 
@@ -624,12 +614,12 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
-    .in("status", ["payment_success", "success"])
+    .eq("status", "success")
     .select()
     .single();
 
   if (lockError || !lockedTx) {
-    console.log(`📡 [${executionId}] Transaction already in progress or fulfilled. Switching to reconciliation.`);
+    console.log(`📡 [${executionId}] Transaction already locked or moved. Switching to reconciliation.`);
     return reconcileTransaction(transaction.id);
   }
 

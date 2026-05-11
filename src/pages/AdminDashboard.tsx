@@ -38,6 +38,8 @@ import {
   Unlock,
   BarChart3,
   ShieldAlert,
+  Trash2,
+  XCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
@@ -165,6 +167,56 @@ export default function AdminDashboard() {
     failed: 0,
   });
   const [rows, setRows] = useState<any[]>([]);
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  const toggleSelectTx = (id: string) => {
+    setSelectedTxIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedTxIds.size === transactions.length && transactions.length > 0) {
+      setSelectedTxIds(new Set());
+    } else {
+      setSelectedTxIds(new Set(transactions.map((t) => t.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedTxIds.size === 0) return;
+    if (
+      !confirm(
+        `Are you sure you want to delete ${selectedTxIds.size} transactions? This cannot be undone.`,
+      )
+    )
+      return;
+
+    setIsBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedTxIds);
+      const { error } = await supabase
+        .from("transactions")
+        .delete()
+        .in("id", ids);
+
+      if (error) throw error;
+
+      toast.success(`${selectedTxIds.size} transactions deleted successfully`);
+      setSelectedTxIds(new Set());
+      fetchTransactions();
+      fetchDashboardStats();
+    } catch (err: any) {
+      console.error("Bulk delete failed:", err);
+      toast.error("Failed to delete transactions: " + err.message);
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
 
   const [providerSettings, setProviderSettings] = useState<any>(null);
 
@@ -413,6 +465,18 @@ export default function AdminDashboard() {
 
           // Trigger a re-fetch to respect pagination and filters
           window.dispatchEvent(new CustomEvent('refetch-transactions'));
+
+          const updatedTx = payload.new as any;
+
+          // 🚀 DIRECT STATE UPDATE FOR REALTIME FEEL
+          if (payload.eventType === "UPDATE") {
+            setTransactions((prev) => 
+              prev.map((t) => t.id === updatedTx.id ? { ...t, ...updatedTx } : t)
+            );
+            setRows((prev) => 
+               prev.map((t) => t.id === updatedTx.id ? { ...t, ...updatedTx } : t)
+            );
+          }
 
           // Check if it's a failure event
           const newTx = payload.new as any;
@@ -2358,6 +2422,19 @@ export default function AdminDashboard() {
                   <FilterX size={18} />
                   <span className="text-xs font-bold hidden group-hover:inline transition-all">Clear</span>
                 </button>
+
+                {selectedTxIds.size > 0 && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    onClick={handleBulkDelete}
+                    disabled={isBulkDeleting}
+                    className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-100 disabled:opacity-50"
+                  >
+                    <Trash2 size={18} />
+                    {isBulkDeleting ? "Deleting..." : `Delete ${selectedTxIds.size} Selected`}
+                  </motion.button>
+                )}
               </div>
             </header>
 
@@ -2366,6 +2443,16 @@ export default function AdminDashboard() {
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
+                      <th className="px-6 py-4">
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedTxIds.size === transactions.length && transactions.length > 0}
+                            onChange={toggleSelectAll}
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 transition-all cursor-pointer"
+                          />
+                        </div>
+                      </th>
                       <th className="px-6 py-4">Internal Ref</th>
                       <th className="px-6 py-4">Date & Time</th>
                       <th className="px-6 py-4">Provider Ref</th>
@@ -2384,7 +2471,7 @@ export default function AdminDashboard() {
                     {isLoadingTransactions ? (
                       <tr>
                         <td
-                          colSpan={12}
+                          colSpan={13}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
@@ -2394,7 +2481,7 @@ export default function AdminDashboard() {
                     ) : transactions.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={12}
+                          colSpan={13}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
@@ -2407,8 +2494,18 @@ export default function AdminDashboard() {
                         return (
                           <tr
                             key={tx.id}
-                            className={`hover:bg-slate-50/50 transition-colors ${stuck ? "bg-amber-50/30" : ""}`}
+                            className={`hover:bg-slate-50/50 transition-colors ${stuck ? "bg-amber-50/30" : ""} ${selectedTxIds.has(tx.id) ? "bg-indigo-50/40" : ""}`}
                           >
+                            <td className="px-6 py-4">
+                              <div className="flex items-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedTxIds.has(tx.id)}
+                                  onChange={() => toggleSelectTx(tx.id)}
+                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 transition-all cursor-pointer"
+                                />
+                              </div>
+                            </td>
                             <td className="px-6 py-4 font-mono text-xs text-slate-500">
                               {(tx.internal_reference || tx.id).substring(0, 8)}...
                               {(tx.internal_reference || tx.id).substring((tx.internal_reference || tx.id).length - 4)}
