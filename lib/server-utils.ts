@@ -15,6 +15,14 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 
 import { findNetworkConfig } from './networkConfig.js';
 import { BUNDLE_CONFIG } from './bundleConfig.js';
+import { 
+  PAYMENT_STATUSES, 
+  VTU_STATUSES, 
+  EXECUTION_SOURCES, 
+  RECONCILIATION_STATES, 
+  NETWORK_KEYS, 
+  LOG_MARKERS 
+} from './constants.js';
 
 export const apiClient = axios.create({
   httpAgent,
@@ -400,17 +408,7 @@ Ref: ${tx.provider_reference || tx.reference || tx.id}
 
 import { calculateExecutionMetrics } from './metrics.js';
 
-export const VTU_STATUSES = {
-  PENDING: 'pending',
-  SUCCESS: 'success',
-  PROVIDER_ACCEPTED: 'provider_accepted',
-  AWAITING_PROVIDER_CONFIRMATION: 'awaiting_provider_confirmation',
-  DELIVERED: 'delivered',
-  PROVIDER_REJECTED: 'provider_rejected',
-  RECONCILIATION_PENDING: 'reconciliation_pending',
-  MANUAL_REVIEW_REQUIRED: 'manual_review_required',
-  DELAYED_PROCESSING: 'delayed_provider_processing'
-};
+// Removed duplicated VTU_STATUSES - now imported from constants.js
 
 // Polling helper with exponential backoff for 429s
 async function fetchWithRetry(endpoint: string, options: any, maxRetries = 3) {
@@ -504,37 +502,37 @@ export async function reconcileTransaction(transactionId: string) {
   const timestamp = new Date().toISOString();
 
   // 🛡️ STEP 1: Paystack Truth
-  if (tx.status === "pending" && tx.paystack_receipt) {
+  if (tx.status === PAYMENT_STATUSES.PENDING && tx.paystack_receipt) {
     try {
       const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
       });
-      if (psRes.data?.data?.status === "success") {
+      if (psRes.data?.data?.status === PAYMENT_STATUSES.SUCCESS) {
         await supabase.from("transactions").update({ 
-          status: "payment_success", 
+          status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
           payment_verified_at: timestamp, 
           updated_at: timestamp 
         }).eq("id", transactionId);
         
         const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
-        if (updatedTx) await purchaseData(updatedTx, "reconciliation_sync");
-        return { success: true, status: "payment_success" };
+        if (updatedTx) await purchaseData(updatedTx, EXECUTION_SOURCES.RECONCILIATION_ENGINE);
+        return { success: true, status: PAYMENT_STATUSES.PAYMENT_SUCCESS };
       }
     } catch (err) {}
   }
 
   // 🛡️ STEP 2: Active Polling
-  const isWaiting = ["provider_accepted", "awaiting_provider_confirmation", "processing", "provider_execution_started", "delayed_provider_processing"].includes(tx.vtu_status);
+  const isWaiting = [VTU_STATUSES.PROVIDER_ACCEPTED, VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, VTU_STATUSES.PROCESSING, VTU_STATUSES.PROVIDER_EXECUTION_STARTED, VTU_STATUSES.DELAYED_PROVIDER_PROCESSING].includes(tx.vtu_status);
   if (isWaiting) {
     const poll = await checkProviderTransactionStatus(tx);
     if (poll.success && (poll.isSuccess || poll.isFailed)) {
-      const vtuStatus = poll.isSuccess ? "delivered" : "provider_rejected";
-      const finalStatus = poll.isSuccess ? "fulfilled" : "failed";
+      const vtuStatus = poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.PROVIDER_REJECTED;
+      const finalStatus = poll.isSuccess ? VTU_STATUSES.FULFILLED : PAYMENT_STATUSES.FAILED;
 
       await supabase.from("transactions").update({
         status: finalStatus,
         vtu_status: vtuStatus,
-        delivery_status: poll.isSuccess ? "delivered" : "failed",
+        delivery_status: poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED,
         delivered_at: poll.isSuccess ? timestamp : null,
         reconciliation_completed_at: poll.isSuccess ? timestamp : null,
         updated_at: timestamp,
@@ -559,7 +557,7 @@ export async function reconcileTransaction(transactionId: string) {
     let newVtuStatus = tx.vtu_status;
     if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED;
     else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING;
-    else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROCESSING;
+    else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROVIDER_PROCESSING;
 
     if (newVtuStatus !== tx.vtu_status) {
         await supabase.from("transactions").update({ vtu_status: newVtuStatus, updated_at: timestamp }).eq("id", transactionId);
@@ -572,8 +570,8 @@ export async function reconcileTransaction(transactionId: string) {
 
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
-export async function purchaseData(transaction: any, source: PurchaseSource | string = "unknown") {
-  console.log("=== VTU EXECUTION STARTED ===");
+export async function purchaseData(transaction: any, source: string = "unknown") {
+  console.log(LOG_MARKERS.VTU_EXECUTION_STARTED);
   console.log("Transaction:", transaction.id);
   console.log("Source:", source);
 
@@ -582,23 +580,28 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   console.log(`=== [${executionId}] PROVIDER EXECUTION START ===`);
   
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
-  if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === 'delivered') {
+  if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === VTU_STATUSES.DELIVERED) {
     console.log(`📡 [${executionId}] Transaction has provider footprint. Skipping to Reconciliation mode.`);
     return reconcileTransaction(transaction.id);
   }
 
   // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
-  const allowedSources = ["paystack_webhook", "manual_retry", "direct_api", "paystack_v2_webhook"];
-  if (!allowedSources.includes(source)) {
+  const allowedSources = [
+    EXECUTION_SOURCES.PAYSTACK_WEBHOOK, 
+    EXECUTION_SOURCES.ADMIN_RETRY, 
+    EXECUTION_SOURCES.DIRECT_API, 
+    EXECUTION_SOURCES.MANUAL_RETRY
+  ];
+  if (!allowedSources.includes(source as any)) {
     throw new Error(`Unauthorized purchase execution source: ${source}`);
   }
 
   // 🛡️ STEP 3: STRICT PAYMENT VERIFICATION
   // The user requested: STRICTLY require: transaction.status === "success"
-  const isPaid = transaction.status === "success";
+  const isPaid = transaction.status === PAYMENT_STATUSES.SUCCESS;
   
   if (!isPaid) {
-    const error = `Safety Block: Cannot fulfill transaction. Must be 'success'. Current: ${transaction.status}`;
+    const error = `Safety Block: Cannot fulfill transaction. Must be '${PAYMENT_STATUSES.SUCCESS}'. Current: ${transaction.status}`;
     console.error(`❌ [${executionId}] ${error}`);
     throw new Error(error);
   }
@@ -608,13 +611,13 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   const { data: lockedTx, error: lockError } = await supabase
     .from("transactions")
     .update({ 
-      status: 'fulfillment_processing',
-      vtu_status: 'processing',
+      status: VTU_STATUSES.FULFILLMENT_PROCESSING,
+      vtu_status: VTU_STATUSES.PROCESSING,
       provider_execution_started_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
-    .eq("status", "success")
+    .eq("status", PAYMENT_STATUSES.SUCCESS)
     .select()
     .single();
 
@@ -663,11 +666,11 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
 
   // 📦 Network Numeric Mapping (for DataHub API variants)
   const networkNumericMapping: Record<string, string> = {
-    'YELLO': '1',
-    'VODA': '2',
-    'TELECEL': '2',
-    'AT_PREMIUM': '3',
-    'AT_BIGTIME': '3'
+    [NETWORK_KEYS.MTN]: '1',
+    [NETWORK_KEYS.VODA]: '2',
+    [NETWORK_KEYS.TELECEL]: '2',
+    [NETWORK_KEYS.AT_PREMIUM]: '3',
+    [NETWORK_KEYS.AT_BIGTIME]: '3'
   };
   const networkId = networkNumericMapping[networkKey] || "1";
 
@@ -730,14 +733,14 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
-          status: 'fulfillment_processing',
+          status: VTU_STATUSES.FULFILLMENT_PROCESSING,
           vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
           provider_reference: providerReference || transaction.id,
           external_reference: externalRef, // Using our cleaner searchable ref
           internal_reference: transaction.id,
           provider_payload: result,
           provider_accepted_at: acceptanceTime,
-          reconciliation_state: VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION,
+          reconciliation_state: RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION,
           api_response: result,
           updated_at: new Date().toISOString()
         })
@@ -774,8 +777,8 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
     
     try {
       await supabase.from("transactions").update({ 
-        status: 'failed',
-        vtu_status: 'provider_rejected', 
+        status: PAYMENT_STATUSES.FAILED,
+        vtu_status: VTU_STATUSES.PROVIDER_REJECTED, 
         error_message: lastError,
         updated_at: new Date().toISOString(),
         api_response: result
@@ -794,7 +797,7 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
       // In case of connection failure, we DON'T mark as failed if we don't know for sure
       // We let it sit in manual_review_required for reconciliation
       await supabase.from("transactions").update({ 
-        vtu_status: 'manual_review_required', 
+        vtu_status: VTU_STATUSES.MANUAL_REVIEW_REQUIRED, 
         error_message: `Fatal Execution Error: ${err.message}`,
         updated_at: new Date().toISOString()
       }).eq("id", transaction.id);

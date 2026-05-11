@@ -9,6 +9,11 @@ import { openWhatsApp } from '../lib/whatsapp';
 import { NETWORK_CONFIG, NETWORKS, findNetworkConfig } from '../lib/networkConfig';
 import { BUNDLE_CONFIG, findNormalizedBundle } from '../lib/bundleConfig';
 import { TransactionReceiptCard, TransactionStatus } from './payment/TransactionReceiptCard';
+import { 
+  API_ROUTES, 
+  PAYMENT_STATUSES, 
+  VTU_STATUSES 
+} from '../../lib/constants';
 
 interface BuyDataFormProps {
   settings: {
@@ -176,12 +181,17 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           .maybeSingle();
 
         if (updated) {
-          if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
+          if (updated.delivery_status === VTU_STATUSES.DELIVERED || 
+              updated.vtu_status === VTU_STATUSES.DELIVERED || 
+              updated.vtu_status === VTU_STATUSES.SUCCESS) {
             setDeliveryStatus("delivered");
             clearInterval(pollingInterval);
-          } else if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
+          } else if (updated.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED || 
+                     updated.vtu_status === "awaiting_provider_confirmation") {
             setDeliveryStatus("processing");
-          } else if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected" || updated.vtu_status === "failed") {
+          } else if (updated.delivery_status === VTU_STATUSES.FAILED || 
+                     updated.vtu_status === VTU_STATUSES.PROVIDER_REJECTED || 
+                     updated.vtu_status === VTU_STATUSES.FAILED) {
             setDeliveryStatus("failed");
             clearInterval(pollingInterval);
           }
@@ -211,12 +221,17 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           console.log("🔄 REALTIME UPDATE VISIBLE:", payload);
           const updated = payload.new;
           if (updated.internal_reference === transactionId || updated.id === transactionId) {
-            if (updated.delivery_status === "delivered" || updated.vtu_status === "delivered" || updated.vtu_status === "success") {
+            if (updated.delivery_status === VTU_STATUSES.DELIVERED || 
+                updated.vtu_status === VTU_STATUSES.DELIVERED || 
+                updated.vtu_status === VTU_STATUSES.SUCCESS) {
               setDeliveryStatus("delivered");
               clearInterval(pollingInterval);
-            } else if (updated.vtu_status === "provider_accepted" || updated.vtu_status === "awaiting_provider_confirmation") {
+            } else if (updated.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED || 
+                       updated.vtu_status === "awaiting_provider_confirmation") {
               setDeliveryStatus("processing");
-            } else if (updated.delivery_status === "failed" || updated.vtu_status === "provider_rejected" || updated.vtu_status === "failed") {
+            } else if (updated.delivery_status === VTU_STATUSES.FAILED || 
+                       updated.vtu_status === VTU_STATUSES.PROVIDER_REJECTED || 
+                       updated.vtu_status === VTU_STATUSES.FAILED) {
               setDeliveryStatus("failed");
               clearInterval(pollingInterval);
             }
@@ -322,7 +337,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       console.log("📝 [Async] Recording intent for ref:", ref);
       const { data: { user } } = await supabase.auth.getUser();
       
-      const response = await fetch("/api/paystack/initialize", {
+      const response = await fetch(API_ROUTES.PAYSTACK_INITIALIZE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

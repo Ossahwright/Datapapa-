@@ -5,6 +5,7 @@
  */
 
 import { supabase, purchaseData } from '../lib/server-utils.js';
+import { PAYMENT_STATUSES, EXECUTION_SOURCES, RECONCILIATION_STATES, LOG_MARKERS } from '../lib/constants.js';
 import crypto from 'crypto';
 
 // 🛡️ Vercel Config: Need the raw body for Paystack signature verification
@@ -24,7 +25,7 @@ async function readRawBody(req: any): Promise<string> {
 }
 
 export default async function handler(req: any, res: any) {
-  console.log("=== PAYSTACK WEBHOOK ROUTE HIT ===");
+  console.log(LOG_MARKERS.PAYSTACK_WEBHOOK_HIT);
   
   // SUPPORTED METHODS ONLY
   if (req.method !== 'POST') {
@@ -158,7 +159,7 @@ export default async function handler(req: any, res: any) {
 
 async function processTransaction(tx: any, paystackData: any, res: any) {
   // STEP 10: IMPLEMENT WEBHOOK IDEMPOTENCY
-  if (tx.payment_status === "success" && tx.provider_execution_started_at) {
+  if (tx.payment_status === PAYMENT_STATUSES.SUCCESS && tx.provider_execution_started_at) {
     console.log(`♻️ === DUPLICATE WEBHOOK IGNORED (Tx: ${tx.id}) ===`);
     return res.status(200).json({
       success: true,
@@ -175,21 +176,21 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     });
   }
 
-  console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> success`);
+  console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> ${PAYMENT_STATUSES.SUCCESS}`);
 
   // STEP 4: STRICT PAYMENT STATUS PROMOTION
   const { error: updateError } = await supabase
     .from("transactions")
     .update({
-      status: "success", // AUTHORITATIVE PROMOTION
-      payment_status: "success",
+      status: PAYMENT_STATUSES.SUCCESS, // AUTHORITATIVE PROMOTION
+      payment_status: PAYMENT_STATUSES.SUCCESS,
       paystack_receipt: paystackData.reference,
       webhook_verified: true,
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", tx.id)
-    .in("status", ["initialized", "payment_pending", "pending"]); // Allow pending too for safety
+    .in("status", [PAYMENT_STATUSES.INITIALIZED, PAYMENT_STATUSES.PAYMENT_PENDING, PAYMENT_STATUSES.PENDING]); // Allow pending too for safety
 
   if (updateError) {
     console.error("❌ [Webhook] Failed to update payment status:", updateError);
@@ -212,15 +213,15 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     });
   }
 
-  console.log("=== PAYMENT STATUS PROMOTED ===");
+  console.log(LOG_MARKERS.PAYMENT_PROMOTED);
   console.log(`Validated Status: ${updatedTx.payment_status} | Status: ${updatedTx.status}`);
 
   // STEP 6: AUTOMATIC VTU EXECUTION
-  console.log("=== VTU EXECUTION STARTED ===");
+  console.log(LOG_MARKERS.VTU_EXECUTION_STARTED);
   
   try {
     // purchaseData handles its own atomicity for fulfillment_processing
-    const result = await purchaseData(updatedTx, "paystack_v2_webhook");
+    const result = await purchaseData(updatedTx, EXECUTION_SOURCES.PAYSTACK_WEBHOOK);
     
     if (result.success) {
       console.log("=== TRANSACTION COMPLETED (SUCCESS) ===");
@@ -232,7 +233,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
       console.error("❌ [Webhook] VTU Execution Failed:", result.error);
       // STEP 11: Persist failures safely
       await supabase.from("transactions").update({ 
-        reconciliation_state: "payment_verified_execution_failed",
+        reconciliation_state: RECONCILIATION_STATES.PAYMENT_VERIFIED_EXECUTION_FAILED,
         error_message: result.error,
         updated_at: new Date().toISOString()
       }).eq("id", tx.id);
@@ -244,7 +245,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
   } catch (error: any) {
     console.error("❌ [Webhook] Critical VTU Unhandled Crash:", error);
     await supabase.from("transactions").update({ 
-      reconciliation_state: "payment_verified_execution_failed",
+      reconciliation_state: RECONCILIATION_STATES.PAYMENT_VERIFIED_EXECUTION_FAILED,
       error_message: "Fulfillment system crash: " + error.message,
       updated_at: new Date().toISOString()
     }).eq("id", tx.id);

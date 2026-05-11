@@ -44,6 +44,13 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
 import { calculateExecutionMetrics } from "../../lib/metrics";
+import { 
+  API_ROUTES, 
+  PAYMENT_STATUSES, 
+  VTU_STATUSES, 
+  RECONCILIATION_STATES, 
+  NETWORK_KEYS 
+} from "../../lib/constants";
 
 export default function AdminDashboard() {
   const [user, setUser] = useState<any>(null);
@@ -396,13 +403,15 @@ export default function AdminDashboard() {
           const revenue = txs.reduce((sum, tx) => sum + Number(tx.amount), 0);
           const success = txs.filter(
             (tx) =>
-              tx.delivery_status === "delivered" ||
-              tx.vtu_status === "success" ||
-              tx.vtu_status === "delivered",
+              tx.delivery_status === VTU_STATUSES.DELIVERED ||
+              tx.vtu_status === VTU_STATUSES.SUCCESS ||
+              tx.vtu_status === VTU_STATUSES.DELIVERED,
           ).length;
           const failed = txs.filter(
             (tx) =>
-              tx.delivery_status === "failed" || tx.vtu_status === "failed",
+              tx.delivery_status === VTU_STATUSES.FAILED || 
+              tx.vtu_status === VTU_STATUSES.FAILED ||
+              tx.vtu_status === VTU_STATUSES.PROVIDER_REJECTED,
           ).length;
           setKpi({ total, revenue, success, failed });
         }
@@ -417,8 +426,8 @@ export default function AdminDashboard() {
         .gte("created_at", todayDate.toISOString());
 
       if (logsData) {
-        const success = logsData.filter(log => log.status === "success").length;
-        const failed = logsData.filter(log => log.status === "failed").length;
+        const success = logsData.filter(log => log.status === VTU_STATUSES.SUCCESS).length;
+        const failed = logsData.filter(log => log.status === VTU_STATUSES.FAILED).length;
         const blocked = logsData.filter(log => log.status === "blocked_source").length;
         setProviderMetrics({ success, failed, blocked });
       }
@@ -546,10 +555,10 @@ export default function AdminDashboard() {
     const diff = Date.now() - new Date(t.created_at).getTime();
     // 🛡️ REPRODUCED CALM TIMING: 45 minute grace period
     const isProcessingTooLong =
-      t.vtu_status === "processing" && diff > 45 * 60 * 1000;
+      t.vtu_status === VTU_STATUSES.PROCESSING && diff > 45 * 60 * 1000;
     const isPendingTooLong =
       (t.vtu_status === "pending" || !t.vtu_status) &&
-      (t.status === "paid" || t.status === "success") &&
+      (t.status === PAYMENT_STATUSES.PAID || t.status === PAYMENT_STATUSES.PAYMENT_SUCCESS) &&
       diff > 45 * 60 * 1000;
     return isProcessingTooLong || isPendingTooLong;
   };
@@ -1224,7 +1233,7 @@ export default function AdminDashboard() {
     try {
       const { data: session } = await supabase.auth.getSession();
       const headers = session?.session?.access_token ? { Authorization: `Bearer ${session.session.access_token}` } : {};
-      await axios.post("/api/bulk-reconcile", {}, { headers });
+      await axios.post(API_ROUTES.BULK_RECONCILE, {}, { headers });
       await fetchTransactions(); // Refresh all
     } catch (err) {
       console.error("Bulk sync failed:", err);
@@ -1349,7 +1358,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post("/api/retry-vtu", { transactionId }, { headers });
+      const res = await axios.post(API_ROUTES.RETRY_VTU, { transactionId }, { headers });
       if (res.data.success === false) {
         alert(res.data.message || res.data.error || "Retry not allowed");
       } else {
@@ -1376,7 +1385,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post("/api/reconcile-tx", { transactionId }, { headers });
+      const res = await axios.post(API_ROUTES.RECONCILE_TX, { transactionId }, { headers });
       if (res.data.success) {
         alert("Status Sync Complete: " + (res.data.status || "Updated"));
       } else {
@@ -1413,7 +1422,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post("/api/admin-tx-action", { 
+      const res = await axios.post(API_ROUTES.ADMIN_TX_ACTION, { 
         action: 'mark_delivered', 
         transactionId: txId 
       }, { headers });
@@ -1437,7 +1446,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post("/api/admin-tx-action", { 
+      const res = await axios.post(API_ROUTES.ADMIN_TX_ACTION, { 
         action: 'delete', 
         transactionId: txId 
       }, { headers });

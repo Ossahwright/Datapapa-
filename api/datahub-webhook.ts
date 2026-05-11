@@ -1,4 +1,5 @@
 import { supabase, syncWalletSilently, logWebhook, sendTelegramNotification } from '../lib/server-utils.js';
+import { VTU_STATUSES, RECONCILIATION_STATES, LOG_MARKERS } from '../lib/constants.js';
 
 console.log("server-utils loaded successfully inside datahub-webhook");
 
@@ -84,7 +85,13 @@ export default async function handler(req: any, res: any) {
         const { data: recentTxs } = await supabase
           .from("transactions")
           .select("*")
-          .in("vtu_status", ["provider_execution_started", "provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing"])
+          .in("vtu_status", [
+            VTU_STATUSES.PROVIDER_EXECUTION_STARTED, 
+            VTU_STATUSES.PROVIDER_ACCEPTED, 
+            VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, 
+            VTU_STATUSES.RECONCILIATION_PENDING, 
+            VTU_STATUSES.DELAYED_PROVIDER_PROCESSING
+          ])
           .order("created_at", { ascending: false })
           .limit(20);
         
@@ -115,7 +122,7 @@ export default async function handler(req: any, res: any) {
     console.log("Current Local State:", { delivery: tx.delivery_status, vtu: tx.vtu_status });
 
     // 🚫 Idempotency: Never downgrade from a terminal success state
-    if (tx.delivery_status === "delivered" || tx.vtu_status === "delivered") {
+    if (tx.delivery_status === VTU_STATUSES.DELIVERED || tx.vtu_status === VTU_STATUSES.DELIVERED) {
       console.log("✅ [Webhook] Transaction already fulfilled. Convergence complete. Skipping.");
       return res.status(200).json({ message: "Already fulfilled" });
     }
@@ -130,10 +137,10 @@ export default async function handler(req: any, res: any) {
       console.log(`=== PROVIDER ACCEPTED ===`);
       console.log(`⏳ [Webhook] Intermediate state received (${statusStr}). Enforcing convergence...`);
       // Even for intermediate states, ensure we are in a valid waiting state
-      if (!["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending"].includes(tx.vtu_status)) {
+      if (![VTU_STATUSES.PROVIDER_ACCEPTED, VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, VTU_STATUSES.RECONCILIATION_PENDING].includes(tx.vtu_status)) {
          await supabase.from("transactions").update({ 
-           vtu_status: 'awaiting_provider_confirmation', 
-           reconciliation_state: 'awaiting_provider_confirmation',
+           vtu_status: VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, 
+           reconciliation_state: RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION,
            updated_at: timestamp 
          }).eq("id", tx.id);
       }
@@ -143,11 +150,11 @@ export default async function handler(req: any, res: any) {
     console.log(`=== DELIVERY CONFIRMATION RECEIVED ===`);
     console.log("Provider Payload:", JSON.stringify(payload));
 
-    const deliveryStatus = isSuccess ? "delivered" : "failed";
-    const vtuStatus = isSuccess ? "delivered" : "provider_rejected";
-    const reconciliationState = isSuccess ? "completed" : "failed";
+    const deliveryStatus = isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED;
+    const vtuStatus = isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.PROVIDER_REJECTED;
+    const reconciliationState = isSuccess ? RECONCILIATION_STATES.COMPLETED : RECONCILIATION_STATES.FAILED;
 
-    console.log("=== DELIVERY CONFIRMED ===");
+    console.log(LOG_MARKERS.DELIVERY_CONFIRMED);
     console.log(timestamp);
 
     const { data: updatedRows, error: updateError } = await supabase
