@@ -93,8 +93,9 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> payment_success`);
 
-  // 4. UPDATE STATUS TO PAYMENT_SUCCESS
-  const { error: updateError } = await supabase
+  // 4. ATOMIC UPDATE TO PAYMENT_SUCCESS
+  // We only update if the transaction is still in a pre-payment state
+  const { data: updatedTx, error: updateError } = await supabase
     .from("transactions")
     .update({
       status: "payment_success", // STATE MACHINE
@@ -103,9 +104,17 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
-    .eq("id", tx.id);
+    .eq("id", tx.id)
+    .in("status", ["initialized", "payment_pending"])
+    .select()
+    .single();
 
-  if (updateError) {
+  if (updateError || !updatedTx) {
+    // If updateError is null but updatedTx is null, it means the status already moved (idempotency)
+    if (!updateError && !updatedTx) {
+       console.log(`♻️ [Idempotency] Transaction ${tx.id} already moved past payment_pending.`);
+       return res.status(200).send("Already Processed");
+    }
     console.error("❌ [Webhook] Failed to update payment status:", updateError);
     return res.status(500).send("DB Error");
   }
@@ -113,16 +122,10 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
   // 5. QUEUE FULFILLMENT (IMMEDIATE EXECUTION IN THIS SERVERLESS CONTEXT)
   console.log("=== FULFILLMENT QUEUED ===");
   
-  // Update state to processing before calling provider
-  await supabase.from("transactions").update({ 
-    status: "fulfillment_processing",
-    vtu_status: "processing", // Legacy support
-    updated_at: new Date().toISOString()
-  }).eq("id", tx.id);
-
   try {
     // 6. TELECOM EXECUTION
-    const result = await purchaseData({ ...tx, status: 'payment_success' }, "paystack_v2_webhook");
+    // purchaseData now handles its own atomic fulfillment_processing lock internally
+    const result = await purchaseData(updatedTx, "paystack_v2_webhook");
     
     if (result.success) {
       console.log("=== TRANSACTION COMPLETED ===");

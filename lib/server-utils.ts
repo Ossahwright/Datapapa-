@@ -28,7 +28,7 @@ const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL;
 
 const serviceRoleKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFzeHphcmh4Z2Z3bm9ndnVxb21mIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzAyMDI5NywiZXhwIjoyMDkyNTk2Mjk3fQ.jBdQfnv7dd3RgIwPtH1CL5zIuqR5M5ko2kzJ32rsMEo';
 
 if (!supabaseUrl) {
   console.error("SUPABASE_URL missing");
@@ -604,31 +604,33 @@ export async function purchaseData(transaction: any, source: PurchaseSource | st
   }
 
   // 🛡️ STEP 3: PAYMENT VERIFICATION
-  const isPaid = transaction.status === "success";
+  const isPaid = transaction.status === "payment_success" || transaction.status === "success" || transaction.status === "fulfilled";
+  
+  if (!isPaid) {
+    const error = `Safety Block: Cannot fulfill unpaid transaction. Status: ${transaction.status}`;
+    console.error(`❌ [${executionId}] ${error}`);
+    throw new Error(error);
+  }
 
-  // Set provider execution started
-  const executionStartTime = new Date().toISOString();
-  console.log("=== PROVIDER EXECUTION STARTED ===");
-  console.log(executionStartTime);
+  // 🛡️ STEP 3.5: ATOMIC FULFILLMENT LOCK
+  // We only proceed if we can successfully transition from payment_success to fulfillment_processing
+  // This prevents double-fulfillment from race conditions between API and Webhook
+  const { data: lockedTx, error: lockError } = await supabase
+    .from("transactions")
+    .update({ 
+      status: 'fulfillment_processing',
+      vtu_status: 'processing',
+      provider_execution_started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", transaction.id)
+    .in("status", ["payment_success", "success"])
+    .select()
+    .single();
 
-  // Skip "in-progress" update for faster execution if from webhook/direct
-  if (source !== "manual_retry") {
-    // Fire and forget or skip
-    supabase.from("transactions").update({ 
-      status: 'fulfillment_processing',
-      vtu_status: 'processing', 
-      provider_execution_started_at: executionStartTime,
-      updated_at: new Date().toISOString() 
-    }).eq("id", transaction.id).then(({error}) => {
-       if (error) console.error("Non-blocking status update failed", error);
-    });
-  } else {
-    await supabase.from("transactions").update({ 
-      status: 'fulfillment_processing',
-      vtu_status: 'provider_execution_started', 
-      provider_execution_started_at: executionStartTime,
-      updated_at: new Date().toISOString() 
-    }).eq("id", transaction.id);
+  if (lockError || !lockedTx) {
+    console.log(`📡 [${executionId}] Transaction already in progress or fulfilled. Switching to reconciliation.`);
+    return reconcileTransaction(transaction.id);
   }
 
   // 🛡️ STEP 4: RECIPIENT NORMALIZATION

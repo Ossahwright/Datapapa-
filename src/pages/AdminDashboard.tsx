@@ -6,6 +6,7 @@ import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
 import { ReportsView } from "../components/reports/ReportsView";
 import { SystemHealthView } from "../components/admin/SystemHealthView";
+import { SyncedHorizontalScroll } from "../components/admin/SyncedHorizontalScroll";
 import {
   LogOut,
   LayoutDashboard,
@@ -1964,7 +1965,7 @@ export default function AdminDashboard() {
                   Page {dashboardPage} of {Math.ceil(totalDashboardTransactions / ITEMS_PER_PAGE) || 1}
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-400 font-bold text-[10px] uppercase tracking-widest border-b border-slate-100">
                     <tr>
@@ -2186,7 +2187,7 @@ export default function AdminDashboard() {
                     )}
                   </tbody>
                 </table>
-              </div>
+              </SyncedHorizontalScroll>
 
               {/* Dashboard Pagination Controls */}
               {totalDashboardTransactions > 0 && (
@@ -2368,7 +2369,7 @@ export default function AdminDashboard() {
             </header>
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="overflow-x-auto">
+              <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
@@ -2620,7 +2621,7 @@ export default function AdminDashboard() {
                     )}
                   </tbody>
                 </table>
-              </div>
+              </SyncedHorizontalScroll>
 
               {/* Pagination Controls */}
               {totalTransactions > 0 && (
@@ -2763,7 +2764,7 @@ export default function AdminDashboard() {
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="overflow-x-auto">
+              <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
@@ -3068,7 +3069,7 @@ export default function AdminDashboard() {
                     )}
                   </tbody>
                 </table>
-              </div>
+              </SyncedHorizontalScroll>
             </div>
           </motion.div>
         )}
