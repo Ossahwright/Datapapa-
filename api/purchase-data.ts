@@ -66,12 +66,12 @@ export default async function handler(req: any, res: any) {
             headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
           });
           
-          if (psVerify?.data?.status === PAYMENT_STATUSES.SUCCESS) {
+          if (psVerify?.data?.data?.status === PAYMENT_STATUSES.SUCCESS || psVerify?.data?.status === PAYMENT_STATUSES.SUCCESS) {
             console.log("✅ [API] Paystack confirms success. Self-promoting for speed.");
             const { data: promoted } = await supabase
               .from('transactions')
               .update({ 
-                status: PAYMENT_STATUSES.SUCCESS,
+                status: "payment_success",
                 payment_status: PAYMENT_STATUSES.SUCCESS,
                 external_reference: finalTransactionId,
                 webhook_verified: true,

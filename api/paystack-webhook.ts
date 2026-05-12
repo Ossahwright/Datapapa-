@@ -190,7 +190,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
   } = await supabase
     .from("transactions")
     .update({
-      status: "success",
+      status: "payment_success",
       payment_status: "success",
       external_reference: tx.id,
       webhook_verified: true,

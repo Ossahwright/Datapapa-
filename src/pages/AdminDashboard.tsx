@@ -1251,7 +1251,8 @@ export default function AdminDashboard() {
     const now = Date.now();
     const isStale = (vtu === 'processing' || vtu === 'provider_execution_started') && (now - updatedAt > 2700000); // 45 mins (Calm Timing)
 
-    if (vtu === 'manual_review_required' || (tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
+    // Only trigger fallback manual review if payment was successful
+    if (vtu === 'manual_review_required' || (isPaid && tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
       return { 
         label: 'Manual Review Required', 
         color: 'bg-amber-50 text-amber-700 border border-amber-300 font-bold', 

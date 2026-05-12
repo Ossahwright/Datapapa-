@@ -111,7 +111,7 @@ export default async function handler(req: any, res: any) {
     try {
       // 🛡️ FORCE fresh retry 
       const retryObject = { ...tx };
-      retryObject.status = "success";
+      retryObject.status = "payment_success";
       retryObject.payment_status = "success";
       delete retryObject.external_reference;
 

@@ -514,7 +514,7 @@ export async function reconcileTransaction(transactionId: string) {
       if (psRes.data?.data?.status === PAYMENT_STATUSES.SUCCESS) {
         console.log(`✅ [Reconcile] Paystack Success for UUID: ${tx.id}. Promoting to SUCCESS.`);
         await supabase.from("transactions").update({ 
-          status: PAYMENT_STATUSES.SUCCESS, 
+          status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
           payment_status: PAYMENT_STATUSES.SUCCESS,
           webhook_verified: true,
           payment_verified_at: timestamp, 
@@ -675,7 +675,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
-    .or(`status.eq.${PAYMENT_STATUSES.SUCCESS},status.eq.${PAYMENT_STATUSES.PAID}`)
+    .or(`status.eq.${PAYMENT_STATUSES.SUCCESS},status.eq.${PAYMENT_STATUSES.PAID},status.eq.${PAYMENT_STATUSES.PAYMENT_SUCCESS}`)
     .select()
     .single();
 
