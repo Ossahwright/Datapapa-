@@ -49,12 +49,14 @@ export default async function handler(req: any, res: any) {
     }
 
     // 3. GENERATE DETERMINISTIC REFERENCES
+    // Note: The authoritative identity is the Supabase UUID (transaction.id).
+    // We create a friendly reference for customer display, but internal sync uses UUID.
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(7);
     const friendlyReference = clientReference || `DP-${timestamp}-${random}`;
 
     // 4. PERSIST INTENT (IDEMPOTENT CREATION)
-    console.log("📝 Persisting transaction intent with friendly ref:", friendlyReference);
+    console.log("📝 Persisting transaction intent for:", phone);
     const { data: transaction, error: txError } = await supabase
       .from("transactions")
       .insert({
@@ -67,8 +69,7 @@ export default async function handler(req: any, res: any) {
         capacity: bundle.capacity,
         status: "initialized",
         payment_status: "initialized",
-        reference: friendlyReference, // Customer-facing
-        internal_reference: "PENDING_ID", // We will update this or just use the ID
+        reference: friendlyReference, // Customer-facing DP-XXXX
         
         // Storage of bundle metadata for fulfillment
         display_bundle: bundle.capacity,
@@ -88,29 +89,34 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Failed to create payment intent in database." });
     }
 
-    // UPDATE with the actual ID for internal sync
+    // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
+    // We update the record to ensure paystack_receipt matches the ID for dual-index safety
+    // although the UUID itself is the primary anchor.
     await supabase.from("transactions").update({ 
-      internal_reference: transaction.id,
-      paystack_receipt: transaction.id 
+      paystack_receipt: transaction.id,
+      internal_reference: friendlyReference // Store the friendly one here for backup lookup
     }).eq("id", transaction.id);
 
-    console.log("✅ PAYMENT INTENT STORED:", transaction.id);
+    console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
+    console.log("📍 UUID (ID):", transaction.id);
+    console.log("📍 Internal Ref:", friendlyReference);
 
-    // 5. RETURN CLEAN CONFIG (Using transaction.id as the reference for Paystack)
+    // 5. RETURN CLEAN CONFIG (Strictly using transaction.id as the reference)
     return res.status(200).json({
       success: true,
       config: {
-        reference: transaction.id, // 🚀 USE UUID AS PAYSTACK REFERENCE
-        friendlyReference,         // Keep for display if needed
+        reference: transaction.id, // 🚀 AUTHORITATIVE REFERENCE = UUID
+        friendlyReference,         // Display only
         amount: Math.round(authoritativeAmount * 100),
         email: 'customer@datapapa.com',
-        transactionId: transaction.id,
+        transaction_id: transaction.id,
         metadata: {
-          transaction_id: transaction.id,
+          transaction_id: transaction.id, // 🚀 METADATA SYNC
           phone,
           network: bundle.network,
           bundle: bundle.capacity,
-          platform
+          platform,
+          friendly_reference: friendlyReference
         }
       }
     });

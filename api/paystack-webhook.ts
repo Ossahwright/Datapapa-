@@ -100,56 +100,35 @@ export default async function handler(req: any, res: any) {
     }
 
     // STEP 3 — IMPLEMENT DETERMINISTIC TRANSACTION LOOKUP
+    // 🚀 Authoritative Transaction Identity Convergence
+    const txId = metadata?.transaction_id || reference;
+
     console.log("=== [Webhook] Forensic Lookup Start ===");
-    console.log("📍 Paystack Return Reference (Target UUID):", reference);
+    console.log("📍 Paystack Target UUID:", txId);
+    console.log("📍 Paystack Event Reference:", reference);
+    console.log("📍 Metadata ID:", metadata?.transaction_id);
     
-    const transactionIdFromMetadata = metadata?.transaction_id;
-    const paystackReference = reference;
-    
-    let tx = null;
-
-    // Priority 1: reference (Paystack reference is now our UUID)
-    if (paystackReference) {
-      const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("id", paystackReference)
-        .maybeSingle();
-      tx = data;
-      if (tx) console.log(`✅ [Webhook] Match Found via UUID Ref: ${tx.id}`);
+    if (!txId) {
+      console.error("❌ [Webhook] CRITICAL: No transaction identity found in payload.");
+      return res.status(400).send("No transaction identity");
     }
 
-    // Priority 2: metadata.transaction_id
-    if (!tx && transactionIdFromMetadata) {
-      const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("id", transactionIdFromMetadata)
-        .maybeSingle();
-      tx = data;
-      if (tx) console.log(`✅ [Webhook] Match Found via Metadata ID: ${tx.id}`);
-    }
+    const { data: tx, error: lookupError } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("id", txId)
+      .single();
 
-    // Priority 3: internal_reference
-    if (!tx && paystackReference) {
-      const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("internal_reference", paystackReference)
-        .maybeSingle();
-      tx = data;
-      if (tx) console.log(`✅ [Webhook] Match Found via Internal Ref Match: ${tx.id}`);
-    }
-
-    if (!tx) {
-      console.error("❌ [Webhook] CRITICAL: Reconciler could not find transaction for reference:", reference);
-      // Important: Still return 200 to Paystack so they stop retrying, but log for admin.
+    if (lookupError || !tx) {
+      console.error("❌ [Webhook] CRITICAL: Reconciler could not find transaction for identity:", txId);
+      // Still return 200 to Paystack to stop retries, but this is a critical orphaned payment.
       return res.status(200).json({
         success: false,
-        error: "Orphaned Payment Logged"
+        error: "Orphaned Payment: Transaction record not found"
       });
     }
 
+    console.log(`✅ [Webhook] Authoritative Match Found: ${tx.id}`);
     console.log(`🚀 [Webhook] Handing off to processTransaction for UUID: ${tx.id}`);
     return processTransaction(tx, paystackData, res);
 

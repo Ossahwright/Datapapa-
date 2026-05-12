@@ -241,7 +241,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       }
 
       console.log("✅ Server intent successful.");
-      console.log("🚀 UUID Generated:", result.config.transactionId);
+      console.log("🚀 UUID Generated:", result.config.transaction_id);
       console.log("🚀 Friendly Reference:", result.config.friendlyReference);
 
       // 🚀 SAFETY CHECK: Ensure Paystack script is loaded

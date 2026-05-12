@@ -691,6 +691,10 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     throw new Error(error);
   }
 
+  // 🚀 AUTHORITATIVE IDENTITY NORMALIZATION
+  // We strictly use the transaction UUID for provider reconciliation and internal sync.
+  const authoritativeId = transaction.id;
+  
   // 📦 Network Numeric Mapping
   const networkNumericMapping: Record<string, string> = {
     [NETWORK_KEYS.MTN]: '1',
@@ -701,11 +705,8 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   };
   const networkId = networkNumericMapping[networkKey] || "1";
 
-  // 🚀 GENERATE CLEANER EXTERNAL REFERENCE
-  const shortId = (transaction.id || "").split("-")[0].toUpperCase();
-  const externalRef = `DP-${shortId}-${Date.now().toString().slice(-4)}`;
-
   // 🚀 ROBUST PAYLOAD
+  // We send the transaction.id as the primary reference to ensure convergence.
   const payload = { 
     networkKey: networkKey,
     network_id: networkId,
@@ -714,10 +715,11 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     capacity: finalCapacity, 
     plan: finalCapacity, 
     amount: transaction.amount,
-    reference: transaction.id,
-    external_reference: externalRef,
-    client_reference: externalRef
+    reference: authoritativeId, // 🚀 AUTHORITATIVE ANCHOR
+    external_reference: authoritativeId, 
+    client_reference: authoritativeId
   };
+
   const { apiKey, baseUrl } = await getDataHubConfig();
   if (!apiKey) throw new Error("DataHub API key is missing");
 
@@ -733,8 +735,10 @@ export async function purchaseData(transaction: any, source: string = "unknown")
 
   // 🚀 STEP 9 — IMPLEMENT PROVIDER EXECUTION TRUTH LOGGING
   try {
-    console.log("=== REAL DATAHUB EXECUTION START ===");
-    console.log(`🚀 [${executionId}] Calling Provider API...`);
+    console.log("=== AUTHORITATIVE PROVIDER EXECUTION START ===");
+    console.log(`📍 UUID: ${authoritativeId}`);
+    console.log(`📍 Endpoint: ${endpoint}`);
+    
     const response = await fetchWithRetry(endpoint, {
       method: "POST",
       data: payload,
@@ -756,6 +760,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       (response as any)?.reference ||
       (response as any)?.id ||
       null;
+
     const isAccepted = (response.status >= 200 && response.status < 300) && (
       result.success === true || result.status === true || 
       ["SUCCESSFUL", "PROCESSING", "SUCCESS", "DELIVERED", "PENDING"].includes(String(result.status || "").toUpperCase()) ||
@@ -771,16 +776,15 @@ export async function purchaseData(transaction: any, source: string = "unknown")
         .update({
           status: VTU_STATUSES.FULFILLMENT_PROCESSING,
           vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
-          provider_reference: providerReference || transaction.id,
-          external_reference: externalRef, // Using our cleaner searchable ref
-          internal_reference: transaction.id,
+          provider_reference: providerReference || authoritativeId,
+          external_reference: providerReference || authoritativeId,
           provider_payload: result,
           provider_accepted_at: acceptanceTime,
           reconciliation_state: RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION,
           api_response: result,
           updated_at: new Date().toISOString()
         })
-        .eq("id", transaction.id);
+        .eq("id", authoritativeId);
         
       if (atomicError) {
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE:`, atomicError.message);
@@ -803,7 +807,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       };
       triggerPolling().catch(err => console.error(`❌ [${executionId}] Swift Polling Error:`, err.message));
 
-      return { success: true, vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED, provider_reference: providerReference, external_reference: externalRef, ...result };
+      return { success: true, vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED, provider_reference: providerReference, external_reference: providerReference || authoritativeId, ...result };
     }
 
     // Explicit Failure Handling
