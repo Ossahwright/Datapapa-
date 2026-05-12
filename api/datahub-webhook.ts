@@ -68,7 +68,7 @@ export default async function handler(req: any, res: any) {
       .or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}",id.eq."${providerRef}"`)
       .maybeSingle();
 
-    if (findError && findError.code !== 'PGRST116') {
+    if (findError && findError.code !== 'PGRST116' && findError.code !== '22P02') {
       console.error("❌ [Webhook] Supabase find error:", findError.message);
       throw findError;
     }

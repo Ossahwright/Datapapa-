@@ -46,8 +46,16 @@ export default async function handler(req: any, res: any) {
     }
 
     // STEP 5 — VERIFY RAW BODY HANDLING
-    // We read the raw body once and use it for both signature and JSON parsing
-    const rawBodyData = await readRawBody(req);
+    // Check if the Vite bridge already parsed it early
+    let rawBodyData = req.rawBody;
+    
+    if (!rawBodyData) {
+      try {
+        rawBodyData = await readRawBody(req);
+      } catch (e) {
+        console.warn("Could not read stream:", e);
+      }
+    }
     
     if (!rawBodyData) {
       console.error("❌ [Webhook] Empty Body Received");
@@ -139,12 +147,12 @@ export default async function handler(req: any, res: any) {
 }
 
 async function processTransaction(tx: any, paystackData: any, res: any) {
-  // 🚀 STEP 1 & 5 — IMPLEMENT FORENSIC STATE LOGGING
-  console.log("=== PRE-UPDATE TRANSACTION STATE ===", {
+  // 🚀 STEP 1 — FORENSIC PRE-UPDATE LOGGING
+  console.log("=== PRE-UPDATE TX STATE ===", {
     id: tx.id,
     status: tx.status,
     payment_status: tx.payment_status,
-    vtu_status: tx.vtu_status
+    external_reference: tx.external_reference
   });
 
   // STEP 10: IMPLEMENT WEBHOOK IDEMPOTENCY
@@ -167,22 +175,33 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> ${PAYMENT_STATUSES.SUCCESS}`);
 
-  // 🚀 STEP 1 — AUTHORITATIVE WEBHOOK UPDATE (NO CONDITIONAL FILTERS)
-  const { error: updateError, count } = await supabase
+  // 🚀 STEP 2 — HARDEN PAYMENT UPDATE OPERATION
+  const {
+    data: promotedRows,
+    error: updateError,
+    count
+  } = await supabase
     .from("transactions")
     .update({
-      status: PAYMENT_STATUSES.SUCCESS, 
-      payment_status: PAYMENT_STATUSES.SUCCESS,
-      external_reference: tx.id, // 🚀 AUTHORITATIVE CONVERGENCE
+      status: "success",
+      payment_status: "success",
+      external_reference: tx.id,
       webhook_verified: true,
-      paystack_receipt: paystackData.reference,
+      paystack_receipt: paystackData.reference || tx.id,
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    }, { count: "exact" })
-    .eq("id", tx.id);
+    }, {
+      count: "exact"
+    })
+    .eq("id", tx.id)
+    .select();
 
-  // 🚀 STEP 2 — VERIFY UPDATE ROW COUNT
-  console.log("=== PAYMENT UPDATE ROW COUNT ===", count);
+  // 🚀 STEP 3 — IMPLEMENT STRICT UPDATE VERIFICATION
+  console.log("=== PAYMENT UPDATE RESULT ===", {
+    count,
+    updateError,
+    promotedRows
+  });
 
   if (updateError || count === 0) {
     console.error("❌ [Webhook] Payment convergence failed:", updateError || "Zero rows updated");
@@ -198,30 +217,31 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     });
   }
 
-  // 🚀 STEP 3 — IMPLEMENT AUTHORITATIVE DB REFETCH
-  const { data: updatedTx, error: verifyError } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('id', tx.id)
-    .single();
+  // 🚀 STEP 4 — AUTHORITATIVE DATABASE REFETCH
+  const { data: updatedTx, error: refetchError } =
+    await supabase
+      .from("transactions")
+      .select("*")
+      .eq("id", tx.id)
+      .single();
 
-  if (verifyError || !updatedTx) {
-    console.error("❌ [Webhook] Convergence Verification Failed:", verifyError);
+  if (refetchError || !updatedTx) {
+    console.error("❌ [Webhook] Convergence Verification Failed:", refetchError);
     return res.status(500).json({
       error: "Database Verification Failed"
     });
   }
 
-  // 🚀 STEP 4 & 5 — VALIDATE PAYMENT CONVERGENCE STRICTLY + FORENSIC LOGGING
-  console.log("=== POST-UPDATE TRANSACTION STATE ===", {
+  // 🚀 STEP 5 — STRICT CONVERGENCE VALIDATION
+  console.log("=== POST-UPDATE TX STATE ===", {
     id: updatedTx.id,
     status: updatedTx.status,
     payment_status: updatedTx.payment_status
   });
 
   if (
-    updatedTx.payment_status !== PAYMENT_STATUSES.SUCCESS ||
-    updatedTx.status !== PAYMENT_STATUSES.SUCCESS
+    updatedTx.payment_status !== "success" ||
+    updatedTx.status !== "success"
   ) {
     console.error("❌ [Webhook] AUTHORITATIVE CONVERGENCE MISMATCH", {
        status: updatedTx.status,

@@ -572,12 +572,22 @@ export async function reconcileTransaction(transactionId: string) {
       return { success: true, status: vtuStatus };
     }
 
-    // ⏳ STEP 3: Escalation
+    // ⏳ STEP 3: Escalation (Hardened to prevent premature Manual Review)
     const age = Date.now() - new Date(tx.updated_at || tx.created_at).getTime();
     let newVtuStatus = tx.vtu_status;
-    if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED;
-    else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING;
-    else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROVIDER_PROCESSING;
+    
+    // ONLY escalate to Manual Review if payment is successful BUT fulfillment is stuck for too long
+    if (tx.payment_status === PAYMENT_STATUSES.SUCCESS) {
+      if (age > 6 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.MANUAL_REVIEW_REQUIRED;
+      else if (age > 3 * 60 * 60 * 1000) newVtuStatus = VTU_STATUSES.RECONCILIATION_PENDING;
+      else if (age > 45 * 60 * 1000) newVtuStatus = VTU_STATUSES.DELAYED_PROVIDER_PROCESSING;
+    } else {
+      // If payment hasn't settled yet, we ONLY escalate to delayed processing, NOT manual review yet.
+      // This allows more time for webhooks or standard reconciliation to settle truth.
+      if (age > 45 * 60 * 1000 && tx.vtu_status !== VTU_STATUSES.DELAYED_PROVIDER_PROCESSING) {
+        newVtuStatus = VTU_STATUSES.DELAYED_PROVIDER_PROCESSING;
+      }
+    }
 
     if (newVtuStatus !== tx.vtu_status) {
         await supabase.from("transactions").update({ vtu_status: newVtuStatus, updated_at: timestamp }).eq("id", transactionId);
@@ -630,13 +640,26 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   }
 
   // 🛡️ STEP 3 & 8 — HARDEN purchaseData() EXECUTION GUARD
-  const isPaid = 
-    (transaction.status === PAYMENT_STATUSES.SUCCESS || transaction.status === PAYMENT_STATUSES.PAID || transaction.status === VTU_STATUSES.FULFILLMENT_PROCESSING) && 
-    (transaction.payment_status === PAYMENT_STATUSES.SUCCESS || transaction.payment_status === PAYMENT_STATUSES.PAID);
-  
-  if (!isPaid) {
-    console.error(`❌ [${executionId}] SAFETY BLOCK: Payment not authoritatively verified for ${transaction.id}. Status: ${transaction.status}`);
+  // STRICT REQUIREMENT: payment_status MUST be success
+  const isPaymentVerified = 
+    transaction.payment_status === "success" || 
+    transaction.payment_status === PAYMENT_STATUSES.SUCCESS;
+    
+  if (!isPaymentVerified) {
+    console.error(`❌ [${executionId}] SAFETY BLOCK: Payment not authoritatively verified for ${transaction.id}. Status: ${transaction.payment_status}`);
     return { success: false, error: "Payment not verified" };
+  }
+
+  // Ensure overall status reflects success/paid to allow fulfillment
+  const isStatusValid = 
+    transaction.status === "success" || 
+    transaction.status === PAYMENT_STATUSES.SUCCESS || 
+    transaction.status === PAYMENT_STATUSES.PAID || 
+    transaction.status === VTU_STATUSES.FULFILLMENT_PROCESSING;
+
+  if (!isStatusValid) {
+    console.error(`❌ [${executionId}] SAFETY BLOCK: Transaction status invalid for fulfillment: ${transaction.status}`);
+    return { success: false, error: "Invalid transaction status" };
   }
 
   console.log(`✅ [${executionId}] Payment Convergence Validated for UUID: ${transaction.id}`);
@@ -835,10 +858,11 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     console.error(`❌ [${executionId}] CRITICAL ERROR:`, err.message);
     
     try {
-      // In case of connection failure, we DON'T mark as failed if we don't know for sure
-      // We let it sit in manual_review_required for reconciliation
+      // 🛡️ HARDEN: Only escalate to Manual Review after payment converged and DataHub failed
+      // This prevents "initialized" transactions from hitting manual review prematurely.
       await supabase.from("transactions").update({ 
-        vtu_status: VTU_STATUSES.MANUAL_REVIEW_REQUIRED, 
+        reconciliation_state: RECONCILIATION_STATES.PAYMENT_VERIFIED_EXECUTION_FAILED,
+        vtu_status: VTU_STATUSES.RECONCILIATION_PENDING, // Defer manual review 
         error_message: `Fatal Execution Error: ${err.message}`,
         updated_at: new Date().toISOString()
       }).eq("id", transaction.id);
