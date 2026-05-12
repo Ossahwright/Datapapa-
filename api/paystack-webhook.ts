@@ -90,7 +90,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    console.log("=== PAYMENT VERIFIED ===");
+    console.log("=== [Webhook] Auth Payment Success Event Verified ===");
     const paystackData = event.data;
     const reference = paystackData.reference;
     let metadata = paystackData.metadata;
@@ -100,7 +100,9 @@ export default async function handler(req: any, res: any) {
     }
 
     // STEP 3 — IMPLEMENT DETERMINISTIC TRANSACTION LOOKUP
-    console.log("=== TRANSACTION LOOKUP START ===");
+    console.log("=== [Webhook] Forensic Lookup Start ===");
+    console.log("📍 Paystack Return Reference (Target UUID):", reference);
+    
     const transactionIdFromMetadata = metadata?.transaction_id;
     const paystackReference = reference;
     
@@ -114,7 +116,7 @@ export default async function handler(req: any, res: any) {
         .eq("id", paystackReference)
         .maybeSingle();
       tx = data;
-      if (tx) console.log(`=== TRANSACTION FOUND (Direct ID Match: ${tx.id}) ===`);
+      if (tx) console.log(`✅ [Webhook] Match Found via UUID Ref: ${tx.id}`);
     }
 
     // Priority 2: metadata.transaction_id
@@ -125,7 +127,7 @@ export default async function handler(req: any, res: any) {
         .eq("id", transactionIdFromMetadata)
         .maybeSingle();
       tx = data;
-      if (tx) console.log(`=== TRANSACTION FOUND (Metadata ID: ${tx.id}) ===`);
+      if (tx) console.log(`✅ [Webhook] Match Found via Metadata ID: ${tx.id}`);
     }
 
     // Priority 3: internal_reference
@@ -136,12 +138,11 @@ export default async function handler(req: any, res: any) {
         .eq("internal_reference", paystackReference)
         .maybeSingle();
       tx = data;
-      if (tx) console.log(`=== TRANSACTION FOUND (Internal RefMatch ID: ${tx.id}) ===`);
+      if (tx) console.log(`✅ [Webhook] Match Found via Internal Ref Match: ${tx.id}`);
     }
 
     if (!tx) {
-      console.error("=== TRANSACTION NOT FOUND ===");
-      console.error("❌ [Webhook] Potential Orphaned Payment. No match for reference:", reference);
+      console.error("❌ [Webhook] CRITICAL: Reconciler could not find transaction for reference:", reference);
       // Important: Still return 200 to Paystack so they stop retrying, but log for admin.
       return res.status(200).json({
         success: false,
@@ -149,6 +150,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    console.log(`🚀 [Webhook] Handing off to processTransaction for UUID: ${tx.id}`);
     return processTransaction(tx, paystackData, res);
 
   } catch (error: any) {

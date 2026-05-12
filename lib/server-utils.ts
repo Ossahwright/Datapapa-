@@ -489,7 +489,7 @@ export async function checkProviderTransactionStatus(tx: any) {
  * Reconciles a transaction with Paystack and DataHub.
  */
 export async function reconcileTransaction(transactionId: string) {
-  console.log(`=== [Reconcile] Starting reconciliation for: ${transactionId} ===`);
+  console.log(`=== [Reconcile] Starting reconciliation for UUID: ${transactionId} ===`);
   
   const { data: tx, error: fetchError } = await supabase
     .from("transactions")
@@ -497,17 +497,22 @@ export async function reconcileTransaction(transactionId: string) {
     .eq("id", transactionId)
     .single();
     
-  if (fetchError || !tx) return { success: false, error: "Not found" };
+  if (fetchError || !tx) {
+    console.error(`❌ [Reconcile] UUID ${transactionId} not found in database.`);
+    return { success: false, error: "Not found" };
+  }
   
   const timestamp = new Date().toISOString();
 
-  // 🛡️ STEP 1: Paystack Truth
+  // 🛡️ STEP 1: Paystack Truth (Authoritative Verification)
   if (tx.status === PAYMENT_STATUSES.PENDING && tx.paystack_receipt) {
+    console.log(`[Reconcile] Verifying payment for UUID: ${tx.id} with Paystack Receipt: ${tx.paystack_receipt}`);
     try {
       const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
         headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
       });
       if (psRes.data?.data?.status === PAYMENT_STATUSES.SUCCESS) {
+        console.log(`✅ [Reconcile] Paystack Success for UUID: ${tx.id}. Promoting to SUCCESS.`);
         await supabase.from("transactions").update({ 
           status: PAYMENT_STATUSES.SUCCESS, 
           payment_status: PAYMENT_STATUSES.SUCCESS,
@@ -517,32 +522,45 @@ export async function reconcileTransaction(transactionId: string) {
         }).eq("id", transactionId);
         
         const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
-        if (updatedTx) await purchaseData(updatedTx, EXECUTION_SOURCES.RECONCILIATION_ENGINE);
+        if (updatedTx) {
+          console.log(`[Reconcile] Triggering fulfillment for UUID: ${updatedTx.id}`);
+          await purchaseData(updatedTx, EXECUTION_SOURCES.RECONCILIATION_ENGINE);
+        }
         return { success: true, status: PAYMENT_STATUSES.PAYMENT_SUCCESS };
       }
-    } catch (err) {}
+    } catch (err: any) {
+      console.error(`❌ [Reconcile] Paystack verification failed for UUID: ${tx.id}:`, err.message);
+    }
   }
 
   // 🛡️ STEP 2: Active Polling
-  const isWaiting = [VTU_STATUSES.PROVIDER_ACCEPTED, VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, VTU_STATUSES.PROCESSING, VTU_STATUSES.PROVIDER_EXECUTION_STARTED, VTU_STATUSES.DELAYED_PROVIDER_PROCESSING].includes(tx.vtu_status);
+  const isWaiting = [
+    VTU_STATUSES.PROVIDER_ACCEPTED, 
+    VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, 
+    VTU_STATUSES.PROCESSING, 
+    VTU_STATUSES.PROVIDER_EXECUTION_STARTED, 
+    VTU_STATUSES.DELAYED_PROVIDER_PROCESSING
+  ].includes(tx.vtu_status);
+
   if (isWaiting) {
+    console.log(`[Reconcile] UUID: ${tx.id} is in waiting state: ${tx.vtu_status}. Polling provider...`);
     const poll = await checkProviderTransactionStatus(tx);
     if (poll.success && (poll.isSuccess || poll.isFailed)) {
       const vtuStatus = poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.PROVIDER_REJECTED;
       const finalStatus = poll.isSuccess ? VTU_STATUSES.FULFILLED : PAYMENT_STATUSES.FAILED;
 
+      console.log(`✅ [Reconcile] Provider Truth Found for UUID: ${tx.id} -> ${vtuStatus}`);
       await supabase.from("transactions").update({
         status: finalStatus,
         vtu_status: vtuStatus,
         delivery_status: poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED,
         delivered_at: poll.isSuccess ? timestamp : null,
-        reconciliation_completed_at: poll.isSuccess ? timestamp : null,
+        reconciliation_completed_at: timestamp,
         updated_at: timestamp,
         api_response: poll.data
       }).eq("id", transactionId);
 
       if (poll.isSuccess) {
-        // Fetch full record for notification
         const { data: finalTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
         if (finalTx) {
           sendTelegramNotification(finalTx).catch(err => {
@@ -573,18 +591,29 @@ export async function reconcileTransaction(transactionId: string) {
 export type PurchaseSource = "paystack_webhook" | "manual_retry" | "direct_api";
 
 export async function purchaseData(transaction: any, source: string = "unknown") {
-  console.log(LOG_MARKERS.VTU_EXECUTION_STARTED);
-  console.log("Transaction:", transaction.id);
-  console.log("Source:", source);
-
-  // 🚀 FORENSIC TRACING: START
   const executionId = Math.random().toString(36).substring(7);
   console.log(`=== [${executionId}] PROVIDER EXECUTION START ===`);
-  
+  console.log(`📍 UUID: ${transaction.id}`);
+  console.log(`📍 Friendly Ref: ${transaction.reference}`);
+  console.log(`📍 Source: ${source}`);
+
   // 🛡️ STEP 1: IDEMPOTENCY & PROVIDER TRUTH CHECK
-  if (transaction.provider_reference || transaction.external_reference || transaction.vtu_status === VTU_STATUSES.DELIVERED) {
-    console.log(`📡 [${executionId}] Transaction has provider footprint. Skipping to Reconciliation mode.`);
+  // If we already have a provider reference or it's delivered, do NOT execute again.
+  if (transaction.provider_reference || transaction.vtu_status === VTU_STATUSES.DELIVERED || transaction.vtu_status === VTU_STATUSES.FULFILLED) {
+    console.log(`📡 [${executionId}] Transaction ${transaction.id} already has provider footprint or is delivered. Skipping execution.`);
     return reconcileTransaction(transaction.id);
+  }
+
+  // 🛡️ STEP 1.1: HARDENED IDEMPOTENCY LOCK
+  // If execution started recently (within last 2 minutes), block duplicate calls to avoid race conditions.
+  if (transaction.provider_execution_started_at) {
+    const startedAt = new Date(transaction.provider_execution_started_at).getTime();
+    const now = Date.now();
+    const diff = now - startedAt;
+    if (diff < 120000) { // 2 minutes lock
+      console.warn(`🛑 [${executionId}] IDEMPOTENCY ALERT: Execution for ${transaction.id} started ${Math.round(diff/1000)}s ago. Blocking duplicate.`);
+      return { success: true, message: "Execution already in progress" };
+    }
   }
 
   // 🛡️ STEP 2: EXECUTION SOURCE FIREWALL
@@ -592,51 +621,47 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     EXECUTION_SOURCES.PAYSTACK_WEBHOOK, 
     EXECUTION_SOURCES.ADMIN_RETRY, 
     EXECUTION_SOURCES.DIRECT_API, 
-    EXECUTION_SOURCES.MANUAL_RETRY
+    EXECUTION_SOURCES.MANUAL_RETRY,
+    EXECUTION_SOURCES.RECONCILIATION_ENGINE
   ];
   if (!allowedSources.includes(source as any)) {
+    console.error(`❌ [${executionId}] Unauthorized execution source attempted: ${source}`);
     throw new Error(`Unauthorized purchase execution source: ${source}`);
   }
 
   // 🛡️ STEP 3 & 8 — HARDEN purchaseData() EXECUTION GUARD
-  // STRICTLY require: transaction.status === "success" AND payment_status === "success"
   const isPaid = 
-    (transaction.status === PAYMENT_STATUSES.SUCCESS || transaction.status === PAYMENT_STATUSES.PAID) && 
+    (transaction.status === PAYMENT_STATUSES.SUCCESS || transaction.status === PAYMENT_STATUSES.PAID || transaction.status === VTU_STATUSES.FULFILLMENT_PROCESSING) && 
     (transaction.payment_status === PAYMENT_STATUSES.SUCCESS || transaction.payment_status === PAYMENT_STATUSES.PAID);
   
   if (!isPaid) {
-    const error = `Safety Block: Blocked: Payment not authoritatively verified. Must be '${PAYMENT_STATUSES.SUCCESS}'. Current status: ${transaction.status}, payment_status: ${transaction.payment_status}`;
-    console.error(`❌ [${executionId}] ${error}`);
-    console.error("=== CONVERGENCE FAILURE CONTEXT ===", {
-      id: transaction.id,
-      status: transaction.status,
-      payment_status: transaction.payment_status,
-      source: source
-    });
-    throw new Error(error);
+    console.error(`❌ [${executionId}] SAFETY BLOCK: Payment not authoritatively verified for ${transaction.id}. Status: ${transaction.status}`);
+    return { success: false, error: "Payment not verified" };
   }
 
-  console.log(`✅ [${executionId}] Payment Convergence Validated: [${transaction.payment_status}]`);
+  console.log(`✅ [${executionId}] Payment Convergence Validated for UUID: ${transaction.id}`);
 
   // 🛡️ STEP 3.5: ATOMIC FULFILLMENT LOCK
-  // We transition from 'success' to 'fulfillment_processing'
-  // Note: We stay in 'processing' VTU state for now; the "Truthful" provider_execution_started is set in a moment.
+  // We use an atomic update with a status check to ensure only one process wins.
   const { data: lockedTx, error: lockError } = await supabase
     .from("transactions")
     .update({ 
       status: VTU_STATUSES.FULFILLMENT_PROCESSING,
       vtu_status: VTU_STATUSES.PROCESSING,
+      provider_execution_started_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
-    .eq("status", PAYMENT_STATUSES.SUCCESS)
+    .or(`status.eq.${PAYMENT_STATUSES.SUCCESS},status.eq.${PAYMENT_STATUSES.PAID}`)
     .select()
     .single();
 
   if (lockError || !lockedTx) {
-    console.log(`📡 [${executionId}] Transaction already locked or moved. Switching to reconciliation.`);
+    console.log(`📡 [${executionId}] Transaction ${transaction.id} already locked or state changed. Redirecting to reconciliation.`);
     return reconcileTransaction(transaction.id);
   }
+
+  console.log(`🔒 [${executionId}] Atomic Lock Acquired for UUID: ${transaction.id}`);
 
   // 🛡️ STEP 4: RECIPIENT NORMALIZATION
   let recipient = (transaction.recipient_phone || "").trim().replace(/\D/g, "");

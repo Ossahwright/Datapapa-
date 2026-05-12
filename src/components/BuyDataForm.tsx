@@ -185,21 +185,29 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     : rawKey;
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("=== PAYSTACK CALLBACK RECEIVED ===");
-    console.log("📍 UUID (Expected):", paystackResponse.reference); // Use forensic label
+    console.log("=== [Frontend] PAYSTACK CALLBACK RECEIVED ===");
+    console.log("📍 UUID (Reference):", paystackResponse.reference);
+    console.log("📍 Status:", paystackResponse.status);
     
     // 🚀 REDIRECT TO AUTH RECEIPT PAGE USING UUID (which is the Paystack reference now)
+    console.log(`🚀 [Frontend] Success confirmed. Redirecting to receipt: /receipt/${paystackResponse.reference}`);
     navigate(`/receipt/${paystackResponse.reference}`);
   };
 
   const handlePaymentClose = () => {
-    console.log("🔒 PAYSTACK WINDOW CLOSED");
+    console.log("🔒 [Frontend] PAYSTACK WINDOW CLOSED BY USER");
     setIsLoading(false);
   };
 
   const handlePayment = async () => {
-    console.log("=== BUTTON CLICK DETECTED ===");
+    console.log("=== [Frontend] PAYMENT INITIALIZATION START ===");
     
+    if (providerStatus === 'outage') {
+      console.warn("⚠️ [Frontend] Gating: Provider outage detected. Blocking initialization.");
+      setError('Purchases are temporarily unavailable. Please try again soon.');
+      return;
+    }
+
     if (!phone || phone.length < 10) {
       setError('Please enter a valid recipient phone number');
       return;

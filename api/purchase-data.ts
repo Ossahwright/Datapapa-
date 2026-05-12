@@ -29,8 +29,17 @@ export default async function handler(req: any, res: any) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
 
-    if (txData.status === VTU_STATUSES.FULFILLMENT_PROCESSING || txData.status === VTU_STATUSES.FULFILLED) {
-      return res.json({ message: "Already processing or completed" });
+    console.log(`📍 [API] Transaction found for UUID: ${txData.id}`);
+    console.log(`📍 [API] Reference: ${txData.reference}, Amount: ${txData.amount}`);
+    console.log(`📍 [API] Current State: status=${txData.status}, vtu_status=${txData.vtu_status}`);
+
+    if (txData.status === VTU_STATUSES.FULFILLMENT_PROCESSING || txData.status === VTU_STATUSES.FULFILLED || txData.vtu_status === VTU_STATUSES.DELIVERED) {
+      console.log(`♻️ [API] Idempotency: Transaction ${finalTransactionId} already processing or completed. Skipping.`);
+      return res.json({ 
+        success: true, 
+        message: "Already processing or completed",
+        status: txData.status 
+      });
     }
 
     if ((txData.status === PAYMENT_STATUSES.PAYMENT_SUCCESS || txData.status === PAYMENT_STATUSES.SUCCESS) && txData.status !== VTU_STATUSES.FULFILLED) {
