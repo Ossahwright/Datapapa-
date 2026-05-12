@@ -1265,8 +1265,8 @@ export default function AdminDashboard() {
         reconcile: true 
       };
     }
-    if (vtu === 'delivered' || vtu === 'completed') {
-      return { label: 'Delivered', color: 'bg-emerald-100 text-emerald-700', icon: null };
+    if (vtu === 'delivered' || vtu === 'completed' || vtu === 'fulfilled' || tx.status === 'fulfilled') {
+      return { label: 'Delivered', color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle2 size={10} className="mr-1" /> };
     }
     if (vtu === 'provider_rejected' || vtu === 'failed') {
       return { label: 'Delivery Failed', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
@@ -1314,6 +1314,13 @@ export default function AdminDashboard() {
     return { label: fallbackLabel, color: 'bg-slate-100 text-slate-700', icon: null };
   };
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const selectedTxRef = useRef<any>(null);
+  
+  // Keep ref in sync for the real-time listener
+  useEffect(() => {
+    selectedTxRef.current = selectedTransaction;
+  }, [selectedTransaction]);
+
   const [txToDelete, setTxToDelete] = useState<any>(null);
   useEffect(() => {
     // 💓 Heartbeat to keep DataHub status fresh
@@ -1639,12 +1646,24 @@ export default function AdminDashboard() {
       )
       .subscribe();
 
-    const customersChannel = supabase
-      .channel("customers-realtime")
+    const transactionsChannel = supabase
+      .channel("transactions-global-sync")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
-        () => {
+        (payload: any) => {
+          console.log("🔄 [Realtime] Transaction Change Detected. Syncing...");
+          // We trigger both stats (KPIs) and the main table list refresh
+          fetchDashboardStats();
+          fetchTransactions();
+          
+          // Real-time update for the currently viewed transaction details
+          const activeTx = selectedTxRef.current;
+          if (activeTx && payload.new && activeTx.id === payload.new.id) {
+             console.log("🎯 [Realtime] Updating active detail view for:", payload.new.id);
+             setSelectedTransaction(payload.new);
+          }
+          
           if (currentView === "customers") {
             fetchCustomers();
             if (selectedCustomerPhone) {
@@ -1657,7 +1676,7 @@ export default function AdminDashboard() {
 
     return () => {
       supabase.removeChannel(bundlesChannel);
-      supabase.removeChannel(customersChannel);
+      supabase.removeChannel(transactionsChannel);
     };
   }, [fetchTransactions, fetchDashboardStats, fetchBundles, currentView]);
 
@@ -2698,9 +2717,7 @@ export default function AdminDashboard() {
                             <td className="px-6 py-4 text-center">
                               <span
                                 className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  tx.status === "success" ||
-                                  tx.status === "completed" ||
-                                  tx.status === "paid"
+                                  ["success", "completed", "paid", "payment_success", "fulfilled"].includes(tx.status)
                                     ? "bg-green-100 text-green-700"
                                     : tx.status === "failed"
                                       ? "bg-red-100 text-red-700"
@@ -2709,7 +2726,7 @@ export default function AdminDashboard() {
                                         : "bg-slate-100 text-slate-700"
                                 }`}
                               >
-                                {tx.status === "success" || tx.status === "paid"
+                                {["success", "paid", "payment_success", "fulfilled"].includes(tx.status)
                                   ? "Success"
                                   : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                               </span>
