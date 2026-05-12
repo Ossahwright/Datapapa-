@@ -60,13 +60,19 @@ export default async function handler(req: any, res: any) {
     // 🔍 Find transaction Priority
     // 1. provider_reference exact match
     // 2. external_reference match (fallback)
-    // 3. internal_reference / id exact match
+    // 3. internal_reference exact match
+    // 4. (If UUID) id exact match
     
-    let { data: tx, error: findError } = await supabase
-      .from("transactions")
-      .select("*")
-      .or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}",id.eq."${providerRef}"`)
-      .maybeSingle();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(providerRef);
+    let query = supabase.from("transactions").select("*");
+    
+    if (isUuid) {
+      query = query.or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}",id.eq."${providerRef}"`);
+    } else {
+      query = query.or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}"`);
+    }
+
+    let { data: tx, error: findError } = await query.maybeSingle();
 
     if (findError && findError.code !== 'PGRST116' && findError.code !== '22P02') {
       console.error("❌ [Webhook] Supabase find error:", findError.message);

@@ -121,11 +121,19 @@ export default async function handler(req: any, res: any) {
       return res.status(400).send("No transaction identity");
     }
 
-    const { data: tx, error: lookupError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("id", txId)
-      .single();
+    // Determine if txId is a valid UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(txId);
+
+    // Build the query dynamically to prevent 22P02 Postgres errors (invalid UUID syntax)
+    let query = supabase.from("transactions").select("*");
+    
+    if (isUuid) {
+      query = query.or(`id.eq."${txId}",external_reference.eq."${txId}",paystack_receipt.eq."${txId}"`);
+    } else {
+      query = query.or(`internal_reference.eq."${txId}",external_reference.eq."${txId}",paystack_receipt.eq."${txId}"`);
+    }
+
+    const { data: tx, error: lookupError } = await query.maybeSingle();
 
     if (lookupError || !tx) {
       console.error("❌ [Webhook] CRITICAL: Reconciler could not find transaction for identity:", txId);
@@ -178,8 +186,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
   // 🚀 STEP 2 — HARDEN PAYMENT UPDATE OPERATION
   const {
     data: promotedRows,
-    error: updateError,
-    count
+    error: updateError
   } = await supabase
     .from("transactions")
     .update({
@@ -190,11 +197,11 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
       paystack_receipt: paystackData.reference || tx.id,
       payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    }, {
-      count: "exact"
     })
     .eq("id", tx.id)
     .select();
+
+  const count = promotedRows ? promotedRows.length : 0;
 
   // 🚀 STEP 3 — IMPLEMENT STRICT UPDATE VERIFICATION
   console.log("=== PAYMENT UPDATE RESULT ===", {
