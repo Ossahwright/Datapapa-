@@ -265,13 +265,20 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
       console.log("✅ Intent stored, launching Paystack with UUID:", result.config.reference);
 
+      // 🚀 SAFETY CHECK: Ensure Paystack script is loaded
+      // @ts-ignore
+      if (!window.PaystackPop) {
+        console.error("❌ Paystack script not found on window object.");
+        throw new Error("Payment system is still loading. Please wait a moment and try again.");
+      }
+
       // Launch Paystack using the returned config (UUID as reference)
       const config = {
         reference: result.config.reference,
         amount: result.config.amount,
         email: result.config.email,
         metadata: result.config.metadata,
-        publicKey: PAYSTACK_PUB_KEY,
+        key: PAYSTACK_PUB_KEY,
         currency: 'GHS',
         channels: ['mobile_money', 'card'],
       };
