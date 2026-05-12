@@ -185,12 +185,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     : rawKey;
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
-    console.log("=== [Frontend] PAYSTACK CALLBACK RECEIVED ===");
-    console.log("📍 UUID (Reference):", paystackResponse.reference);
-    console.log("📍 Status:", paystackResponse.status);
-    
-    // 🚀 REDIRECT TO AUTH RECEIPT PAGE USING UUID (which is the Paystack reference now)
-    console.log(`🚀 [Frontend] Success confirmed. Redirecting to receipt: /receipt/${paystackResponse.reference}`);
+    console.log("=== PAYSTACK CALLBACK RECEIVED ===");
+    console.log("💰 Callback Reference:", paystackResponse.reference);
+    console.log("💰 Type:", typeof paystackResponse.reference);
+
     navigate(`/receipt/${paystackResponse.reference}`);
   };
 
@@ -243,9 +241,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       }
 
       console.log("✅ Server intent successful.");
-      console.log("📍 UUID Generated:", result.config.transactionId);
-      console.log("📍 Friendly Ref:", result.config.friendlyReference);
-      console.log("📍 Reference sent to Paystack:", result.config.reference);
+      console.log("🚀 UUID Generated:", result.config.transactionId);
+      console.log("🚀 Friendly Reference:", result.config.friendlyReference);
 
       // 🚀 SAFETY CHECK: Ensure Paystack script is loaded
       // @ts-ignore
@@ -264,6 +261,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         currency: 'GHS',
         channels: ['mobile_money', 'card'],
       };
+      
+      console.log("🚀 Paystack Reference Being Sent:", config.reference);
 
       // @ts-ignore
       const handler = window.PaystackPop.setup({
