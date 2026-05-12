@@ -174,7 +174,7 @@ export default function App() {
         <main>
           <Routes>
             <Route path="/" element={<Home settings={settings} />} />
-            <Route path="/receipt/:reference" element={<Receipt />} />
+            <Route path="/receipt/:id" element={<Receipt />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/auth" element={<AdminAuth />} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -158,7 +158,7 @@ export default async function handler(req: any, res: any) {
 }
 
 async function processTransaction(tx: any, paystackData: any, res: any) {
-  // 🚀 STEP 1 — IMPLEMENT FORENSIC STATE LOGGING
+  // 🚀 STEP 1 & 5 — IMPLEMENT FORENSIC STATE LOGGING
   console.log("=== PRE-UPDATE TRANSACTION STATE ===", {
     id: tx.id,
     status: tx.status,
@@ -186,11 +186,11 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   console.log(`🚀 [StateMachine] Transitioning ${tx.id}: ${tx.status} -> ${PAYMENT_STATUSES.SUCCESS}`);
 
-  // 🚀 STEP 2 & 3 — REMOVE FRAGILE CONDITIONAL UPDATE FILTER + AUTHORITATIVE PROMOTION
+  // 🚀 STEP 1 — AUTHORITATIVE WEBHOOK UPDATE (NO CONDITIONAL FILTERS)
   const { error: updateError, count } = await supabase
     .from("transactions")
     .update({
-      status: PAYMENT_STATUSES.SUCCESS, // AUTHORITATIVE PROMOTION
+      status: PAYMENT_STATUSES.SUCCESS, 
       payment_status: PAYMENT_STATUSES.SUCCESS,
       webhook_verified: true,
       paystack_receipt: paystackData.reference,
@@ -199,13 +199,13 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     }, { count: "exact" })
     .eq("id", tx.id);
 
-  // 🚀 STEP 4 — VERIFY UPDATE ROW COUNT
+  // 🚀 STEP 2 — VERIFY UPDATE ROW COUNT
   console.log("=== PAYMENT UPDATE ROW COUNT ===", count);
 
   if (updateError || count === 0) {
     console.error("❌ [Webhook] Payment convergence failed:", updateError || "Zero rows updated");
     
-    // 🚀 STEP 11 — IMPLEMENT FAILURE ESCALATION
+    // ESCALATION
     await supabase.from("transactions").update({ 
       reconciliation_state: RECONCILIATION_STATES.PAYMENT_VERIFICATION_FAILED,
       updated_at: new Date().toISOString()
@@ -216,7 +216,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     });
   }
 
-  // 🚀 STEP 5 — IMPLEMENT STRICT REFETCH CONVERGENCE
+  // 🚀 STEP 3 — IMPLEMENT AUTHORITATIVE DB REFETCH
   const { data: updatedTx, error: verifyError } = await supabase
     .from('transactions')
     .select('*')
@@ -230,7 +230,13 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     });
   }
 
-  // 🚀 STEP 6 — IMPLEMENT AUTHORITATIVE STATE VALIDATION
+  // 🚀 STEP 4 & 5 — VALIDATE PAYMENT CONVERGENCE STRICTLY + FORENSIC LOGGING
+  console.log("=== POST-UPDATE TRANSACTION STATE ===", {
+    id: updatedTx.id,
+    status: updatedTx.status,
+    payment_status: updatedTx.payment_status
+  });
+
   if (
     updatedTx.payment_status !== PAYMENT_STATUSES.SUCCESS ||
     updatedTx.status !== PAYMENT_STATUSES.SUCCESS
@@ -239,6 +245,13 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
        status: updatedTx.status,
        payment_status: updatedTx.payment_status
     });
+    
+    // Escalate
+    await supabase.from("transactions").update({ 
+      reconciliation_state: RECONCILIATION_STATES.PAYMENT_VERIFICATION_FAILED,
+      updated_at: new Date().toISOString()
+    }).eq("id", tx.id);
+
     return res.status(500).json({
       error: "Convergence Validation Failed"
     });
@@ -251,12 +264,8 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   console.log(LOG_MARKERS.PAYMENT_PROMOTED);
   
-  // 🚀 STEP 7 — FIX PREMATURE VTU STATUS PROMOTION
-  // We no longer log "VTU_EXECUTION_STARTED" marker here because it's misleading.
-  // The actual execution starts inside purchaseData().
-  
   try {
-    // purchaseData handles its own atomicity for fulfillment_processing
+    // 🚀 STEP 9 & 10: Provider execution starts only after success
     const result = await purchaseData(updatedTx, EXECUTION_SOURCES.PAYSTACK_WEBHOOK);
     
     if (result.success) {

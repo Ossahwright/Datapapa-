@@ -20,7 +20,7 @@ import { openWhatsApp } from '../lib/whatsapp';
 export type TransactionStatus = 'success' | 'processing' | 'failed';
 
 export default function Receipt() {
-  const { reference } = useParams<{ reference: string }>();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [transaction, setTransaction] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -28,17 +28,25 @@ export default function Receipt() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!reference) return;
+    if (!id) return;
 
     const fetchTransaction = async () => {
       try {
         const { data, error: fetchError } = await supabase
           .from('transactions')
           .select('*')
-          .or(`paystack_receipt.eq."${reference}",internal_reference.eq."${reference}",id.eq."${reference}"`)
+          .eq('id', id)
           .maybeSingle();
 
-        if (fetchError) throw fetchError;
+        if (fetchError) {
+          // Check for invalid UUID syntax (error code 22P02)
+          if (fetchError.code === '22P02') {
+            setError('Invalid receipt identifier');
+          } else {
+            throw fetchError;
+          }
+          return;
+        }
         
         if (data) {
           setTransaction(data);
@@ -47,7 +55,7 @@ export default function Receipt() {
         }
       } catch (err: any) {
         console.error('Error fetching receipt:', err);
-        setError(err.message);
+        setError(err.message || 'An unexpected error occurred');
       } finally {
         setLoading(false);
       }
@@ -57,14 +65,14 @@ export default function Receipt() {
 
     // Subscribe to realtime updates for this specific transaction
     const channel = supabase
-      .channel(`receipt-${reference}`)
+      .channel(`receipt-${id}`)
       .on(
         'postgres_changes',
         { 
           event: 'UPDATE', 
           schema: 'public', 
           table: 'transactions', 
-          filter: `id=eq.${transaction?.id || reference}` 
+          filter: `id=eq.${id}` 
         },
         (payload) => {
           console.log('🔄 Receipt update:', payload.new);
@@ -76,11 +84,13 @@ export default function Receipt() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [reference, transaction?.id]);
+  }, [id]);
+
+  const displayReference = transaction?.paystack_receipt || transaction?.internal_reference || transaction?.reference || 'N/A';
 
   const handleCopy = () => {
-    if (!reference) return;
-    navigator.clipboard.writeText(reference);
+    if (!displayReference) return;
+    navigator.clipboard.writeText(displayReference);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -235,7 +245,7 @@ export default function Receipt() {
               <div className="flex justify-between items-center">
                 <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Reference</span>
                 <div className="flex items-center gap-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100 transition-colors hover:border-indigo-200">
-                  <span className="text-slate-900 font-mono text-[11px] font-bold">{reference}</span>
+                  <span className="text-slate-900 font-mono text-[11px] font-bold">{displayReference}</span>
                   <button 
                     onClick={handleCopy}
                     className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
@@ -262,7 +272,7 @@ export default function Receipt() {
               
               <div className="flex gap-3">
                 <button
-                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I have an issue with my transaction ${reference}. Recipient: ${transaction.recipient_phone}.` })}
+                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I have an issue with my transaction ${displayReference}. Recipient: ${transaction.recipient_phone}.` })}
                   className="flex-1 flex items-center justify-center gap-2 py-3 bg-white text-slate-600 border border-slate-200 rounded-2xl font-bold text-xs hover:bg-slate-50 transition-all active:scale-95"
                 >
                   <MessageCircle size={14} />

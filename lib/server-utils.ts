@@ -599,14 +599,24 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   }
 
   // 🛡️ STEP 3 & 8 — HARDEN purchaseData() EXECUTION GUARD
-  // The user requested: STRICTLY require: transaction.status === "success" AND payment_status === "success"
-  const isPaid = transaction.status === PAYMENT_STATUSES.SUCCESS && transaction.payment_status === PAYMENT_STATUSES.SUCCESS;
+  // STRICTLY require: transaction.status === "success" AND payment_status === "success"
+  const isPaid = 
+    (transaction.status === PAYMENT_STATUSES.SUCCESS || transaction.status === PAYMENT_STATUSES.PAID) && 
+    (transaction.payment_status === PAYMENT_STATUSES.SUCCESS || transaction.payment_status === PAYMENT_STATUSES.PAID);
   
   if (!isPaid) {
     const error = `Safety Block: Blocked: Payment not authoritatively verified. Must be '${PAYMENT_STATUSES.SUCCESS}'. Current status: ${transaction.status}, payment_status: ${transaction.payment_status}`;
     console.error(`❌ [${executionId}] ${error}`);
+    console.error("=== CONVERGENCE FAILURE CONTEXT ===", {
+      id: transaction.id,
+      status: transaction.status,
+      payment_status: transaction.payment_status,
+      source: source
+    });
     throw new Error(error);
   }
+
+  console.log(`✅ [${executionId}] Payment Convergence Validated: [${transaction.payment_status}]`);
 
   // 🛡️ STEP 3.5: ATOMIC FULFILLMENT LOCK
   // We transition from 'success' to 'fulfillment_processing'

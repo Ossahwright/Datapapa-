@@ -231,8 +231,47 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     console.log("=== PAYSTACK CALLBACK RECEIVED ===");
     console.log("💰 [Success] Reference:", paystackResponse.reference);
     
-    // 🚀 REDIRECT TO AUTH RECEIPT PAGE
-    navigate(`/receipt/${paystackResponse.reference}`);
+    setIsLoading(true);
+    
+    try {
+      // 🚀 FETCH THE AUTHORITATIVE UUID (id) BEFORE REDIRECT
+      // This ensures we land on /receipt/[uuid] instead of /receipt/[reference]
+      const { data, error: fetchError } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('internal_reference', paystackResponse.reference)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      if (data?.id) {
+        console.log("📍 Found Transaction UUID:", data.id);
+        navigate(`/receipt/${data.id}`);
+      } else {
+        // Fallback: If not found immediately (rare), try searching by id exactly if the reference was a UUID
+        // but normally we trust the reference -> id mapping
+        console.warn("⚠️ Transaction not found by reference immediately. Falling back to background search...");
+        
+        // Wait a bit and try one more time (webhook might be finishing)
+        await new Promise(r => setTimeout(r, 1500));
+        const { data: retryData } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('internal_reference', paystackResponse.reference)
+          .maybeSingle();
+
+        if (retryData?.id) {
+          navigate(`/receipt/${retryData.id}`);
+        } else {
+          // Absolute fallback: redirect to homepage or show error
+          setError("Receipt generation failed. Please check your transaction history.");
+          setIsLoading(false);
+        }
+      }
+    } catch (err: any) {
+      console.error("❌ Redirect Error:", err);
+      navigate(`/`); // Safety fallback
+    }
   };
 
   const handlePaymentClose = () => {
