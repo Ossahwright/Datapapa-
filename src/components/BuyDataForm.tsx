@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { usePaystackPayment } from 'react-paystack';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
@@ -25,20 +26,16 @@ interface BuyDataFormProps {
 }
 
 export default function BuyDataForm({ settings }: BuyDataFormProps) {
+  const navigate = useNavigate();
   const [network, setNetwork] = useState('');
   const [bundle, setBundle] = useState('');
   const [phone, setPhone] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
-  const [transactionId, setTransactionId] = useState('');
   const [payerPhone, setPayerPhone] = useState('');
   const [dbBundles, setDbBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'success'>('idle');
-  const [deliveryStatus, setDeliveryStatus] = useState<'idle' | 'processing' | 'delivered' | 'failed'>('idle');
-  const [countdown, setCountdown] = useState(0);
   const [providerStatus, setProviderStatus] = useState<'operational' | 'degraded' | 'outage' | 'checking'>('checking');
 
   const [supabaseReady] = useState(isSupabaseConfigured);
@@ -181,109 +178,11 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     : [];
   const selectedBundleObj = currentBundles.find((b: any) => String(b.id) === String(bundle));
 
-  useEffect(() => {
-    if (!transactionId) return;
-
-    let pollingInterval: NodeJS.Timeout;
-    
-    const fetchLatestTransactionState = async () => {
-      try {
-        const { data: updated } = await supabase
-          .from("transactions")
-          .select("delivery_status, vtu_status")
-          .or(`internal_reference.eq."${transactionId}",id.eq."${transactionId}"`)
-          .maybeSingle();
-
-        if (updated) {
-          if (updated.delivery_status === VTU_STATUSES.DELIVERED || 
-              updated.vtu_status === VTU_STATUSES.DELIVERED || 
-              updated.vtu_status === VTU_STATUSES.SUCCESS) {
-            setDeliveryStatus("delivered");
-            clearInterval(pollingInterval);
-          } else if (updated.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED || 
-                     updated.vtu_status === "awaiting_provider_confirmation") {
-            setDeliveryStatus("processing");
-          } else if (updated.delivery_status === VTU_STATUSES.FAILED || 
-                     updated.vtu_status === VTU_STATUSES.PROVIDER_REJECTED || 
-                     updated.vtu_status === VTU_STATUSES.FAILED) {
-            setDeliveryStatus("failed");
-            clearInterval(pollingInterval);
-          }
-        }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    };
-
-    // Step 6: 🚀 Post-Payment Active Polling
-    // Bridges webhook latency, realtime propagation timing, and provider execution startup
-    pollingInterval = setInterval(fetchLatestTransactionState, 3000);
-
-    // Initial fetch just to be safe
-    fetchLatestTransactionState();
-
-    const channel = supabase
-      .channel("transactions-status")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "transactions",
-        },
-        (payload) => {
-          console.log("🔄 REALTIME UPDATE VISIBLE:", payload);
-          const updated = payload.new;
-          if (updated.internal_reference === transactionId || updated.id === transactionId) {
-            if (updated.delivery_status === VTU_STATUSES.DELIVERED || 
-                updated.vtu_status === VTU_STATUSES.DELIVERED || 
-                updated.vtu_status === VTU_STATUSES.SUCCESS) {
-              setDeliveryStatus("delivered");
-              clearInterval(pollingInterval);
-            } else if (updated.vtu_status === VTU_STATUSES.PROVIDER_ACCEPTED || 
-                       updated.vtu_status === "awaiting_provider_confirmation") {
-              setDeliveryStatus("processing");
-            } else if (updated.delivery_status === VTU_STATUSES.FAILED || 
-                       updated.vtu_status === VTU_STATUSES.PROVIDER_REJECTED || 
-                       updated.vtu_status === VTU_STATUSES.FAILED) {
-              setDeliveryStatus("failed");
-              clearInterval(pollingInterval);
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    // Auto-stop polling after 30 seconds
-    const timeout = setTimeout(() => {
-      clearInterval(pollingInterval);
-    }, 30000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(pollingInterval);
-      clearTimeout(timeout);
-    };
-  }, [transactionId]);
-
   const AUTHORITATIVE_PUB_KEY = "";
   const rawKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
   const PAYSTACK_PUB_KEY = (!rawKey || rawKey === "" || rawKey.includes("VITE_")) 
     ? AUTHORITATIVE_PUB_KEY 
     : rawKey;
-
-  // Countdown timer effect for post-purchase UX
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (countdown > 0) {
-      timer = setTimeout(() => {
-        setCountdown(prev => prev - 1);
-      }, 1000);
-    } else if (countdown === 0 && success) {
-      window.location.reload();
-    }
-    return () => clearTimeout(timer);
-  }, [countdown, success]);
 
   const [paystackRef, setPaystackRef] = useState<string>(`DP-${Date.now()}`);
 
@@ -332,13 +231,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     console.log("=== PAYSTACK CALLBACK RECEIVED ===");
     console.log("💰 [Success] Reference:", paystackResponse.reference);
     
-    setPaymentStatus("success");
-    setSuccess(true); 
-    setIsLoading(false);
-    setCountdown(10);
-    
-    setTransactionId(paystackResponse.reference);
-    console.log("✅ Payment successful. Awaiting webhook fulfillment...");
+    // 🚀 REDIRECT TO AUTH RECEIPT PAGE
+    navigate(`/receipt/${paystackResponse.reference}`);
   };
 
   const handlePaymentClose = () => {
@@ -426,30 +320,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
       setIsLoading(false);
     }
   };
-
-  if (success) {
-    const netConfig = findNetworkConfig(network);
-    
-    // Determine the general status for the receipt card
-    let receiptStatus: TransactionStatus = 'processing';
-    if (deliveryStatus === 'delivered' || deliveryStatus === 'success') receiptStatus = 'success';
-    if (deliveryStatus === 'failed') receiptStatus = 'failed';
-
-    return (
-      <TransactionReceiptCard
-        status={receiptStatus}
-        amount={selectedBundleObj?.price || 0}
-        network={netConfig?.label}
-        bundle={selectedBundleObj?.volume}
-        recipient={phone}
-        reference={transactionId}
-        appName={appName}
-        onReturnHome={() => window.location.reload()}
-        onRetry={() => window.location.reload()}
-        onSupport={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I'm checking on my data purchase for ${phone} (Ref: ${transactionId})` })}
-      />
-    );
-  }
 
   return (
     <div id="buy-data" className="w-full max-w-2xl mx-auto scroll-mt-24 relative">

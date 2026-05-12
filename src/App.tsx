@@ -5,6 +5,7 @@ import Navbar from './components/Navbar';
 import Home from './pages/Home';
 import AdminAuth from './pages/AdminAuth';
 import AdminDashboard from './pages/AdminDashboard';
+import Receipt from './pages/Receipt';
 import MaintenanceScreen from './components/MaintenanceScreen';
 
 interface AppSettings {
@@ -173,6 +174,7 @@ export default function App() {
         <main>
           <Routes>
             <Route path="/" element={<Home settings={settings} />} />
+            <Route path="/receipt/:reference" element={<Receipt />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/auth" element={<AdminAuth />} />
             <Route path="*" element={<Navigate to="/" replace />} />
