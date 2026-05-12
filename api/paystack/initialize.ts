@@ -70,8 +70,8 @@ export default async function handler(req: any, res: any) {
         // Storage of bundle metadata for fulfillment
         display_bundle: bundle.capacity,
         internal_bundle_id: bundle.id,
-        provider_network_key: bundle.network_key,
-        provider_capacity: bundle.volume || bundle.capacity,
+        provider_network_key: bundle.datahub_network_key || bundle.network_key,
+        provider_capacity: bundle.datahub_capacity || bundle.volume || bundle.capacity,
         
         profit: Math.max(0, authoritativeAmount - (parseFloat(bundle.cost_price || '0') || 0)),
         created_at: new Date().toISOString(),

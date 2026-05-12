@@ -126,7 +126,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     return dbBundles
       .filter(b => b.is_active === true)
       .reduce((acc: any, b: any) => {
-        const dbNetKey = (b.network || b.network_key || '').toUpperCase();
+        const dbNetKey = (b.network_key || b.network || '').toUpperCase();
         const dbCapacity = (b.capacity || b.volume || '').toUpperCase();
         
         // 🚀 ATTEMPT AUTHORITATIVE NORMALIZATION

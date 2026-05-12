@@ -1,6 +1,0 @@
-import { supabaseAdmin } from "./lib/server-utils.js";
-async function test() {
-  const { data, error } = await supabaseAdmin.from("transactions").update({ status: "success" }).eq("id", "00000000-0000-0000-0000-000000000000");
-  console.log("UPDATE ERROR", error);
-}
-test();

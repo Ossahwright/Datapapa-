@@ -15,6 +15,9 @@ import {
   Users,
   Settings,
   Activity,
+  Check,
+  TrendingUp,
+  Edit2,
   ArrowUpRight,
   Search,
   Menu,
@@ -978,7 +981,7 @@ export default function AdminDashboard() {
       const isDuplicate = bundles.some(
         (b) =>
           b.id !== bundleId &&
-          b.network?.toLowerCase() === networkToCheck?.toLowerCase() &&
+          (b.network_key || "").toLowerCase() === (updates.network_key || targetBundle?.network_key || "").toLowerCase() &&
           b.capacity?.toLowerCase() === capacityToCheck?.toLowerCase(),
       );
 
@@ -1088,7 +1091,7 @@ export default function AdminDashboard() {
     // Check for duplicate capacity
     const isDuplicate = bundles.some(
       (b) =>
-        b.network?.toLowerCase() === newBundle.network.toLowerCase() &&
+        (b.network_key || "").toLowerCase() === (newBundle.network_key || "").toLowerCase() &&
         b.capacity?.toLowerCase() === newBundle.capacity.toLowerCase(),
     );
 
@@ -2716,19 +2719,22 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                                  tx.payment_status === "success" || 
                                   ["success", "completed", "paid", "payment_success", "fulfilled"].includes(tx.status)
-                                    ? "bg-green-100 text-green-700"
-                                    : tx.status === "failed"
-                                      ? "bg-red-100 text-red-700"
-                                      : tx.status === "pending"
-                                        ? "bg-yellow-100 text-yellow-700"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : (tx.status === "failed" && tx.payment_status !== "success")
+                                      ? "bg-rose-100 text-rose-700"
+                                      : tx.status === "pending" || tx.status === "initialized" || tx.status === "fulfillment_processing"
+                                        ? "bg-amber-100 text-amber-700"
                                         : "bg-slate-100 text-slate-700"
                                 }`}
                               >
-                                {["success", "paid", "payment_success", "fulfilled"].includes(tx.status)
+                                {tx.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(tx.status)
                                   ? "Success"
-                                  : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
+                                  : tx.status === "fulfillment_processing" 
+                                    ? "Processing"
+                                    : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -2972,8 +2978,10 @@ export default function AdminDashboard() {
                 const count = bundles.filter(
                   (b) =>
                     b.network?.toLowerCase() === net.name.toLowerCase() ||
-                    (net.name === "AirtelTigo" &&
-                      b.network?.toLowerCase() === "at"),
+                    (net.name === "AirtelTigo" && (
+                      b.network?.toLowerCase() === "at" || 
+                      b.network?.toLowerCase().includes("airteltigo")
+                    )),
                 ).length;
                 return (
                   <div
@@ -3006,14 +3014,14 @@ export default function AdminDashboard() {
                       <th className="px-6 py-4">Description</th>
                       <th className="px-6 py-4">Capacity</th>
                       <th className="px-6 py-4">Volume</th>
-                      <th className="px-6 py-4 text-slate-400 font-medium">
-                        Cost Price (₵)
+                      <th className="px-6 py-4 text-slate-500 font-medium">
+                        Cost (₵)
                       </th>
-                      <th className="px-6 py-4 text-indigo-700">
-                        Selling Price (₵)
+                      <th className="px-6 py-4 text-slate-900 font-bold">
+                        Selling Price & Profit (₵)
                       </th>
                       <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4 text-center">Actions</th>
+                      <th className="px-6 py-4 text-right pr-10">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -3062,9 +3070,9 @@ export default function AdminDashboard() {
                                     className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm"
                                   />
                                 )}
-                                {(bundle.network?.toLowerCase() ===
-                                  "airteltigo" ||
-                                  bundle.network?.toLowerCase() === "at") && (
+                                {(bundle.network?.toLowerCase() === "airteltigo" ||
+                                  bundle.network?.toLowerCase() === "at" ||
+                                  bundle.network?.toLowerCase().includes("airteltigo")) && (
                                   <img
                                     src="https://i.postimg.cc/sfqT8kkW/images.jpg"
                                     alt="AirtelTigo"
@@ -3078,7 +3086,9 @@ export default function AdminDashboard() {
                                       : bundle.network?.toLowerCase() ===
                                           "telecel"
                                         ? "bg-red-100 text-red-800"
-                                        : "bg-slate-100 text-slate-800"
+                                        : (bundle.network?.toLowerCase() === "airteltigo" || bundle.network?.toLowerCase() === "at" || bundle.network?.toLowerCase().includes("airteltigo"))
+                                          ? "bg-blue-100 text-blue-800"
+                                          : "bg-slate-100 text-slate-800"
                                   }`}
                                 >
                                   {bundle.network}
@@ -3161,7 +3171,7 @@ export default function AdminDashboard() {
                             <td className="px-6 py-4">
                               {isEditing ? (
                                 <div className="relative">
-                                  <span className="absolute left-2 top-1.5 text-slate-400 text-xs">
+                                  <span className="absolute left-2 top-2 text-slate-400 text-xs font-mono">
                                     ₵
                                   </span>
                                   <input
@@ -3174,19 +3184,22 @@ export default function AdminDashboard() {
                                         cost_price: e.target.value,
                                       })
                                     }
-                                    className="pl-5 pr-2 py-1 w-24 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-slate-400 text-sm italic text-slate-500"
+                                    className="pl-5 pr-2 py-1.5 w-24 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm italic text-slate-600 bg-slate-50"
                                   />
                                 </div>
                               ) : (
-                                <span className="text-slate-500 italic">
-                                  ₵{Number(bundle.cost_price || 0).toFixed(2)}
-                                </span>
+                                <div className="flex flex-col">
+                                  <span className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold mb-0.5">PURCHASE</span>
+                                  <span className="text-slate-500 font-mono italic bg-slate-50 px-2 py-1 rounded-md border border-slate-100 w-fit">
+                                    ₵{Number(bundle.cost_price || 0).toFixed(2)}
+                                  </span>
+                                </div>
                               )}
                             </td>
                             <td className="px-6 py-4">
                               {isEditing ? (
                                 <div className="relative">
-                                  <span className="absolute left-2 top-1.5 text-slate-400 text-xs">
+                                  <span className="absolute left-2 top-2 text-indigo-400 text-xs font-bold">
                                     ₵
                                   </span>
                                   <input
@@ -3199,43 +3212,60 @@ export default function AdminDashboard() {
                                         selling_price: e.target.value,
                                       })
                                     }
-                                    className="pl-5 pr-2 py-1 w-24 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm font-bold text-indigo-700"
+                                    className="pl-5 pr-2 py-1.5 w-24 border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm font-bold text-indigo-700 bg-indigo-50/30"
                                   />
                                 </div>
                               ) : (
-                                <span className="font-bold text-indigo-700 text-lg">
-                                  ₵{Number(bundle.selling_price).toFixed(2)}
-                                </span>
+                                <div className="flex items-center gap-3">
+                                  <div className="flex flex-col">
+                                    <span className="text-indigo-400 text-[10px] uppercase tracking-wider font-bold mb-0.5">MARKET PRICE</span>
+                                    <span className="font-black text-indigo-700 text-lg tabular-nums">
+                                      ₵{Number(bundle.selling_price).toFixed(2)}
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-col items-start gap-1">
+                                    <span className="text-[10px] text-emerald-600 uppercase tracking-widest font-bold">PROFIT</span>
+                                    <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-100 flex items-center gap-1 shadow-sm">
+                                      <TrendingUp size={10} />
+                                      ₵{(Number(bundle.selling_price) - Number(bundle.cost_price || 0)).toFixed(2)}
+                                    </span>
+                                  </div>
+                                </div>
                               )}
                             </td>
                             <td className="px-6 py-4">
-                              <button
-                                onClick={() =>
-                                  toggleBundleActive(
-                                    bundle.id,
-                                    bundle.is_active,
-                                  )
-                                }
-                                disabled={isActionProcessing}
-                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                  bundle.is_active
-                                    ? "bg-green-500"
-                                    : "bg-slate-300"
-                                } ${isActionProcessing ? "opacity-50 cursor-not-allowed" : ""}`}
-                              >
-                                <span
-                                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              <div className="flex flex-col gap-1.5">
+                                <span className={`text-[10px] font-bold uppercase tracking-widest ${bundle.is_active ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                  {bundle.is_active ? 'Visible' : 'Hidden'}
+                                </span>
+                                <button
+                                  onClick={() =>
+                                    toggleBundleActive(
+                                      bundle.id,
+                                      bundle.is_active,
+                                    )
+                                  }
+                                  disabled={isActionProcessing}
+                                  className={`relative inline-flex h-5 w-10 items-center rounded-full transition-all duration-300 ${
                                     bundle.is_active
-                                      ? "translate-x-6"
-                                      : "translate-x-1"
-                                  }`}
-                                />
-                              </button>
+                                      ? "bg-emerald-500 shadow-md shadow-emerald-100"
+                                      : "bg-slate-200"
+                                  } ${isActionProcessing ? "opacity-50 cursor-not-allowed" : ""}`}
+                                >
+                                  <span
+                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform duration-300 border border-black/5 ${
+                                      bundle.is_active
+                                        ? "translate-x-5.5"
+                                        : "translate-x-1"
+                                    }`}
+                                  />
+                                </button>
+                              </div>
                             </td>
-                            <td className="px-6 py-4 text-center">
-                              <div className="flex items-center justify-center gap-2">
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end gap-2 pr-4">
                                 {isEditing ? (
-                                  <>
+                                  <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-100">
                                     <button
                                       onClick={() =>
                                         handleUpdateBundle(bundle.id, {
@@ -3264,35 +3294,43 @@ export default function AdminDashboard() {
                                         })
                                       }
                                       disabled={isActionProcessing}
-                                      className="text-xs font-medium px-3 py-1 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md transition-colors disabled:opacity-50"
+                                      className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-all shadow-md shadow-indigo-100 disabled:opacity-50"
                                     >
-                                      {isActionProcessing ? "..." : "Save"}
+                                      {isActionProcessing ? (
+                                        <Activity size={14} className="animate-spin" />
+                                      ) : (
+                                        <Check size={14} />
+                                      )}
+                                      Save
                                     </button>
                                     <button
                                       onClick={() => setEditingBundle(null)}
                                       disabled={isActionProcessing}
-                                      className="text-xs font-medium px-3 py-1 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md transition-colors disabled:opacity-50"
+                                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                      title="Cancel"
                                     >
-                                      Cancel
+                                      <X size={18} />
                                     </button>
-                                  </>
+                                  </div>
                                 ) : (
-                                  <>
+                                  <div className="flex items-center gap-1">
                                     <button
                                       onClick={() => handleEditClick(bundle)}
                                       disabled={isActionProcessing}
-                                      className="text-indigo-600 hover:text-indigo-800 font-medium text-xs px-2 py-1 disabled:opacity-50"
+                                      className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 rounded-xl transition-all group disabled:opacity-50"
+                                      title="Edit Bundle"
                                     >
-                                      Edit
+                                      <Edit2 size={18} className="group-hover:scale-110 transition-transform" />
                                     </button>
                                     <button
                                       onClick={() => setBundleToDelete(bundle)}
                                       disabled={isActionProcessing}
-                                      className="text-red-500 hover:text-red-700 font-medium text-xs px-2 py-1 disabled:opacity-50"
+                                      className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-xl transition-all group disabled:opacity-50"
+                                      title="Delete Bundle"
                                     >
-                                      Delete
+                                      <Trash2 size={18} className="group-hover:scale-110 transition-transform" />
                                     </button>
-                                  </>
+                                  </div>
                                 )}
                               </div>
                             </td>
@@ -4981,12 +5019,12 @@ export default function AdminDashboard() {
                     </label>
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        selectedTransaction.status === "success"
+                        selectedTransaction.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(selectedTransaction.status)
                           ? "bg-green-100 text-green-700"
                           : "bg-yellow-100 text-yellow-700"
                       }`}
                     >
-                      {selectedTransaction.status.toUpperCase()}
+                      {selectedTransaction.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(selectedTransaction.status) ? "SUCCESS" : selectedTransaction.status.toUpperCase()}
                     </span>
                   </div>
                   <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">

@@ -117,7 +117,7 @@ export const BUNDLE_CONFIG: Record<string, BundleDefinition> = {
     id: "TELECEL_1GB",
     displayLabel: "1GB",
     networkId: "TELECEL",
-    providerNetworkKey: "VODA",
+    providerNetworkKey: "TELECEL",
     providerCapacity: "1",
     price: 6
   },
@@ -125,7 +125,7 @@ export const BUNDLE_CONFIG: Record<string, BundleDefinition> = {
     id: "TELECEL_2GB",
     displayLabel: "2GB",
     networkId: "TELECEL",
-    providerNetworkKey: "VODA",
+    providerNetworkKey: "TELECEL",
     providerCapacity: "2",
     price: 12
   },
@@ -133,7 +133,7 @@ export const BUNDLE_CONFIG: Record<string, BundleDefinition> = {
     id: "TELECEL_5GB",
     displayLabel: "5GB",
     networkId: "TELECEL",
-    providerNetworkKey: "VODA",
+    providerNetworkKey: "TELECEL",
     providerCapacity: "5",
     price: 30
   }

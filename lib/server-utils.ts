@@ -552,8 +552,9 @@ export async function reconcileTransaction(transactionId: string) {
     VTU_STATUSES.AWAITING_PROVIDER_CONFIRMATION, 
     VTU_STATUSES.PROCESSING, 
     VTU_STATUSES.PROVIDER_EXECUTION_STARTED, 
-    VTU_STATUSES.DELAYED_PROVIDER_PROCESSING
-  ].includes(tx.vtu_status);
+    VTU_STATUSES.DELAYED_PROVIDER_PROCESSING,
+    VTU_STATUSES.FULFILLMENT_PROCESSING
+  ].includes(tx.vtu_status) || [VTU_STATUSES.FULFILLMENT_PROCESSING].includes(tx.status as any);
 
   if (isWaiting) {
     console.log(`[Reconcile] UUID: ${tx.id} is in waiting state: ${tx.vtu_status}. Polling provider...`);
@@ -850,7 +851,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     
     try {
       await supabase.from("transactions").update({ 
-        status: PAYMENT_STATUSES.FAILED,
+        status: PAYMENT_STATUSES.PAYMENT_SUCCESS,
         vtu_status: VTU_STATUSES.PROVIDER_REJECTED, 
         error_message: lastError,
         updated_at: new Date().toISOString(),
