@@ -186,7 +186,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const handlePaymentSuccess = async (paystackResponse: any) => {
     console.log("=== PAYSTACK CALLBACK RECEIVED ===");
-    console.log("💰 [Success] Authoritative UUID Ref:", paystackResponse.reference);
+    console.log("📍 UUID (Expected):", paystackResponse.reference); // Use forensic label
     
     // 🚀 REDIRECT TO AUTH RECEIPT PAGE USING UUID (which is the Paystack reference now)
     navigate(`/receipt/${paystackResponse.reference}`);
@@ -195,35 +195,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const handlePaymentClose = () => {
     console.log("🔒 PAYSTACK WINDOW CLOSED");
     setIsLoading(false);
-  };
-
-  const createPaymentIntent = async (ref: string) => {
-    try {
-      console.log("📝 [Async] Recording intent for ref:", ref);
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      const response = await fetch(API_ROUTES.PAYSTACK_INITIALIZE, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bundleId: selectedBundleObj.db_id || selectedBundleObj.id,
-          phone,
-          payerPhone: payerPhone || phone,
-          networkId: network,
-          userId: user?.id,
-          reference: ref // Force authoritative override
-        }),
-      });
-      
-      const result = await response.json();
-      if (!response.ok) {
-        console.error("❌ Intent Recording Failed:", result.error);
-      } else {
-        console.log("✅ Intent recorded successfully.");
-      }
-    } catch (err) {
-      console.error("❌ Background Intent sync failed:", err);
-    }
   };
 
   const handlePayment = async () => {
@@ -243,7 +214,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setError('');
 
     try {
-      console.log("📝 Initializing payment intent...");
+      console.log("📝 Initializing payment intent on server...");
       const { data: { user } } = await supabase.auth.getUser();
       
       const response = await fetch(API_ROUTES.PAYSTACK_INITIALIZE, {
@@ -263,7 +234,10 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
         throw new Error(result.error || 'Failed to initialize payment');
       }
 
-      console.log("✅ Intent stored, launching Paystack with UUID:", result.config.reference);
+      console.log("✅ Server intent successful.");
+      console.log("📍 UUID Generated:", result.config.transactionId);
+      console.log("📍 Friendly Ref:", result.config.friendlyReference);
+      console.log("📍 Reference sent to Paystack:", result.config.reference);
 
       // 🚀 SAFETY CHECK: Ensure Paystack script is loaded
       // @ts-ignore
@@ -274,7 +248,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
       // Launch Paystack using the returned config (UUID as reference)
       const config = {
-        reference: result.config.reference,
+        reference: result.config.reference, // Should be UUID
         amount: result.config.amount,
         email: result.config.email,
         metadata: result.config.metadata,
@@ -387,16 +361,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                 </div>
                 <h3 className="text-xl font-bold text-slate-900">Choose Bundle</h3>
               </div>
-              {network && (
-                <button 
-                  onClick={() => fetchBundles()} 
-                  disabled={isLoadingBundles}
-                  className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-1.5 hover:text-indigo-700 transition-colors"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isLoadingBundles ? 'animate-spin' : ''}`} />
-                  Sync
-                </button>
-              )}
             </div>
             
             <div className="pl-0 sm:pl-12">
@@ -404,9 +368,9 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                 <div className="flex flex-col items-center justify-center py-6 text-slate-500 bg-slate-50 rounded-2xl border-2 border-slate-100">
                   <div className="flex items-center gap-2 mb-2">
                     <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
-                    <span className="text-sm font-black uppercase tracking-tighter">Live Connection Established</span>
+                    <span className="text-sm font-black uppercase tracking-tighter text-slate-600">Checking Available Bundles</span>
                   </div>
-                  <span className="text-xs font-bold text-slate-400">Syncing with Supabase table...</span>
+                  <span className="text-xs font-bold text-slate-400">Please wait a moment...</span>
                 </div>
               ) : loadError ? (
                 <div className="p-4 bg-red-50 text-red-700 border-2 border-red-100 rounded-2xl flex flex-col items-center text-center">
@@ -435,13 +399,6 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-5">
                     <ChevronDown className="h-5 w-5 text-slate-400" aria-hidden="true" />
                   </div>
-                  
-                  {currentBundles.length > 0 && (
-                    <div className="mt-2 flex items-center gap-1.5 px-1">
-                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{currentBundles.length} Bundles Synced Locally</span>
-                    </div>
-                  )}
                 </div>
               )}
               {network && !isLoadingBundles && !loadError && currentBundles.length === 0 && (

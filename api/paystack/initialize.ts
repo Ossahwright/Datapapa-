@@ -88,8 +88,11 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Failed to create payment intent in database." });
     }
 
-    // UPDATE with the actual ID for internal sync (if we really need internal_reference)
-    await supabase.from("transactions").update({ internal_reference: transaction.id }).eq("id", transaction.id);
+    // UPDATE with the actual ID for internal sync
+    await supabase.from("transactions").update({ 
+      internal_reference: transaction.id,
+      paystack_receipt: transaction.id 
+    }).eq("id", transaction.id);
 
     console.log("✅ PAYMENT INTENT STORED:", transaction.id);
 
