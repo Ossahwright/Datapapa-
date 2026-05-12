@@ -173,6 +173,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
     .update({
       status: PAYMENT_STATUSES.SUCCESS, 
       payment_status: PAYMENT_STATUSES.SUCCESS,
+      external_reference: tx.id, // 🚀 AUTHORITATIVE CONVERGENCE
       webhook_verified: true,
       paystack_receipt: paystackData.reference,
       payment_verified_at: new Date().toISOString(),

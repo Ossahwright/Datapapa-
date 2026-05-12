@@ -90,11 +90,11 @@ export default async function handler(req: any, res: any) {
     }
 
     // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
-    // We update the record to ensure paystack_receipt matches the ID for dual-index safety
-    // although the UUID itself is the primary anchor.
+    // We update the record to ensure identity convergence across ALL reference fields.
     await supabase.from("transactions").update({ 
+      external_reference: transaction.id, // 🚀 AUTHORITATIVE CONVERGENCE
       paystack_receipt: transaction.id,
-      internal_reference: friendlyReference // Store the friendly one here for backup lookup
+      internal_reference: friendlyReference
     }).eq("id", transaction.id);
 
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");

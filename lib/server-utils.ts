@@ -729,9 +729,10 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   // Update state IMMEDIATELY BEFORE actual DataHub API request
   await supabase.from("transactions").update({
     vtu_status: VTU_STATUSES.PROVIDER_EXECUTION_STARTED,
+    external_reference: authoritativeId, // 🚀 AUTHORITATIVE CONVERGENCE
     provider_execution_started_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
-  }).eq("id", transaction.id);
+  }).eq("id", authoritativeId);
 
   // 🚀 STEP 9 — IMPLEMENT PROVIDER EXECUTION TRUTH LOGGING
   try {
