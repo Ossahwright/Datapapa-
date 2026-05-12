@@ -74,8 +74,6 @@ export default async function handler(req: any, res: any) {
                 status: "payment_success",
                 payment_status: PAYMENT_STATUSES.SUCCESS,
                 external_reference: finalTransactionId,
-                webhook_verified: true,
-                payment_verified_at: new Date().toISOString(),
                 updated_at: new Date().toISOString() 
               })
               .eq('id', finalTransactionId)

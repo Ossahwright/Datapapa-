@@ -1245,7 +1245,12 @@ export default function AdminDashboard() {
   };
 
   const getTransactionStatus = (tx: any) => {
-    const isPaid = tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'success' || tx.payment_status === 'paid' || tx.payment_status === 'success';
+    const isPaid = tx.status === 'paid' || 
+                   tx.status === 'payment_verified' || 
+                   tx.status === 'success' || 
+                   tx.status === 'payment_success' || 
+                   tx.payment_status === 'paid' || 
+                   tx.payment_status === 'success';
     const vtu = tx.vtu_status;
     const updatedAt = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
     const now = Date.now();

@@ -110,40 +110,54 @@ export default function Receipt() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getStatusInfo = (tx: any): { status: TransactionStatus; title: string; message: string; color: string; icon: React.ReactNode } => {
+  const getStatusInfo = (tx: any): { status: string; title: string; message: string; color: string; icon: React.ReactNode } => {
     if (!tx) return { status: 'processing', title: 'Loading...', message: 'Please wait...', color: 'slate', icon: <Loader2 className="animate-spin" /> };
 
-    const isPaid = tx.payment_status === 'success' || tx.status === 'success' || tx.status === 'fulfilled' || tx.status === 'paid';
-    const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected';
+    const isPaid = tx.payment_status === 'success' || 
+                   tx.status === 'success' || 
+                   tx.status === 'payment_success' || 
+                   tx.status === 'fulfilled' || 
+                   tx.status === 'paid';
+                   
+    const isDelivered = tx.vtu_status === 'delivered' || tx.delivery_status === 'delivered' || tx.status === 'fulfilled';
+    const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.status === 'failed';
 
-    // Once Paystack payment is successfully verified: ALWAYS immediately show: ✅ Payment Successful
-    if (isPaid && !isFailed) {
+    if (isDelivered) {
       return {
-        status: 'success',
-        title: 'Payment Successful',
-        message: 'Your transaction was completed successfully.',
+        status: 'Delivered',
+        title: 'Transaction Successful',
+        message: 'Your data has been delivered successfully.',
         color: 'emerald',
-        icon: <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+        icon: <CheckCircle2 className="w-12 h-12 text-emerald-600" />
+      };
+    }
+
+    if (isPaid) {
+      return {
+        status: 'Processing',
+        title: 'Payment Received',
+        message: 'Your payment is confirmed. Data delivery is in progress.',
+        color: 'indigo',
+        icon: <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
       };
     }
 
     if (isFailed) {
       return {
-        status: 'failed',
+        status: 'Failed',
         title: 'Transaction Failed',
         message: 'We could not complete your request. Please contact support.',
         color: 'rose',
-        icon: <XCircle className="w-10 h-10 text-rose-600" />
+        icon: <XCircle className="w-12 h-12 text-rose-600" />
       };
     }
 
-    // This should ideally only show for a fraction of a second until realtime update or sync completion
     return {
-      status: 'success',
-      title: 'Payment Successful',
-      message: 'Your transaction was completed successfully.',
-      color: 'emerald',
-      icon: <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+      status: 'Initialized',
+      title: 'Payment Pending',
+      message: 'Awaiting payment confirmation from Paystack.',
+      color: 'slate',
+      icon: <Loader2 className="w-12 h-12 text-slate-400 animate-spin" />
     };
   };
 
@@ -226,62 +240,77 @@ export default function Receipt() {
 
             {/* Separator */}
             <div className="flex items-center gap-4 mb-8">
-              <div className="h-px bg-slate-100 flex-1" />
-              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Transaction Details</p>
-              <div className="h-px bg-slate-100 flex-1" />
+              <div className="h-px border-t border-dashed border-slate-200 flex-1" />
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Transaction Summary</p>
+              <div className="h-px border-t border-dashed border-slate-200 flex-1" />
             </div>
 
             {/* Receipt Content */}
-            <div className="space-y-5">
-              <div className="flex justify-between items-center group">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Amount</span>
-                <span className="text-xl font-black text-slate-900">GHS {Number(transaction.amount).toFixed(2)}</span>
-              </div>
-              
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Network</span>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                  <span className="text-slate-900 font-bold">{netConfig?.label || transaction.network || 'Unknown'}</span>
+            <div className="space-y-6">
+              <div className="bg-slate-50/50 rounded-2xl p-6 border border-slate-100">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Total Amount</span>
+                </div>
+                <div className="text-3xl font-black text-slate-900 tracking-tighter">
+                  ₵{Number(transaction.amount).toFixed(2)}
                 </div>
               </div>
 
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Bundle</span>
-                <span className="text-slate-900 font-bold truncate max-w-[150px]" title={transaction.display_bundle || transaction.capacity || 'Data Package'}>
-                  {transaction.display_bundle || transaction.capacity || 'Data Package'}
-                </span>
-              </div>
-
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Recipient</span>
-                <span className="text-slate-900 font-mono font-bold tracking-tight">{transaction.recipient_phone || transaction.phone}</span>
-              </div>
-
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Reference</span>
-                <div className="flex items-center gap-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100 transition-colors hover:border-indigo-200">
-                  <span className="text-slate-900 font-mono text-[11px] font-bold">{displayReference}</span>
-                  <button 
-                    onClick={handleCopy}
-                    className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
-                  >
-                    {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                  </button>
+              <div className="grid grid-cols-1 gap-4">
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Network</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${netConfig?.color || 'bg-slate-400'}`} />
+                    <span className="text-slate-900 font-black text-sm">{netConfig?.label || transaction.network || 'Unknown'}</span>
+                  </div>
                 </div>
-              </div>
+                
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Service</span>
+                  <span className="text-slate-900 font-black text-sm">{transaction.display_bundle || transaction.capacity || 'Data Package'}</span>
+                </div>
 
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Date</span>
-                <span className="text-slate-900 font-bold text-[11px]">{new Date(transaction.created_at).toLocaleString()}</span>
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Recipient</span>
+                  <span className="text-slate-900 font-mono font-black text-sm tracking-tight">{transaction.recipient_phone || transaction.phone}</span>
+                </div>
+
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Status</span>
+                  <span className={`text-[11px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
+                    statusInfo.color === 'emerald' ? 'bg-emerald-100 text-emerald-700' :
+                    statusInfo.color === 'rose' ? 'bg-rose-100 text-rose-700' :
+                    'bg-indigo-100 text-indigo-700'
+                  }`}>
+                    {statusInfo.status}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Reference</span>
+                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 transition-colors hover:border-indigo-200">
+                    <span className="text-slate-900 font-mono text-[10px] font-black">{displayReference}</span>
+                    <button 
+                      onClick={handleCopy}
+                      className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
+                    >
+                      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center px-2">
+                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Date & Time</span>
+                  <span className="text-slate-500 font-bold text-[11px]">{new Date(transaction.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
               </div>
             </div>
 
             {/* Bottom Actions */}
-            <div className="mt-10 space-y-4">
+            <div className="mt-12 space-y-4">
               <button
                 onClick={() => navigate('/')}
-                className="w-full flex items-center justify-center gap-2 py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200"
+                className="w-full flex items-center justify-center gap-2 py-5 bg-slate-900 text-white rounded-[2rem] font-black text-base hover:bg-slate-800 transition-all active:scale-95 shadow-2xl shadow-slate-300"
               >
                 Return to Homepage
               </button>

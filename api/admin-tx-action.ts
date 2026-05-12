@@ -25,8 +25,7 @@ export default async function handler(req: any, res: any) {
           delivery_status: "delivered",
           vtu_status: "success", // Ensure VTU status is also updated for UI consistency
           delivery_updated_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          admin_action_by: 'admin' // Optional: track who did it
+          updated_at: new Date().toISOString()
         })
         .eq("id", transactionId);
 

@@ -170,8 +170,6 @@ export default async function handler(req: any, res: any) {
         vtu_status: vtuStatus,
         reconciliation_state: reconciliationState,
         delivery_updated_at: timestamp,
-        delivered_at: isSuccess ? timestamp : null, 
-        reconciliation_completed_at: isSuccess ? timestamp : null,
         updated_at: timestamp,
         api_response: payload,
         external_reference: providerRef || tx.external_reference,

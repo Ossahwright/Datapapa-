@@ -101,6 +101,7 @@ export default async function handler(req: any, res: any) {
     console.log("=== [Webhook] Auth Payment Success Event Verified ===");
     const paystackData = event.data;
     const reference = paystackData.reference;
+    console.log("=== PAYSTACK REFERENCE RETURNED ===", reference);
     let metadata = paystackData.metadata;
 
     if (typeof metadata === 'string') {
@@ -193,9 +194,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
       status: "payment_success",
       payment_status: "success",
       external_reference: tx.id,
-      webhook_verified: true,
       paystack_receipt: paystackData.reference || tx.id,
-      payment_verified_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", tx.id)
@@ -248,7 +247,7 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
 
   if (
     updatedTx.payment_status !== "success" ||
-    updatedTx.status !== "success"
+    (updatedTx.status !== "success" && updatedTx.status !== "payment_success")
   ) {
     console.error("❌ [Webhook] AUTHORITATIVE CONVERGENCE MISMATCH", {
        status: updatedTx.status,

@@ -472,7 +472,7 @@ export async function checkProviderTransactionStatus(tx: any) {
       const result = response.data?.data || response.data;
       if (response.status === 200 && result) {
         const status = String(result.status || result.delivery_status || "").toUpperCase();
-        const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL"].includes(status);
+        const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL", "FULFILLED", "PROCESSED"].includes(status);
         const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(status);
         
         return { success: true, isSuccess, isFailed, providerStatus: status, data: result };
@@ -505,31 +505,44 @@ export async function reconcileTransaction(transactionId: string) {
   const timestamp = new Date().toISOString();
 
   // 🛡️ STEP 1: Paystack Truth (Authoritative Verification)
-  if (tx.status === PAYMENT_STATUSES.PENDING && tx.paystack_receipt) {
-    console.log(`[Reconcile] Verifying payment for UUID: ${tx.id} with Paystack Receipt: ${tx.paystack_receipt}`);
-    try {
-      const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${tx.paystack_receipt}`, {
-        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
-      });
-      if (psRes.data?.data?.status === PAYMENT_STATUSES.SUCCESS) {
-        console.log(`✅ [Reconcile] Paystack Success for UUID: ${tx.id}. Promoting to SUCCESS.`);
-        await supabase.from("transactions").update({ 
-          status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
-          payment_status: PAYMENT_STATUSES.SUCCESS,
-          webhook_verified: true,
-          payment_verified_at: timestamp, 
-          updated_at: timestamp 
-        }).eq("id", transactionId);
+  const needsPaymentVerification = 
+    tx.status === PAYMENT_STATUSES.PENDING || 
+    tx.status === PAYMENT_STATUSES.INITIALIZED || 
+    tx.status === PAYMENT_STATUSES.PAYMENT_PENDING;
+
+  if (needsPaymentVerification) {
+    const psReceipts = [tx.paystack_receipt, tx.reference, tx.id, tx.external_reference].filter(Boolean);
+    
+    console.log(`[Reconcile] Verifying payment for UUID: ${tx.id}. Candidates: ${psReceipts.join(', ')}`);
+    
+    for (const receipt of psReceipts) {
+      try {
+        console.log(`[Reconcile] Trying Paystack Receipt: ${receipt}`);
+        const psRes = await apiClient.get(`https://api.paystack.co/transaction/verify/${receipt}`, {
+          headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+        });
         
-        const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
-        if (updatedTx) {
-          console.log(`[Reconcile] Triggering fulfillment for UUID: ${updatedTx.id}`);
-          await purchaseData(updatedTx, EXECUTION_SOURCES.RECONCILIATION_ENGINE);
+        const psStatus = psRes.data?.data?.status || psRes.data?.status;
+        
+        if (psStatus === "success" || psStatus === PAYMENT_STATUSES.SUCCESS) {
+          console.log(`✅ [Reconcile] Paystack Success for UUID: ${tx.id} using receipt: ${receipt}. Promoting to SUCCESS.`);
+          await supabase.from("transactions").update({ 
+            status: PAYMENT_STATUSES.PAYMENT_SUCCESS, 
+            payment_status: PAYMENT_STATUSES.SUCCESS,
+            paystack_receipt: receipt, // Converge on the one that worked
+            updated_at: timestamp 
+          }).eq("id", transactionId);
+          
+          const { data: updatedTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
+          if (updatedTx) {
+            console.log(`[Reconcile] Triggering fulfillment for UUID: ${updatedTx.id}`);
+            await purchaseData(updatedTx, EXECUTION_SOURCES.RECONCILIATION_ENGINE);
+          }
+          return { success: true, status: PAYMENT_STATUSES.PAYMENT_SUCCESS };
         }
-        return { success: true, status: PAYMENT_STATUSES.PAYMENT_SUCCESS };
+      } catch (err: any) {
+        console.warn(`[Reconcile] PS Attempt failed for ${receipt}:`, err.message);
       }
-    } catch (err: any) {
-      console.error(`❌ [Reconcile] Paystack verification failed for UUID: ${tx.id}:`, err.message);
     }
   }
 
@@ -554,8 +567,6 @@ export async function reconcileTransaction(transactionId: string) {
         status: finalStatus,
         vtu_status: vtuStatus,
         delivery_status: poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED,
-        delivered_at: poll.isSuccess ? timestamp : null,
-        reconciliation_completed_at: timestamp,
         updated_at: timestamp,
         api_response: poll.data
       }).eq("id", transactionId);
@@ -655,6 +666,7 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     transaction.status === "success" || 
     transaction.status === PAYMENT_STATUSES.SUCCESS || 
     transaction.status === PAYMENT_STATUSES.PAID || 
+    transaction.status === PAYMENT_STATUSES.PAYMENT_SUCCESS ||
     transaction.status === VTU_STATUSES.FULFILLMENT_PROCESSING;
 
   if (!isStatusValid) {
@@ -671,7 +683,6 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     .update({ 
       status: VTU_STATUSES.FULFILLMENT_PROCESSING,
       vtu_status: VTU_STATUSES.PROCESSING,
-      provider_execution_started_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })
     .eq("id", transaction.id)
@@ -753,7 +764,6 @@ export async function purchaseData(transaction: any, source: string = "unknown")
   await supabase.from("transactions").update({
     vtu_status: VTU_STATUSES.PROVIDER_EXECUTION_STARTED,
     external_reference: authoritativeId, // 🚀 AUTHORITATIVE CONVERGENCE
-    provider_execution_started_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   }).eq("id", authoritativeId);
 
@@ -803,7 +813,6 @@ export async function purchaseData(transaction: any, source: string = "unknown")
           provider_reference: providerReference || authoritativeId,
           external_reference: providerReference || authoritativeId,
           provider_payload: result,
-          provider_accepted_at: acceptanceTime,
           reconciliation_state: RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION,
           api_response: result,
           updated_at: new Date().toISOString()

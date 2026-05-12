@@ -48,12 +48,9 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: "Invalid bundle price detected." });
     }
 
-    // 3. GENERATE DETERMINISTIC REFERENCES
-    // Note: The authoritative identity is the Supabase UUID (transaction.id).
-    // We create a friendly reference for customer display, but internal sync uses UUID.
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(7);
-    const friendlyReference = clientReference || `DP-${timestamp}-${random}`;
+    // 3. GENERATE AUTHORITATIVE REFERENCE
+    // The authoritative identity is the Supabase UUID (transaction.id).
+    // We will use this directly as the Paystack reference.
 
     // 4. PERSIST INTENT (IDEMPOTENT CREATION)
     console.log("📝 Persisting transaction intent for:", phone);
@@ -69,7 +66,6 @@ export default async function handler(req: any, res: any) {
         capacity: bundle.capacity,
         status: "initialized",
         payment_status: "initialized",
-        reference: friendlyReference, // Customer-facing DP-XXXX
         
         // Storage of bundle metadata for fulfillment
         display_bundle: bundle.capacity,
@@ -92,21 +88,20 @@ export default async function handler(req: any, res: any) {
     // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
     // We update the record to ensure identity convergence across ALL reference fields.
     await supabase.from("transactions").update({ 
-      external_reference: transaction.id, // 🚀 AUTHORITATIVE CONVERGENCE
+      external_reference: transaction.id, 
       paystack_receipt: transaction.id,
-      internal_reference: friendlyReference
+      internal_reference: transaction.id, // Converging all back to UUID
+      reference: transaction.id           // Converging back to UUID
     }).eq("id", transaction.id);
 
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
     console.log("📍 UUID (ID):", transaction.id);
-    console.log("📍 Internal Ref:", friendlyReference);
 
     // 5. RETURN CLEAN CONFIG (Strictly using transaction.id as the reference)
     return res.status(200).json({
       success: true,
       config: {
         reference: transaction.id, // 🚀 AUTHORITATIVE REFERENCE = UUID
-        friendlyReference,         // Display only
         amount: Math.round(authoritativeAmount * 100),
         email: 'customer@datapapa.com',
         transaction_id: transaction.id,
@@ -115,8 +110,7 @@ export default async function handler(req: any, res: any) {
           phone,
           network: bundle.network,
           bundle: bundle.capacity,
-          platform,
-          friendly_reference: friendlyReference
+          platform
         }
       }
     });
