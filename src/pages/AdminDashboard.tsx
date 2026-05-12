@@ -4339,7 +4339,7 @@ export default function AdminDashboard() {
                         </div>
                         <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200/50">
                           <div className="text-xs font-mono text-slate-400">
-                            Ref: {tx.paystack_receipt || tx.id.substring(0, 8)}
+                            Ref: {tx.reference || tx.paystack_receipt || tx.id.substring(0, 8)}
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -4909,7 +4909,7 @@ export default function AdminDashboard() {
                         Paystack Receipt
                       </label>
                       <p className="font-mono text-sm text-slate-900">
-                        {selectedTransaction.paystack_receipt || "N/A"}
+                        {selectedTransaction.reference || selectedTransaction.paystack_receipt || "N/A"}
                       </p>
                     </div>
                     <div>

@@ -86,7 +86,7 @@ export default function Receipt() {
     };
   }, [id]);
 
-  const displayReference = transaction?.paystack_receipt || transaction?.internal_reference || transaction?.reference || 'N/A';
+  const displayReference = transaction?.reference || transaction?.paystack_receipt || transaction?.internal_reference || 'N/A';
 
   const handleCopy = () => {
     if (!displayReference) return;
@@ -98,11 +98,11 @@ export default function Receipt() {
   const getStatusInfo = (tx: any): { status: TransactionStatus; title: string; message: string; color: string; icon: React.ReactNode } => {
     if (!tx) return { status: 'processing', title: 'Loading...', message: 'Please wait...', color: 'slate', icon: <Loader2 className="animate-spin" /> };
 
-    const isPaid = tx.payment_status === 'success' || tx.status === 'success' || tx.status === 'fulfilled';
-    const isDelivered = tx.vtu_status === 'delivered' || tx.delivery_status === 'delivered';
+    const isPaid = tx.payment_status === 'success' || tx.status === 'success' || tx.status === 'fulfilled' || tx.status === 'paid';
     const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected';
 
-    if (isDelivered || (isPaid && !isFailed)) {
+    // Once Paystack payment is successfully verified: ALWAYS immediately show: ✅ Payment Successful
+    if (isPaid && !isFailed) {
       return {
         status: 'success',
         title: 'Payment Successful',
@@ -122,12 +122,13 @@ export default function Receipt() {
       };
     }
 
+    // This should ideally only show for a fraction of a second until realtime update or sync completion
     return {
-      status: 'processing',
-      title: 'Processing Payment',
-      message: 'We are verifying your payment and preparing your data.',
-      color: 'amber',
-      icon: <Loader2 className="w-10 h-10 text-amber-600 animate-spin" />
+      status: 'success',
+      title: 'Payment Successful',
+      message: 'Your transaction was completed successfully.',
+      color: 'emerald',
+      icon: <CheckCircle2 className="w-10 h-10 text-emerald-600" />
     };
   };
 

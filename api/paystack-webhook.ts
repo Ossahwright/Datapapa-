@@ -106,8 +106,19 @@ export default async function handler(req: any, res: any) {
     
     let tx = null;
 
-    // Priority 1: metadata.transaction_id
-    if (transactionIdFromMetadata) {
+    // Priority 1: reference (Paystack reference is now our UUID)
+    if (paystackReference) {
+      const { data } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", paystackReference)
+        .maybeSingle();
+      tx = data;
+      if (tx) console.log(`=== TRANSACTION FOUND (Direct ID Match: ${tx.id}) ===`);
+    }
+
+    // Priority 2: metadata.transaction_id
+    if (!tx && transactionIdFromMetadata) {
       const { data } = await supabase
         .from("transactions")
         .select("*")
@@ -117,18 +128,7 @@ export default async function handler(req: any, res: any) {
       if (tx) console.log(`=== TRANSACTION FOUND (Metadata ID: ${tx.id}) ===`);
     }
 
-    // Priority 2: paystack_receipt (matching reference)
-    if (!tx && paystackReference) {
-      const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("paystack_receipt", paystackReference)
-        .maybeSingle();
-      tx = data;
-      if (tx) console.log(`=== TRANSACTION FOUND (Paystack RefMatch ID: ${tx.id}) ===`);
-    }
-
-    // Priority 3: reference (internal_reference)
+    // Priority 3: internal_reference
     if (!tx && paystackReference) {
       const { data } = await supabase
         .from("transactions")

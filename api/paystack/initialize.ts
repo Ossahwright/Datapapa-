@@ -48,13 +48,13 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: "Invalid bundle price detected." });
     }
 
-    // 3. GENERATE DETERMINISTIC REFERENCE
+    // 3. GENERATE DETERMINISTIC REFERENCES
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(7);
-    const reference = clientReference || `DP-${timestamp}-${random}`;
+    const friendlyReference = clientReference || `DP-${timestamp}-${random}`;
 
     // 4. PERSIST INTENT (IDEMPOTENT CREATION)
-    console.log("📝 Persisting transaction intent...");
+    console.log("📝 Persisting transaction intent with friendly ref:", friendlyReference);
     const { data: transaction, error: txError } = await supabase
       .from("transactions")
       .insert({
@@ -65,9 +65,10 @@ export default async function handler(req: any, res: any) {
         network: bundle.network,
         network_key: bundle.network_key,
         capacity: bundle.capacity,
-        status: "initialized", // STEP 10: STATE MACHINE
-        paystack_receipt: reference, // Using our ref as the initial paystack_receipt
-        internal_reference: reference,
+        status: "initialized",
+        payment_status: "initialized",
+        reference: friendlyReference, // Customer-facing
+        internal_reference: "PENDING_ID", // We will update this or just use the ID
         
         // Storage of bundle metadata for fulfillment
         display_bundle: bundle.capacity,
@@ -87,15 +88,18 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Failed to create payment intent in database." });
     }
 
-    console.log("✅ PAYMENT INTENT STORED:", transaction.id);
-    console.log("=== PAYSTACK CONFIG VALIDATED ===");
+    // UPDATE with the actual ID for internal sync (if we really need internal_reference)
+    await supabase.from("transactions").update({ internal_reference: transaction.id }).eq("id", transaction.id);
 
-    // 5. RETURN CLEAN CONFIG
+    console.log("✅ PAYMENT INTENT STORED:", transaction.id);
+
+    // 5. RETURN CLEAN CONFIG (Using transaction.id as the reference for Paystack)
     return res.status(200).json({
       success: true,
       config: {
-        reference,
-        amount: Math.round(authoritativeAmount * 100), // Converted to pesewas for Paystack
+        reference: transaction.id, // 🚀 USE UUID AS PAYSTACK REFERENCE
+        friendlyReference,         // Keep for display if needed
+        amount: Math.round(authoritativeAmount * 100),
         email: 'customer@datapapa.com',
         transactionId: transaction.id,
         metadata: {

@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { usePaystackPayment } from 'react-paystack';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, ChevronDown, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import axios from 'axios';
@@ -119,6 +118,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
     return () => {
       if (channel) supabase.removeChannel(channel);
+      clearInterval(healthInterval);
     };
   }, [supabaseReady]);
 
@@ -184,94 +184,12 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     ? AUTHORITATIVE_PUB_KEY 
     : rawKey;
 
-  const [paystackRef, setPaystackRef] = useState<string>(`DP-${Date.now()}`);
-
-  const paystackConfig = {
-    reference: paystackRef,
-    email: 'customer@datapapa.com',
-    amount: Math.round((selectedBundleObj?.price || 0) * 100),
-    publicKey: PAYSTACK_PUB_KEY,
-    currency: 'GHS',
-    channels: ['mobile_money', 'card'],
-    phone: phone,
-    metadata: {
-      phone,
-      network,
-      bundle: selectedBundleObj?.volume,
-      bundle_id: selectedBundleObj?.db_id || selectedBundleObj?.id,
-      platform: 'datapapa_v2_sync',
-      custom_fields: [
-        {
-          display_name: "Mobile Number",
-          variable_name: "phone",
-          value: phone
-        },
-        {
-          display_name: "Network",
-          variable_name: "network",
-          value: network
-        }
-      ]
-    }
-  };
-
-  // @ts-ignore
-  const initializePayment = usePaystackPayment(paystackConfig);
-
-  // Sync reference whenever selection changes to ensure unique refs per attempt
-  useEffect(() => {
-    if (selectedBundleObj) {
-      const newRef = `DP-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-      setPaystackRef(newRef);
-      console.log("🆕 [Reference Generated]:", newRef);
-    }
-  }, [selectedBundleObj?.id, phone]);
-
   const handlePaymentSuccess = async (paystackResponse: any) => {
     console.log("=== PAYSTACK CALLBACK RECEIVED ===");
-    console.log("💰 [Success] Reference:", paystackResponse.reference);
+    console.log("💰 [Success] Authoritative UUID Ref:", paystackResponse.reference);
     
-    setIsLoading(true);
-    
-    try {
-      // 🚀 FETCH THE AUTHORITATIVE UUID (id) BEFORE REDIRECT
-      // This ensures we land on /receipt/[uuid] instead of /receipt/[reference]
-      const { data, error: fetchError } = await supabase
-        .from('transactions')
-        .select('id')
-        .eq('internal_reference', paystackResponse.reference)
-        .maybeSingle();
-
-      if (fetchError) throw fetchError;
-
-      if (data?.id) {
-        console.log("📍 Found Transaction UUID:", data.id);
-        navigate(`/receipt/${data.id}`);
-      } else {
-        // Fallback: If not found immediately (rare), try searching by id exactly if the reference was a UUID
-        // but normally we trust the reference -> id mapping
-        console.warn("⚠️ Transaction not found by reference immediately. Falling back to background search...");
-        
-        // Wait a bit and try one more time (webhook might be finishing)
-        await new Promise(r => setTimeout(r, 1500));
-        const { data: retryData } = await supabase
-          .from('transactions')
-          .select('id')
-          .eq('internal_reference', paystackResponse.reference)
-          .maybeSingle();
-
-        if (retryData?.id) {
-          navigate(`/receipt/${retryData.id}`);
-        } else {
-          // Absolute fallback: redirect to homepage or show error
-          setError("Receipt generation failed. Please check your transaction history.");
-          setIsLoading(false);
-        }
-      }
-    } catch (err: any) {
-      console.error("❌ Redirect Error:", err);
-      navigate(`/`); // Safety fallback
-    }
+    // 🚀 REDIRECT TO AUTH RECEIPT PAGE USING UUID (which is the Paystack reference now)
+    navigate(`/receipt/${paystackResponse.reference}`);
   };
 
   const handlePaymentClose = () => {
@@ -308,25 +226,16 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     }
   };
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
     console.log("=== BUTTON CLICK DETECTED ===");
     
-    // 1. VALIDATION (SYNC)
     if (!phone || phone.length < 10) {
       setError('Please enter a valid recipient phone number');
-      console.error("=== PAYMENT BLOCKED: Invalid Phone ===");
       return;
     }
 
     if (!selectedBundleObj) {
       setError('Please select a data bundle package');
-      console.error("=== PAYMENT BLOCKED: No Bundle ===");
-      return;
-    }
-
-    if (!PAYSTACK_PUB_KEY || PAYSTACK_PUB_KEY.length < 5) {
-      setError('Server configuration error. Please contact support.');
-      console.error("=== PAYMENT BLOCKED: Missing Public Key ===");
       return;
     }
 
@@ -334,28 +243,50 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
     setError('');
 
     try {
-      console.log("=== PAYSTACK INITIALIZATION START ===");
-      console.log("📍 Amount:", paystackConfig.amount);
-      console.log("📍 Ref:", paystackRef);
-      console.log("📍 Key:", PAYSTACK_PUB_KEY.substring(0, 10) + "...");
-
-      // 🚀 THE MAGIC: SYNCHRONOUS TRIGGER
-      // No awaits, no fetches, no delays. Direct from user event.
-      initializePayment({
-        onSuccess: handlePaymentSuccess, 
-        onClose: handlePaymentClose
+      console.log("📝 Initializing payment intent...");
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const response = await fetch(API_ROUTES.PAYSTACK_INITIALIZE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bundleId: selectedBundleObj.db_id || selectedBundleObj.id,
+          phone,
+          payerPhone: payerPhone || phone,
+          networkId: network,
+          userId: user?.id
+        }),
       });
       
-      console.log("=== PAYSTACK POPUP REQUESTED ===");
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to initialize payment');
+      }
 
-      // 🚀 STEP 2: BACKGROUND SYNC (FIRE AND FORGET)
-      // This happens while the user sees the popup loading.
-      createPaymentIntent(paystackRef);
+      console.log("✅ Intent stored, launching Paystack with UUID:", result.config.reference);
 
+      // Launch Paystack using the returned config (UUID as reference)
+      const config = {
+        reference: result.config.reference,
+        amount: result.config.amount,
+        email: result.config.email,
+        metadata: result.config.metadata,
+        publicKey: PAYSTACK_PUB_KEY,
+        currency: 'GHS',
+        channels: ['mobile_money', 'card'],
+      };
+
+      // @ts-ignore
+      const handler = window.PaystackPop.setup({
+        ...config,
+        callback: (response: any) => handlePaymentSuccess(response),
+        onClose: () => handlePaymentClose(),
+      });
+      handler.openIframe();
+      
     } catch (err: any) {
-      console.error("=== PAYSTACK INIT FAILURE ===");
-      console.error(err);
-      setError('Could not launch payment window. Please try again.');
+      console.error("❌ Payment Initiation Error:", err);
+      setError(err.message || 'Could not launch payment window.');
       setIsLoading(false);
     }
   };
