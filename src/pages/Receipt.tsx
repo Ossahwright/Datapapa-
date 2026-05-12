@@ -31,12 +31,27 @@ export default function Receipt() {
     if (!id) return;
 
     const fetchTransaction = async () => {
+      console.log("📍 Receipt Route Param (id):", id);
+      
+      // Simple UUID validation check (can use regex)
+      const isUUID = (str: string | undefined): boolean => {
+        if (!str) return false;
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        return uuidRegex.test(str);
+      };
+
+      console.log("📍 UUID Validation Result:", isUUID(id));
+
       try {
+        console.log("📍 Fetching receipt by ID:", id);
         const { data, error: fetchError } = await supabase
           .from('transactions')
           .select('*')
           .eq('id', id)
           .maybeSingle();
+
+        console.log("📍 Receipt Query Result:", data);
+        console.log("📍 Receipt Query Error:", fetchError);
 
         if (fetchError) {
           // Check for invalid UUID syntax (error code 22P02)

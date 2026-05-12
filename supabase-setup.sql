@@ -131,8 +131,15 @@ DROP POLICY IF EXISTS "Users can view their own transactions." ON public.transac
 DROP POLICY IF EXISTS "Admins can view all transactions." ON public.transactions;
 DROP POLICY IF EXISTS "Admins can manage transactions" ON public.transactions;
 
-CREATE POLICY "Users can view their own transactions." ON public.transactions FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Admins can manage transactions" ON public.transactions FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
+-- Allow reading a transaction if:
+-- 1. It belongs to the authenticated user
+-- 2. It's an anonymous transaction (user_id is null)
+-- 3. The requester is an admin
+CREATE POLICY "Users and Guests can view transactions" 
+ON public.transactions FOR SELECT 
+USING (user_id IS NULL OR auth.uid() = user_id OR public.is_admin());
+
+CREATE POLICY "Admins can manage transactions" ON public.transactions FOR ALL USING (public.is_admin());
 -- NOTE: service_role bypasses RLS naturally, so it can always insert/update.
 
 -- 6. Trigger to automatically create a user profile when a new auth user signs up
