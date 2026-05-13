@@ -8,13 +8,15 @@ export const API_ROUTES = Object.freeze({
   PAYSTACK_WEBHOOK: "/api/paystack-webhook",
   DATAHUB_WEBHOOK: "/api/datahub-webhook",
   PAYSTACK_INITIALIZE: "/api/paystack/initialize",
-  PROVIDER_HEALTH: "/api/provider-health",
+  PROVIDER_HEALTH: "/api/system-status?feature=provider-health",
   INITIATE_TRANSACTION: "/api/initiate-transaction",
-  ADMIN_TX_ACTION: "/api/admin-tx-action",
-  SYNC_WALLET: "/api/sync-datahub-wallet",
-  RECONCILE_TX: "/api/reconcile-tx",
-  BULK_RECONCILE: "/api/bulk-reconcile",
-  RETRY_VTU: "/api/retry-vtu"
+  ADMIN_OPS: "/api/admin-ops",
+  ADMIN_TX_ACTION: "/api/admin-ops",
+  SYNC_WALLET: "/api/admin-ops",
+  RECONCILE_TX: "/api/admin-ops",
+  BULK_RECONCILE: "/api/admin-ops",
+  RETRY_VTU: "/api/admin-ops",
+  SYSTEM_STATUS: "/api/system-status"
 });
 
 export const PAYMENT_STATUSES = Object.freeze({

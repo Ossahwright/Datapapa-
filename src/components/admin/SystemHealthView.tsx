@@ -18,7 +18,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../../lib/supabase";
 import { format } from "date-fns";
-import axios from "axios";
+import { API_ROUTES } from "../../../lib/constants";
 
 interface HealthIndicatorProps {
   label: string;
@@ -84,7 +84,7 @@ export function SystemHealthView() {
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
       // 1. Fetch API Health
-      const { data: healthData } = await axios.get("/api/health", { headers });
+      const { data: healthData } = await axios.get(`${API_ROUTES.SYSTEM_STATUS}?feature=health`, { headers });
       setHealth(healthData);
 
       // 2. Fetch Stuck Transactions
@@ -140,7 +140,7 @@ export function SystemHealthView() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
       
-      const res = await axios.post("/api/retry-vtu", { transactionId: txId }, { headers });
+      const res = await axios.post(API_ROUTES.ADMIN_OPS, { action: 'retry_vtu', transactionId: txId }, { headers });
       if (res.data.success) {
         alert("Retry triggered successfully! Monitoring delivery status...");
         fetchSystemState();

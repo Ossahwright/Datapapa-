@@ -311,9 +311,13 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await fetch("/api/sync-datahub-wallet", {
+      const res = await fetch(API_ROUTES.ADMIN_OPS, {
         method: "POST",
-        headers: headers as any
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        } as any,
+        body: JSON.stringify({ action: 'sync_wallet' })
       });
 
       const data = await res.json();
@@ -343,9 +347,13 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await fetch("/api/sync-datahub-wallet", {
+      const res = await fetch(API_ROUTES.ADMIN_OPS, {
         method: "POST",
-        headers: headers as any
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        } as any,
+        body: JSON.stringify({ action: 'sync_wallet' })
       });
       const data = await res.json();
       if (data.success) {
@@ -1284,7 +1292,7 @@ export default function AdminDashboard() {
     try {
       const { data: session } = await supabase.auth.getSession();
       const headers = session?.session?.access_token ? { Authorization: `Bearer ${session.session.access_token}` } : {};
-      await axios.post(API_ROUTES.BULK_RECONCILE, {}, { headers });
+      const res = await axios.post(API_ROUTES.BULK_RECONCILE, { action: 'bulk_reconcile' }, { headers });
       await fetchTransactions(); // Refresh all
     } catch (err) {
       console.error("Bulk sync failed:", err);
@@ -1442,7 +1450,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post(API_ROUTES.RETRY_VTU, { transactionId }, { headers });
+      const res = await axios.post(API_ROUTES.RETRY_VTU, { action: 'retry_vtu', transactionId }, { headers });
       if (res.data.success === false) {
         alert(res.data.message || res.data.error || "Retry not allowed");
       } else {
@@ -1469,7 +1477,7 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
-      const res = await axios.post(API_ROUTES.RECONCILE_TX, { transactionId }, { headers });
+      const res = await axios.post(API_ROUTES.RECONCILE_TX, { action: 'reconcile_single', transactionId }, { headers });
       if (res.data.success) {
         alert("Status Sync Complete: " + (res.data.status || "Updated"));
       } else {
@@ -1532,7 +1540,7 @@ export default function AdminDashboard() {
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
       const res = await axios.post(API_ROUTES.ADMIN_TX_ACTION, { 
-        action: 'delete', 
+        action: 'delete_tx', 
         transactionId: txId 
       }, { headers });
 
@@ -1583,10 +1591,10 @@ export default function AdminDashboard() {
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
       // 1. Get Balance
-      await syncWalletSilently();
+      await axios.post(API_ROUTES.SYNC_WALLET, { action: 'sync_wallet' }, { headers });
 
       // 2. Get Ping/Status
-      const pingResp = await axios.get("/api/check-datahub", { headers });
+      const pingResp = await axios.get(`${API_ROUTES.SYSTEM_STATUS}?feature=datahub`, { headers });
       const isOnline = pingResp.status === 200 && pingResp.data.online;
 
       if (pingResp.status === 200) {
@@ -3890,7 +3898,7 @@ export default function AdminDashboard() {
                               try {
                                 const { data: { session } } = await supabase.auth.getSession();
                                 const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-                                await axios.post('/api/admin-test-telegram', {}, { headers });
+                                await axios.post(API_ROUTES.ADMIN_OPS, { action: 'test_telegram' }, { headers });
                                 toast.success("Test notification sent!");
                               } catch (err: any) {
                                 toast.error(`Test failed: ${err.response?.data?.error || err.message}`);

@@ -35,7 +35,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const [dbBundles, setDbBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [providerStatus, setProviderStatus] = useState<'operational' | 'degraded' | 'outage' | 'checking'>('checking');
+  const [providerStatus, setProviderStatus] = useState<'operational' | 'degraded' | 'outage' | 'unreachable' | 'checking'>('checking');
 
   const [supabaseReady] = useState(isSupabaseConfigured);
   
@@ -200,8 +200,8 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
   const handlePayment = async () => {
     console.log("=== [Frontend] PAYMENT INITIALIZATION START ===");
     
-    if (providerStatus === 'outage') {
-      console.warn("⚠️ [Frontend] Gating: Provider outage detected. Blocking initialization.");
+    if (providerStatus === 'outage' || providerStatus === 'unreachable') {
+      console.warn("⚠️ [Frontend] Gating: Provider outage/unreachable detected. Blocking initialization.");
       setError('Purchases are temporarily unavailable. Please try again soon.');
       return;
     }
@@ -288,12 +288,12 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
           </h2>
           
           {/* 🚀 STEP 9 — IMPLEMENT PURCHASE SAFETY GATING UI */}
-          {providerStatus === 'outage' && (
+          {['outage', 'unreachable'].includes(providerStatus) && (
             <div className="mt-6 mx-auto animate-pulse flex items-center gap-3 p-4 bg-rose-50 text-rose-700 border-2 border-rose-100 rounded-2xl text-left">
               <ShieldAlert className="h-6 w-6 text-rose-600 shrink-0" />
               <div>
                 <p className="text-xs font-black uppercase tracking-widest leading-none mb-1">Service Disruption Detected</p>
-                <p className="text-[11px] font-bold leading-tight opacity-80">Data provider currently experiencing issues. Purchases temporarily paused to protect your funds.</p>
+                <p className="text-[11px] font-bold leading-tight opacity-80">Data provider currently unreachable or experiencing issues. Purchases temporarily paused to protect your funds.</p>
               </div>
             </div>
           )}
@@ -475,13 +475,13 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
                   <button
                     onClick={handlePayment}
-                    disabled={isLoading || phone.length < 10 || providerStatus === 'outage'}
+                    disabled={isLoading || phone.length < 10 || ['outage', 'unreachable'].includes(providerStatus)}
                     className="w-full relative flex flex-col items-center justify-center rounded-2xl bg-slate-900 px-8 py-4 text-base font-bold text-white shadow-xl hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                   >
                     <div className="flex items-center">
                       {isLoading ? (
                         <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" />
-                      ) : providerStatus === 'outage' ? (
+                      ) : ['outage', 'unreachable'].includes(providerStatus) ? (
                         <XCircle className="-ml-1 mr-2 h-5 w-5 text-rose-400" />
                       ) : (
                         <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="none">
