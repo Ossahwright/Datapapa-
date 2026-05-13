@@ -1,4 +1,4 @@
-import { supabase, validateEnv, isAdminAuth } from '../lib/server-utils.js';
+import { supabase, validateEnv, isAdminAuth, getDataHubConfig } from '../lib/server-utils.js';
 import axios from 'axios';
 
 console.log("server-utils loaded successfully inside health");
@@ -34,11 +34,12 @@ export default async function handler(req: any, res: any) {
 
     // 2. Check DataHub (Wallet & Status)
     try {
-      const { data: config } = await supabase.from('settings').select('*').eq('id', 'datahub_config').single();
-      if (config) {
+      const { apiKey, baseUrl } = await getDataHubConfig();
+      if (apiKey) {
         // DataHub Status Check
         try {
-          const dhRes = await axios.get("https://app.datahubgh.com/api/external/status", { timeout: 5000 });
+          const statusEndpoint = `${baseUrl.replace(/\/+$/, "")}/status`;
+          const dhRes = await axios.get(statusEndpoint, { timeout: 5000 });
           healthData.services.datahub.status = dhRes.status === 200 ? "online" : "degraded";
         } catch (e: any) {
           healthData.services.datahub.status = "degraded";
@@ -46,15 +47,15 @@ export default async function handler(req: any, res: any) {
         }
 
         // Wallet Balance
-        if (config.api_key) {
-          try {
-            const walletRes = await axios.get("https://app.datahubgh.com/api/external/wallet", {
-              headers: { "Authorization": `Token ${config.api_key}` },
-              timeout: 5000
-            });
-            healthData.services.datahub.balance = walletRes.data.balance;
-          } catch (e) {}
-        }
+        try {
+          const walletEndpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
+          const walletRes = await axios.get(walletEndpoint, {
+            headers: { "X-API-Key": apiKey },
+            timeout: 5000
+          });
+          const walletData = walletRes.data?.data || walletRes.data;
+          healthData.services.datahub.balance = walletData?.wallet_balance || walletData?.balance || 0;
+        } catch (e) {}
       } else {
         healthData.services.datahub.status = "unknown";
       }

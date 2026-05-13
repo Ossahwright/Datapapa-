@@ -27,8 +27,6 @@ import {
 } from './constants.js';
 
 export const apiClient = axios.create({
-  httpAgent,
-  httpsAgent,
   timeout: 40000, // Slightly longer to be safe
 });
 

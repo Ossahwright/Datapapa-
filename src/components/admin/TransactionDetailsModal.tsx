@@ -71,13 +71,19 @@ export const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = (
       }, { headers });
 
       if (res.data.success) {
+        if (res.data.schemaWarning) {
+          toast.success("Communicated logged with schema warning. Please run the SQL migration for full tracking.", { duration: 6000 });
+        } else {
+          toast.success("WhatsApp contact tracked successfully");
+        }
         if (onUpdate) onUpdate();
         return true;
       }
       return false;
     } catch (err: any) {
       console.error("WhatsApp Tracking Error:", err);
-      toast.error("Failed to track communication state");
+      const errorMsg = err.response?.data?.error || err.message || "Failed to track";
+      toast.error(`WhatsApp Tracking Error: ${errorMsg}`);
       return false;
     } finally {
       setIsProcessing(false);

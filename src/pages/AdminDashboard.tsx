@@ -1393,7 +1393,9 @@ export default function AdminDashboard() {
   const fetchProviderHealth = async () => {
     try {
       setIsCheckingHealth(true);
-      const res = await axios.get(API_ROUTES.PROVIDER_HEALTH);
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const res = await axios.get(API_ROUTES.PROVIDER_HEALTH, { headers });
       setProviderHealth(res.data);
     } catch (err) {
       console.error("Health check failed:", err);
@@ -3869,18 +3871,36 @@ export default function AdminDashboard() {
                         <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
                           Telegram Chat ID
                         </label>
-                        <input
-                          type="text"
-                          value={secureSettings.telegram_chat_id || ""}
-                          onChange={(e) =>
-                            setSecureSettings({
-                              ...secureSettings,
-                              telegram_chat_id: e.target.value,
-                            })
-                          }
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-xs"
-                          placeholder="e.g. -100123456789"
-                        />
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={secureSettings.telegram_chat_id || ""}
+                            onChange={(e) =>
+                              setSecureSettings({
+                                ...secureSettings,
+                                telegram_chat_id: e.target.value,
+                              })
+                            }
+                            className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-xs"
+                            placeholder="e.g. -100123456789"
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const { data: { session } } = await supabase.auth.getSession();
+                                const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+                                await axios.post('/api/admin-test-telegram', {}, { headers });
+                                toast.success("Test notification sent!");
+                              } catch (err: any) {
+                                toast.error(`Test failed: ${err.response?.data?.error || err.message}`);
+                              }
+                            }}
+                            className="px-4 py-3 bg-sky-50 text-sky-600 border border-sky-100 rounded-xl hover:bg-sky-100 transition-all font-bold text-[10px] uppercase tracking-wider"
+                          >
+                            Test Bot
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-2 italic">

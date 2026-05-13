@@ -89,6 +89,7 @@ export default async function handler(req: any, res: any) {
       const { data: userData, error: authError } = await supabase.auth.getUser(token);
       
       if (authError || !userData?.user) {
+        console.error("❌ [Track WA] Auth Error:", authError);
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
@@ -96,11 +97,16 @@ export default async function handler(req: any, res: any) {
       const adminEmail = admin.email || 'unknown_admin';
 
       // 1. Fetch current info
-      const { data: tx } = await supabase
+      const { data: tx, error: fetchError } = await supabase
         .from("transactions")
         .select("whatsapp_send_count, audit_log")
         .eq("id", transactionId)
         .single();
+
+      if (fetchError) {
+        console.error("❌ [Track WA] Fetch Error:", fetchError);
+        throw fetchError;
+      }
 
       const currentCount = (tx?.whatsapp_send_count || 0);
       const currentLog = Array.isArray(tx?.audit_log) ? tx.audit_log : [];
@@ -115,20 +121,63 @@ export default async function handler(req: any, res: any) {
         message_preview: message?.substring(0, 100)
       };
 
-      const { error } = await supabase
+      // 🛡️ Resilience: Update columns one by one or wrap in a payload we trust.
+      // If columns are missing, this WILL fail, but we'll log exactly why.
+      const updatePayload: any = {
+        whatsapp_sent: true,
+        whatsapp_sent_at: new Date().toISOString(),
+        whatsapp_sent_by: admin.id,
+        whatsapp_sent_by_email: adminEmail,
+        whatsapp_message: message,
+        whatsapp_send_count: currentCount + 1,
+        audit_log: [...currentLog, newLogEntry],
+        updated_at: new Date().toISOString()
+      };
+
+      console.log("📤 [Track WA] Execution Phase: Updating DB...");
+      const { error: updateError } = await supabase
         .from("transactions")
-        .update({
-          whatsapp_sent: true,
-          whatsapp_sent_at: new Date().toISOString(),
-          whatsapp_sent_by: admin.id,
-          whatsapp_message: message,
-          whatsapp_send_count: currentCount + 1,
-          audit_log: [...currentLog, newLogEntry],
-          updated_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .eq("id", transactionId);
 
-      if (error) throw error;
+      if (updateError) {
+        console.error("❌ [Track WA] Update Error:", JSON.stringify(updateError));
+        
+        // Attempt partial update if full payload fails (fallback)
+        if (updateError.message?.includes('column') || updateError.code === '42703') {
+           console.warn("⚠️ [Track WA] Detected missing columns. Attempting legacy fallback (audit log only)...");
+           await supabase
+            .from("transactions")
+            .update({ 
+               audit_log: [...currentLog, { ...newLogEntry, warning: 'Partial update due to missing schema columns' }],
+               updated_at: new Date().toISOString()
+            })
+            .eq("id", transactionId);
+           
+           return res.status(200).json({ 
+             success: true, 
+             message: 'WhatsApp tracked (Partial: Schema update required for full tracking)',
+             schemaWarning: true 
+           });
+        }
+        throw updateError;
+      }
+
+      // 📱 Trigger Telegram Notification for Admin Visibility
+      const { data: finalTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
+      if (finalTx) {
+          sendTelegramNotification({
+              category: 'manual_override',
+              title: 'WhatsApp Contact Logged',
+              transaction: finalTx,
+              metadata: { 
+                admin: adminEmail, 
+                action: 'WHATSAPP_TRACKED',
+                message_preview: message?.substring(0, 30) + '...'
+              }
+          }).catch(e => console.error("TG Track alert error", e));
+      }
+
       return res.status(200).json({ success: true, message: 'WhatsApp tracking updated' });
     }
 

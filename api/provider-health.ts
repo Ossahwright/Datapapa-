@@ -4,7 +4,7 @@
  * Path: api/provider-health.ts -> /api/provider-health
  */
 
-import { supabase, getDataHubConfig, isAdminAuth } from '../lib/server-utils.js';
+import { supabase, getDataHubConfig, isAdminAuth, apiClient } from '../lib/server-utils.js';
 import { LOG_MARKERS, PROVIDER_HEALTH } from '../lib/constants.js';
 
 // 🚀 STEP 6 — IMPLEMENT CACHED HEALTH STATE (60 seconds)
@@ -21,17 +21,15 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Admin optional? No, the prompt says "Admin health panel", usually these are admin-only.
-  // But STEP 9 says "disable purchases temporarily", which means the public purchase logic needs to know the state.
-  // So this endpoint might be public OR the purchase logic should call a internal version.
-  // I'll make it public but with rate limiting, or just accessible by the frontend.
-  
-  // Actually, to implement STEP 9, the purchase logic will need to check this.
-  // Let's make it public for now so the frontend can display it, but keep secrets safe.
-
   const now = Date.now();
   if (providerHealthCache && now < providerHealthCache.expiresAt) {
     return res.status(200).json(providerHealthCache.state);
+  }
+
+  // 🛡️ Admin Auth Enforcement
+  const isAuthorized = await isAdminAuth(req);
+  if (!isAuthorized) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
   }
 
   console.log(LOG_MARKERS.PROVIDER_HEALTH_CHECK_START);
@@ -60,75 +58,68 @@ export default async function handler(req: any, res: any) {
     const { apiKey, baseUrl } = await getDataHubConfig();
     const endpoint = `${baseUrl.replace(/\/+$/, "")}/status`;
     
+    console.log(`🌐 [Health Check] Pinging: ${endpoint}`);
     const startTime = Date.now();
     
-    // 🚀 STEP 3 — IMPLEMENT SAFE SERVER-SIDE FETCHING (5000ms timeout)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      // Use standard axios to avoid any potential agent issues in bridge
+      const response = await axios.get(endpoint, {
+        headers: {
+          "X-API-Key": apiKey || "",
+          "Accept": "application/json"
+        },
+        timeout: 6000,
+        validateStatus: () => true
+      });
 
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: {
-        "X-API-Key": apiKey || "",
-        "Content-Type": "application/json"
-      },
-      signal: controller.signal
-    });
+      stats.provider_response_time_ms = Date.now() - startTime;
+      stats.latency = stats.provider_response_time_ms;
 
-    clearTimeout(timeoutId);
-    
-    stats.provider_response_time_ms = Date.now() - startTime;
-    stats.latency = stats.provider_response_time_ms;
-
-    if (!response.ok) {
-        throw new Error(`Provider returned ${response.status}`);
-    }
-
-    const data = await response.json();
-    console.log(LOG_MARKERS.PROVIDER_STATUS_RECEIVED);
-
-    // 🚀 STEP 5 — IMPLEMENT OPERATIONAL CLASSIFICATION
-    /**
-     * HEALTHY: status=operational && voucherPurchase=healthy
-     * DEGRADED: Latency > 5s OR voucherPurchase unhealthy
-     * OUTAGE: Fetch fails, unreachable, invalid payload
-     */
-    
-    stats.services = {
-        api: data.services?.api || "unknown",
-        database: data.services?.database || "unknown",
-        voucherPurchase: data.services?.voucherPurchase || "unknown"
-    };
-
-    const isVoucherHealthy = stats.services.voucherPurchase === 'healthy';
-    const isOperational = data.status === 'operational';
-
-    if (isOperational && isVoucherHealthy) {
-        stats.status = PROVIDER_HEALTH.OPERATIONAL;
-    } else if (stats.provider_response_time_ms > 5000 || !isVoucherHealthy) {
+      if (response.status !== 200) {
+        console.warn(`⚠️ [Health Check] Provider returned HTTP ${response.status}`);
         stats.status = PROVIDER_HEALTH.DEGRADED;
-        console.warn(LOG_MARKERS.PROVIDER_DEGRADED);
-    } else {
-        stats.status = PROVIDER_HEALTH.OUTAGE;
-        console.error(LOG_MARKERS.PROVIDER_OUTAGE_DETECTED);
+        stats.services.api = "error";
+      } else {
+        const data = response.data?.data || response.data;
+        console.log(LOG_MARKERS.PROVIDER_STATUS_RECEIVED);
+
+        stats.services = {
+          api: data.services?.api || "operational",
+          database: data.services?.database || "operational",
+          voucherPurchase: data.services?.voucherPurchase || "healthy"
+        };
+
+        const isVoucherHealthy = stats.services.voucherPurchase === 'healthy' || stats.services.voucherPurchase === 'operational';
+        const isOperational = data.status === 'operational' || data.success === true || response.status === 200;
+
+        if (isOperational && isVoucherHealthy) {
+          stats.status = PROVIDER_HEALTH.OPERATIONAL;
+        } else {
+          stats.status = PROVIDER_HEALTH.DEGRADED;
+        }
+      }
+    } catch (fetchErr: any) {
+      console.error("❌ [Health Check] Connection failed:", fetchErr.message);
+      stats.status = PROVIDER_HEALTH.OUTAGE;
+      stats.services.api = "unreachable";
+      stats.provider_response_time_ms = Date.now() - startTime;
     }
 
-    // Persist metrics if needed (STEP 10)
+    // Persist metrics if needed
     try {
         await supabase.from('provider_settings').update({
+            last_synced_at: stats.last_checked_at,
             last_health_check_at: stats.last_checked_at,
             last_response_time_ms: stats.provider_response_time_ms,
             health_status: stats.status
         }).eq('provider_name', 'datahubgh');
     } catch (saveErr) {
-        console.warn("Could not persist health metrics to DB (likely missing columns):", saveErr);
+        // Silently fail if columns are missing (expected until migration)
     }
 
   } catch (error: any) {
     console.error(LOG_MARKERS.PROVIDER_OUTAGE_DETECTED, error.message);
     stats.status = PROVIDER_HEALTH.OUTAGE;
-    stats.services.api = "outage";
-    stats.services.voucherPurchase = "outage";
   }
 
   // 🚀 STEP 6 — CACHE THE RESULT
