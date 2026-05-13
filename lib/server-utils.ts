@@ -13,8 +13,10 @@ import https from 'https';
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
+import { calculateExecutionMetrics } from './metrics.js';
 import { findNetworkConfig } from './networkConfig.js';
 import { BUNDLE_CONFIG } from './bundleConfig.js';
+import { sendTelegramNotification } from './sendTelegramNotification.js';
 import { 
   PAYMENT_STATUSES, 
   VTU_STATUSES, 
@@ -101,7 +103,8 @@ export async function isAdminAuth(req: any) {
     if (!authHeader) return false;
 
     const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data, error } = await supabase.auth.getUser(token);
+    const user = data?.user;
     
     if (error || !user) return false;
 
@@ -340,73 +343,7 @@ export async function logWebhook({
   }
 }
 
-/**
- * 🤖 TELEGRAM NOTIFICATION HELPER
- * Sends a non-blocking Telegram alert to the admin.
- */
-export async function sendTelegramNotification(tx: any) {
-  let botToken = process.env.TELEGRAM_BOT_TOKEN;
-  let chatId = process.env.TELEGRAM_CHAT_ID;
-
-  // 🛡️ FALLBACK: Check Supabase settings if env vars are missing
-  if (!botToken || !chatId) {
-    try {
-      const { data } = await supabase
-        .from('settings')
-        .select('value')
-        .eq('key', 'secure')
-        .maybeSingle();
-      
-      if (data?.value) {
-        botToken = botToken || data.value.telegram_bot_token;
-        chatId = chatId || data.value.telegram_chat_id;
-      }
-    } catch (err) {
-      console.error("[Telegram Config] Fallback fetch failed:", err);
-    }
-  }
-
-  if (!botToken || !chatId) {
-    console.log("ℹ️ [Telegram] Skipping notification: Credentials not set.");
-    return;
-  }
-
-  try {
-    const amount = tx.amount_paid || tx.amount || 0;
-    const formattedAmount = `₵${Number(amount).toFixed(2)}`;
-    
-    // Clean and descriptive message format requested by user
-    const message = `
-🟢 NEW SUCCESSFUL TRANSACTION
-
-Amount: ${formattedAmount}
-Network: ${tx.network || 'Unknown'}
-Bundle: ${tx.bundle_name || tx.capacity || 'Data'}
-
-Recipient: ${tx.receiver_phone || tx.phone || 'N/A'}
-Payer: ${tx.sender_phone || tx.email || 'N/A'}
-
-Ref: ${tx.provider_reference || tx.reference || tx.id}
-`;
-
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-
-    console.log(`🤖 [Telegram] Sending alert for TX: ${tx.id}...`);
-    
-    // Using axios (already imported) for consistency
-    axios.post(url, {
-      chat_id: chatId,
-      text: message,
-    }).catch(err => {
-      console.error("❌ [Telegram] Failed to send notification:", err.response?.data || err.message);
-    });
-
-  } catch (error: any) {
-    console.error("❌ [Telegram] Error formatting notification:", error.message);
-  }
-}
-
-import { calculateExecutionMetrics } from './metrics.js';
+// Removed duplicated local helper in favor of imported centralized one
 
 // Removed duplicated VTU_STATUSES - now imported from constants.js
 
@@ -575,7 +512,11 @@ export async function reconcileTransaction(transactionId: string) {
       if (poll.isSuccess) {
         const { data: finalTx } = await supabase.from("transactions").select("*").eq("id", transactionId).single();
         if (finalTx) {
-          sendTelegramNotification(finalTx).catch(err => {
+          sendTelegramNotification({
+            category: 'vtu_delivered',
+            title: 'VTU Delivered via Reconciliation',
+            transaction: finalTx
+          }).catch(err => {
             console.error("❌ [Telegram Reconcile Alert] Failed:", err.message);
           });
         }
@@ -824,6 +765,21 @@ export async function purchaseData(transaction: any, source: string = "unknown")
         console.error(`❌ [${executionId}] ATOMIC PERSISTENCE FAILURE:`, atomicError.message);
       }
 
+      // 📱 Trigger Telegram Notification for Delivery
+      // Note: We use a small delay or check if it actually reached delivered state via polling
+      // but we can also trigger VTU_DELIVERED here if the result indicates immediate success
+      const isActuallyDelivered = result.status === 'DELIVERED' || result.success === true;
+      if (isActuallyDelivered) {
+          const { data: finalTxState } = await supabase.from("transactions").select("*").eq("id", authoritativeId).single();
+          if (finalTxState) {
+              sendTelegramNotification({
+                  category: 'vtu_delivered',
+                  title: 'VTU Delivered',
+                  transaction: finalTxState
+              }).catch(e => console.error("TG Delivery alert error", e));
+          }
+      }
+
       // 🏎️ SWIFT DELIVERY ENFORCEMENT: Immediate Background Polling 
       // Instead of waiting for webhook, we poll immediately and again after 15s/45s
       // This bypasses webhook delays if the provider has already finished processing.
@@ -857,6 +813,17 @@ export async function purchaseData(transaction: any, source: string = "unknown")
         updated_at: new Date().toISOString(),
         api_response: result
       }).eq("id", transaction.id);
+
+      // 📱 Trigger Telegram Alert for Failure
+      const { data: failedTx } = await supabase.from("transactions").select("*").eq("id", transaction.id).single();
+      if (failedTx) {
+          sendTelegramNotification({
+              category: 'vtu_failed',
+              title: 'VTU Delivery Failed',
+              transaction: failedTx,
+              metadata: { error: lastError }
+          }).catch(e => console.error("TG Failure alert error", e));
+      }
     } catch (saveErr) {
       console.error("❌ Failed to persist provider rejection state:", saveErr);
     }

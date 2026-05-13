@@ -2677,6 +2677,7 @@ export default function AdminDashboard() {
                       <th className="px-6 py-4 text-center">Payment</th>
                       <th className="px-6 py-4 text-center">Delivery</th>
                       <th className="px-6 py-4 text-center">Retries</th>
+                      <th className="px-6 py-4 text-center">Customer Contact</th>
                       <th className="px-6 py-4 text-center">Actions</th>
                     </tr>
                   </thead>
@@ -2684,7 +2685,7 @@ export default function AdminDashboard() {
                     {isLoadingTransactions ? (
                       <tr>
                         <td
-                          colSpan={13}
+                          colSpan={14}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
@@ -2694,7 +2695,7 @@ export default function AdminDashboard() {
                     ) : transactions.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={13}
+                          colSpan={14}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
@@ -2817,6 +2818,36 @@ export default function AdminDashboard() {
                             <td className="px-6 py-4 text-center text-slate-600 font-medium font-mono text-xs">
                               {tx.delivery_attempts || 0}
                             </td>
+
+                            <td className="px-6 py-4 text-center">
+                              {tx.whatsapp_sent ? (
+                                <div className="relative group/contact">
+                                  <span className="inline-flex items-center px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-black uppercase tracking-tight border border-emerald-100 gap-1 cursor-help">
+                                    <CheckCircle2 size={10} />
+                                    WHATSAPP SENT
+                                  </span>
+                                  {/* Tooltip */}
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-900 text-white text-[10px] rounded-xl opacity-0 invisible group-hover/contact:opacity-100 group-hover/contact:visible transition-all whitespace-nowrap z-50 shadow-xl border border-white/10">
+                                    <div className="font-bold mb-0.5 text-slate-100">Communication Tracked</div>
+                                    <div className="text-slate-400">
+                                      {new Date(tx.whatsapp_sent_at).toLocaleDateString()} • {new Date(tx.whatsapp_sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </div>
+                                    {(() => {
+                                      const lastWaLog = Array.isArray(tx.audit_log) 
+                                        ? tx.audit_log.filter((l: any) => l.action === 'WHATSAPP_CONTACT_INITIATED').pop() 
+                                        : null;
+                                      const admin = lastWaLog?.admin || tx.whatsapp_sent_by_email || 'Admin';
+                                      return <div className="mt-1.5 pt-1.5 border-t border-white/10 text-emerald-400 font-black uppercase tracking-tighter">By: {admin}</div>;
+                                    })()}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-1 rounded-md bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-tight border border-slate-200">
+                                  NOT CONTACTED
+                                </span>
+                              )}
+                            </td>
+
                             <td className="px-6 py-4 text-center">
                               <div className="flex items-center justify-center gap-1">
                                 <button
@@ -4784,6 +4815,11 @@ export default function AdminDashboard() {
           isOpen={isViewModalOpen}
           onClose={() => setIsViewModalOpen(false)}
           transaction={viewingTransaction}
+          onUpdate={() => {
+            fetchTransactions();
+            // Also refresh stats if needed
+            fetchDashboardStats();
+          }}
         />
 
         {/* Delete Transaction Confirmation */}

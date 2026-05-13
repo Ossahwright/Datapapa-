@@ -5,6 +5,7 @@
  */
 
 import { supabase, purchaseData } from '../lib/server-utils.js';
+import { sendTelegramNotification } from '../lib/sendTelegramNotification.js';
 import { PAYMENT_STATUSES, EXECUTION_SOURCES, RECONCILIATION_STATES, LOG_MARKERS } from '../lib/constants.js';
 import crypto from 'crypto';
 
@@ -271,6 +272,13 @@ async function processTransaction(tx: any, paystackData: any, res: any) {
   });
 
   console.log(LOG_MARKERS.PAYMENT_PROMOTED);
+  
+  // 📱 Operational Telegram Alert (Payment Verified)
+  sendTelegramNotification({
+    category: 'payment_verified',
+    title: 'New Successful Transaction',
+    transaction: updatedTx
+  }).catch(e => console.error("TG Payment alert error", e));
   
   try {
     // 🚀 STEP 9 & 10: Provider execution starts only after success

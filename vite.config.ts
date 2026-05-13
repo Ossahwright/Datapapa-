@@ -7,6 +7,9 @@ import { defineConfig, loadEnv } from 'vite';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   
+  // Ensure process.env has the variables for the API bridge
+  Object.assign(process.env, env);
+  
   return {
     plugins: [
       react(), 

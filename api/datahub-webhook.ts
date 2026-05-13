@@ -1,4 +1,5 @@
-import { supabase, syncWalletSilently, logWebhook, sendTelegramNotification } from '../lib/server-utils.js';
+import { supabase, syncWalletSilently, logWebhook } from '../lib/server-utils.js';
+import { sendTelegramNotification } from '../lib/sendTelegramNotification.js';
 import { VTU_STATUSES, RECONCILIATION_STATES, LOG_MARKERS } from '../lib/constants.js';
 
 console.log("server-utils loaded successfully inside datahub-webhook");
@@ -187,12 +188,27 @@ export default async function handler(req: any, res: any) {
       console.log('=== VTU STATUS UPDATED TO DELIVERED ===');
       // 📱 TRIGGER TELEGRAM ALERT (Non-blocking)
       if (updatedRows && updatedRows[0]) {
-        sendTelegramNotification(updatedRows[0]).catch(err => {
+        sendTelegramNotification({
+          category: 'vtu_delivered',
+          title: 'VTU Delivered via Webhook',
+          transaction: updatedRows[0]
+        }).catch(err => {
           console.error("❌ [Telegram Trigger] Failed:", err.message);
         });
       }
     } else {
       console.log('=== VTU STATUS UPDATED TO REJECTED ===');
+      // 📱 TRIGGER TELEGRAM ALERT FOR FAILURE
+      if (updatedRows && updatedRows[0]) {
+        sendTelegramNotification({
+          category: 'vtu_failed',
+          title: 'VTU Failed via Webhook',
+          transaction: updatedRows[0],
+          metadata: { error: data?.message || data?.error || "Provider reported failure" }
+        }).catch(err => {
+          console.error("❌ [Telegram Failure Trigger] Failed:", err.message);
+        });
+      }
     }
 
     console.log("DB Update Result: SUCCESS");
