@@ -43,10 +43,13 @@ import {
   ShieldAlert,
   Trash2,
   XCircle,
+  Eye,
+  MessageCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
 import { calculateExecutionMetrics } from "../../lib/metrics";
+import { TransactionDetailsModal } from "../components/admin/TransactionDetailsModal";
 import { 
   API_ROUTES, 
   PAYMENT_STATUSES, 
@@ -89,6 +92,9 @@ export default function AdminDashboard() {
   const [totalDashboardTransactions, setTotalDashboardTransactions] = useState(0);
   const [customerPage, setCustomerPage] = useState(1);
   const [totalCustomerTransactions, setTotalCustomerTransactions] = useState(0);
+
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [viewingTransaction, setViewingTransaction] = useState<any>(null);
 
   const [bundles, setBundles] = useState<any[]>([]);
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
@@ -179,6 +185,7 @@ export default function AdminDashboard() {
   const [rows, setRows] = useState<any[]>([]);
   const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
   const toggleSelectTx = (id: string) => {
     setSelectedTxIds((prev) => {
@@ -225,6 +232,45 @@ export default function AdminDashboard() {
       toast.error("Failed to delete transactions: " + err.message);
     } finally {
       setIsBulkDeleting(false);
+    }
+  };
+
+  const handleBulkMarkDelivered = async () => {
+    if (selectedTxIds.size === 0 || isBulkProcessing) return;
+    
+    if (!confirm(`FORCE MULTI-FULFILLMENT: Mark ${selectedTxIds.size} items as DELIVERED?`)) return;
+
+    setIsBulkProcessing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+
+      const ids = Array.from(selectedTxIds);
+      
+      // We'll process them in small batches or in parallel with a limit
+      const results = await Promise.all(ids.map(id => 
+        axios.post(API_ROUTES.ADMIN_TX_ACTION, { 
+          action: 'mark_delivered', 
+          transactionId: id 
+        }, { headers }).catch(err => ({ error: true, id, message: err.message }))
+      ));
+
+      const failures = results.filter((r: any) => r.error || (r.data && !r.data.success));
+      
+      if (failures.length > 0) {
+        toast.error(`Completed with ${failures.length} errors`);
+      } else {
+        toast.success(`Successfully fulfilled ${ids.length} transactions`);
+      }
+
+      setSelectedTxIds(new Set());
+      fetchTransactions();
+      fetchDashboardStats();
+    } catch (err: any) {
+      console.error("Bulk delivery error:", err);
+      toast.error("Bulk operation encountered a terminal error");
+    } finally {
+      setIsBulkProcessing(false);
     }
   };
 
@@ -1248,73 +1294,79 @@ export default function AdminDashboard() {
   };
 
   const getTransactionStatus = (tx: any) => {
+    const vtu = tx.vtu_status?.toLowerCase();
     const isPaid = tx.status === 'paid' || 
                    tx.status === 'payment_verified' || 
                    tx.status === 'success' || 
                    tx.status === 'payment_success' || 
                    tx.payment_status === 'paid' || 
                    tx.payment_status === 'success';
-    const vtu = tx.vtu_status;
-    const updatedAt = tx.updated_at ? new Date(tx.updated_at).getTime() : 0;
-    const now = Date.now();
-    const isStale = (vtu === 'processing' || vtu === 'provider_execution_started') && (now - updatedAt > 2700000); // 45 mins (Calm Timing)
 
-    // Only trigger fallback manual review if payment was successful
-    if (vtu === 'manual_review_required' || (isPaid && tx.external_reference && (vtu === 'failed' || vtu === 'pending' || !vtu))) {
+    if (vtu === 'delivered' || vtu === 'completed' || vtu === 'fulfilled') {
       return { 
-        label: 'Manual Review Required', 
-        color: 'bg-amber-50 text-amber-700 border border-amber-300 font-bold', 
-        icon: <RefreshCw size={10} className="mr-1" />, 
-        reconcile: true 
+        label: 'Delivered', 
+        color: 'bg-emerald-50 text-emerald-700 border-emerald-100', 
+        icon: <CheckCircle2 size={10} className="mr-1" /> 
       };
-    }
-    if (vtu === 'delivered' || vtu === 'completed' || vtu === 'fulfilled' || tx.status === 'fulfilled') {
-      return { label: 'Delivered', color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle2 size={10} className="mr-1" /> };
-    }
-    if (vtu === 'provider_rejected' || vtu === 'failed') {
-      return { label: 'Delivery Failed', color: 'bg-rose-100 text-rose-700', icon: null, retry: true };
-    }
-    if (isStale) {
-      return { label: 'Stale Processing', color: 'bg-amber-100 text-amber-700 font-bold animate-pulse', icon: <Clock size={10} className="mr-1" />, retry: true };
     }
     
-    // Convergence Mappings
-    if (vtu === 'provider_accepted') {
-      return { label: 'Provider Accepted', color: 'bg-indigo-50 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
-    }
-    if (vtu === 'awaiting_provider_confirmation') {
-      return { label: 'Awaiting Confirmation', color: 'bg-indigo-50 text-indigo-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
-    }
-    if (vtu === 'reconciliation_pending') {
-      return { label: 'Reconciliation Pending', color: 'bg-amber-50 text-amber-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
-    }
-    if (vtu === 'delayed_provider_processing') {
-      return { label: 'Delayed Processing', color: 'bg-amber-50 text-amber-700', icon: <RefreshCw size={10} className="animate-spin mr-1" />, reconcile: true };
+    if (vtu === 'manual_override') {
+      return { 
+        label: 'Manual Override', 
+        color: 'bg-purple-50 text-purple-700 border-purple-100', 
+        icon: <ShieldCheck size={10} className="mr-1" /> 
+      };
     }
 
-    if (["provider_execution_started", "processing"].includes(vtu)) {
+    if (vtu === 'failed' || vtu === 'provider_rejected') {
       return { 
-        label: vtu.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), 
-        color: 'bg-indigo-50 text-indigo-700', 
-        icon: <RefreshCw size={10} className="animate-spin mr-1" />,
+        label: 'Failed', 
+        color: 'bg-rose-50 text-rose-700 border-rose-100', 
+        icon: <XCircle size={10} className="mr-1" />, 
+        retry: true 
+      };
+    }
+
+    if (vtu === 'processing' || vtu === 'provider_execution_started') {
+      return { 
+        label: 'Processing', 
+        color: 'bg-amber-50 text-amber-700 border-amber-100 animate-pulse', 
+        icon: <RefreshCw size={10} className="animate-spin mr-1" />, 
         reconcile: true 
       };
     }
-    if (tx.status === 'blocked_source') {
-      return { label: 'Blocked Source', color: 'bg-slate-100 text-slate-700', icon: <ShieldAlert size={10} className="mr-1" />, retry: true };
+
+    if (vtu === 'provider_accepted') {
+      return { 
+        label: 'Provider Accepted', 
+        color: 'bg-indigo-50 text-indigo-700 border-indigo-100', 
+        icon: <Check size={10} className="mr-1" />, 
+        reconcile: true 
+      };
     }
-    if (isPaid) {
-      if (vtu === 'pending' || !vtu || vtu === 'initialized') {
-        return { 
-          label: 'Pending', 
-          color: 'bg-blue-100 text-blue-700', 
-          icon: <Clock size={10} className="mr-1" />,
-          retry: true
-        };
-      }
+
+    if (vtu === 'payment_verified' || (isPaid && !vtu)) {
+      return { 
+        label: 'Payment Verified', 
+        color: 'bg-blue-50 text-blue-700 border-blue-100', 
+        icon: <ShieldCheck size={10} className="mr-1" />, 
+        retry: true 
+      };
     }
-    const fallbackLabel = tx.status === 'initialized' ? 'Initialized' : (tx.status || 'Pending');
-    return { label: fallbackLabel, color: 'bg-slate-100 text-slate-700', icon: null };
+
+    if (vtu === 'initialized' || tx.status === 'initialized') {
+      return { 
+        label: 'Initialized', 
+        color: 'bg-slate-100 text-slate-700 border-slate-200', 
+        icon: <Clock size={10} className="mr-1" /> 
+      };
+    }
+
+    return { 
+      label: vtu || tx.status || 'Pending', 
+      color: 'bg-slate-50 text-slate-600 border-slate-100', 
+      icon: null 
+    };
   };
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const selectedTxRef = useRef<any>(null);
@@ -1458,14 +1510,15 @@ export default function AdminDashboard() {
       }, { headers });
 
       if (res.data.success) {
-        alert("Marked as delivered");
+        toast.success("Transaction marked as delivered");
         fetchTransactions();
+        fetchDashboardStats();
       } else {
         throw new Error(res.data.error || "Failed to update transaction");
       }
     } catch (err: any) {
       console.error("Mark as delivered error:", err);
-      alert("Failed to mark as delivered: " + (err.response?.data?.error || err.message || String(err)));
+      toast.error("Failed to mark as delivered: " + (err.response?.data?.error || err.message || String(err)));
     }
   };
 
@@ -2572,16 +2625,28 @@ export default function AdminDashboard() {
                 </button>
 
                 {selectedTxIds.size > 0 && (
-                  <motion.button
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    onClick={handleBulkDelete}
-                    disabled={isBulkDeleting}
-                    className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-100 disabled:opacity-50"
-                  >
-                    <Trash2 size={18} />
-                    {isBulkDeleting ? "Deleting..." : `Delete ${selectedTxIds.size} Selected`}
-                  </motion.button>
+                  <div className="flex items-center gap-2">
+                    <motion.button
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      onClick={handleBulkMarkDelivered}
+                      disabled={isBulkProcessing}
+                      className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50"
+                    >
+                      <CheckCircle2 size={18} />
+                      {isBulkProcessing ? "Processing..." : `Deliver ${selectedTxIds.size}`}
+                    </motion.button>
+                    <motion.button
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      onClick={handleBulkDelete}
+                      disabled={isBulkDeleting}
+                      className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-100 disabled:opacity-50"
+                    >
+                      <Trash2 size={18} />
+                      {isBulkDeleting ? "Deleting..." : `Delete ${selectedTxIds.size}`}
+                    </motion.button>
+                  </div>
                 )}
               </div>
             </header>
@@ -2753,104 +2818,68 @@ export default function AdminDashboard() {
                               {tx.delivery_attempts || 0}
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <div className="flex items-center justify-center gap-2">
+                              <div className="flex items-center justify-center gap-1">
                                 <button
-                                  onClick={() => setSelectedTransaction(tx)}
-                                  className="p-2 text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
-                                  title="View Details"
+                                  onClick={() => {
+                                    setViewingTransaction(tx);
+                                    setIsViewModalOpen(true);
+                                  }}
+                                  className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 rounded-xl transition-all group"
+                                  title="Operational Insight"
                                 >
-                                  <Search size={16} />
+                                  <Eye size={18} className="group-hover:scale-110 transition-transform" />
                                 </button>
                                 
                                 {(() => {
                                   const state = getTransactionStatus(tx);
+                                  const isDelivered = ['delivered', 'manual_override', 'success', 'fulfilled'].includes(tx.vtu_status?.toLowerCase());
 
                                   return (
                                     <>
+                                      {!isDelivered && tx.payment_status === 'success' && (
+                                        <button
+                                          onClick={() => {
+                                            if (confirm("Are you sure you want to manually mark this transaction as delivered?")) {
+                                              markDelivered(tx.id);
+                                            }
+                                          }}
+                                          className="p-2.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 rounded-xl transition-all group"
+                                          title="Mark as Delivered"
+                                        >
+                                          <CheckCircle2 size={18} className="group-hover:scale-110 transition-transform" />
+                                        </button>
+                                      )}
+
+                                      {isDelivered && (
+                                        <button
+                                          onClick={() => handleWhatsAppMessage(tx)}
+                                          className="p-2.5 text-emerald-500 hover:bg-emerald-50 border border-emerald-100 rounded-xl transition-all group"
+                                          title="WhatsApp Receipt"
+                                        >
+                                          <MessageCircle size={18} className="group-hover:scale-110 transition-transform" />
+                                        </button>
+                                      )}
+
                                       {state.reconcile && (
                                         <button
                                           onClick={() => reconcileStatus(tx.id)}
                                           disabled={isReconciling === tx.id}
-                                          className={`p-2 rounded-lg transition-colors text-indigo-600 hover:bg-indigo-50 ${isReconciling === tx.id ? "animate-spin" : ""}`}
-                                          title="Sync/Reconcile with Provider"
+                                          className={`p-2.5 rounded-xl transition-all border ${isReconciling === tx.id ? "bg-indigo-50 border-indigo-100 text-indigo-600" : "text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border-transparent hover:border-indigo-100"}`}
+                                          title="Sync Status"
                                         >
-                                          <RefreshCw size={16} />
+                                          <RefreshCw size={16} className={isReconciling === tx.id ? "animate-spin" : ""} />
                                         </button>
-                                      )}
-
-                                      {state.retry && (
-                                        <button
-                                          onClick={() => retryVTU(tx.id)}
-                                          disabled={isRetryingVTU === tx.id}
-                                          className={`p-2 rounded-lg transition-colors ${
-                                            isRetryingVTU === tx.id
-                                              ? "text-slate-200 cursor-not-allowed"
-                                              : "text-amber-600 hover:bg-amber-50"
-                                          } ${isRetryingVTU === tx.id ? "animate-spin" : ""}`}
-                                          title="Force Retry VTU"
-                                        >
-                                          <RefreshCw size={16} />
-                                        </button>
-                                      )}
-
-                                      {!state.reconcile && tx.delivery_status !== "delivered" &&
-                                        tx.vtu_status !== "success" &&
-                                        tx.vtu_status !== "delivered" && (
-                                          <button
-                                            onClick={() => markDelivered(tx.id)}
-                                            className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                            title="Mark as Delivered"
-                                          >
-                                            <svg
-                                              xmlns="http://www.w3.org/2000/svg"
-                                              width="16"
-                                              height="16"
-                                              viewBox="0 0 24 24"
-                                              fill="none"
-                                              stroke="currentColor"
-                                              strokeWidth="2"
-                                              strokeLinecap="round"
-                                              strokeLinejoin="round"
-                                            >
-                                              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                                              <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                                            </svg>
-                                          </button>
                                       )}
                                     </>
                                   );
                                 })()}
-                                {(tx.vtu_status === "success" ||
-                                  tx.delivery_status === "delivered") && (
-                                  <div className="flex gap-1">
-                                    <button
-                                      onClick={() => handleWhatsAppMessage(tx)}
-                                      disabled={!isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
-                                      className={`p-2 rounded-lg transition-colors ${isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "text-emerald-600 hover:bg-emerald-50" : "text-slate-300 cursor-not-allowed"}`}
-                                      title={isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="16"
-                                        height="16"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      >
-                                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-                                      </svg>
-                                    </button>
-                                  </div>
-                                )}
+                                
                                 <button
                                   onClick={() => setTxToDelete(tx)}
-                                  className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Delete Transaction"
+                                  className="p-2.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all group"
+                                  title="Purge Record"
                                 >
-                                  <X size={16} />
+                                  <Trash2 size={16} className="group-hover:scale-110 transition-transform" />
                                 </button>
                               </div>
                             </td>
@@ -3009,26 +3038,18 @@ export default function AdminDashboard() {
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
-                      <th className="px-6 py-4">Network</th>
-                      <th className="px-6 py-4">DataHub Key</th>
-                      <th className="px-6 py-4">Description</th>
-                      <th className="px-6 py-4">Capacity</th>
-                      <th className="px-6 py-4">Volume</th>
-                      <th className="px-6 py-4 text-slate-500 font-medium">
-                        Cost (₵)
-                      </th>
-                      <th className="px-6 py-4 text-slate-900 font-bold">
-                        Selling Price & Profit (₵)
-                      </th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4 text-right pr-10">Actions</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Network</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Capacity</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Price Matrix (C)</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px] text-center">Status</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px] text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {isLoadingBundles ? (
                       <tr>
                         <td
-                          colSpan={9}
+                          colSpan={5}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
@@ -3038,7 +3059,7 @@ export default function AdminDashboard() {
                     ) : bundles.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={9}
+                          colSpan={5}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
@@ -3048,249 +3069,125 @@ export default function AdminDashboard() {
                     ) : (
                       bundles.map((bundle) => {
                         const isEditing = editingBundle?.id === bundle.id;
+                        const profit = Number(bundle.selling_price || 0) - Number(bundle.cost_price || 0);
+
                         return (
                           <tr
                             key={bundle.id}
-                            className="hover:bg-slate-50/50 transition-colors"
+                            className={`hover:bg-slate-50/50 transition-colors ${isEditing ? "bg-indigo-50/30" : ""}`}
                           >
-                            <td className="px-6 py-4 font-medium text-slate-900">
+                            <td className="px-6 py-4 font-medium text-slate-900 border-r border-slate-50">
                               <div className="flex items-center gap-3">
                                 {bundle.network?.toLowerCase() === "mtn" && (
-                                  <img
-                                    src="https://i.postimg.cc/BvS8nyGS/download.jpg"
-                                    alt="MTN"
-                                    className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm"
-                                  />
+                                  <img src="https://i.postimg.cc/BvS8nyGS/download.jpg" alt="M" className="w-8 h-8 rounded-lg object-cover shadow-sm" />
                                 )}
-                                {bundle.network?.toLowerCase() ===
-                                  "telecel" && (
-                                  <img
-                                    src="https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg"
-                                    alt="Telecel"
-                                    className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm"
-                                  />
+                                {bundle.network?.toLowerCase() === "telecel" && (
+                                  <img src="https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg" alt="T" className="w-8 h-8 rounded-lg object-cover shadow-sm" />
                                 )}
-                                {(bundle.network?.toLowerCase() === "airteltigo" ||
-                                  bundle.network?.toLowerCase() === "at" ||
-                                  bundle.network?.toLowerCase().includes("airteltigo")) && (
-                                  <img
-                                    src="https://i.postimg.cc/sfqT8kkW/images.jpg"
-                                    alt="AirtelTigo"
-                                    className="w-8 h-8 rounded-lg object-cover border border-slate-100 shadow-sm"
-                                  />
+                                {(bundle.network?.toLowerCase() === "airteltigo" || bundle.network?.toLowerCase() === "at") && (
+                                  <img src="https://i.postimg.cc/sfqT8kkW/images.jpg" alt="AT" className="w-8 h-8 rounded-lg object-cover shadow-sm" />
                                 )}
-                                <span
-                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                                    bundle.network?.toLowerCase() === "mtn"
-                                      ? "bg-yellow-100 text-yellow-800"
-                                      : bundle.network?.toLowerCase() ===
-                                          "telecel"
-                                        ? "bg-red-100 text-red-800"
-                                        : (bundle.network?.toLowerCase() === "airteltigo" || bundle.network?.toLowerCase() === "at" || bundle.network?.toLowerCase().includes("airteltigo"))
-                                          ? "bg-blue-100 text-blue-800"
-                                          : "bg-slate-100 text-slate-800"
-                                  }`}
-                                >
-                                  {bundle.network}
-                                </span>
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-slate-900 uppercase tracking-tight">{bundle.network}</span>
+                                  <span className="text-[10px] text-slate-400 font-mono">{bundle.description}</span>
+                                </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-slate-600 font-mono text-xs">
-                              {isEditing ? (
-                                <select
-                                  value={editingBundle.network_key || ""}
-                                  onChange={(e) =>
-                                    setEditingBundle({
-                                      ...editingBundle,
-                                      network_key: e.target.value,
-                                    })
-                                  }
-                                  className="w-full px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-[10px]"
-                                >
-                                  <option value="YELLO">YELLO</option>
-                                  <option value="TELECEL">TELECEL</option>
-                                  <option value="AT_PREMIUM">AT_PREMIUM</option>
-                                  <option value="AT_BIGTIME">AT_BIGTIME</option>
-                                </select>
-                              ) : (
-                                <div className="flex flex-col">
-                                  <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                                    {bundle.network_key}
-                                  </span>
-                                  {bundle.datahub_network_key && (
-                                    <span className="text-[10px] text-slate-400 font-mono mt-1">
-                                      DH: {bundle.datahub_network_key}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-6 py-4 text-slate-600">
-                              {isEditing ? (
-                                <input
-                                  type="text"
-                                  value={editingBundle.description || ""}
-                                  onChange={(e) =>
-                                    setEditingBundle({
-                                      ...editingBundle,
-                                      description: e.target.value,
-                                    })
-                                  }
-                                  className="w-full px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
-                                />
-                              ) : (
-                                bundle.description || "-"
-                              )}
-                            </td>
                             <td className="px-6 py-4">
                               {isEditing ? (
-                                <input
-                                  type="text"
-                                  value={editingBundle.capacity || ""}
-                                  onChange={(e) =>
-                                    setEditingBundle({
-                                      ...editingBundle,
-                                      capacity: e.target.value,
-                                    })
-                                  }
-                                  className="w-24 px-2 py-1 border border-indigo-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-sm"
-                                />
-                              ) : (
-                                <div className="flex flex-col">
-                                  <span className="text-slate-900 font-medium">
-                                    {bundle.capacity}
-                                  </span>
-                                  {bundle.datahub_capacity && (
-                                    <span className="text-[10px] text-slate-400 font-mono">
-                                      DH: {bundle.datahub_capacity}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              {isEditing ? (
-                                <div className="relative">
-                                  <span className="absolute left-2 top-2 text-slate-400 text-xs font-mono">
-                                    ₵
-                                  </span>
+                                <div className="flex flex-col gap-1">
                                   <input
-                                    type="number"
-                                    step="0.01"
-                                    value={editingBundle.cost_price || ""}
-                                    onChange={(e) =>
-                                      setEditingBundle({
-                                        ...editingBundle,
-                                        cost_price: e.target.value,
-                                      })
-                                    }
-                                    className="pl-5 pr-2 py-1.5 w-24 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm italic text-slate-600 bg-slate-50"
+                                    type="text"
+                                    value={editingBundle.capacity || ""}
+                                    onChange={(e) => setEditingBundle({ ...editingBundle, capacity: e.target.value })}
+                                    className="w-24 px-2 py-1 border border-indigo-200 rounded-lg text-sm font-black focus:ring-2 focus:ring-indigo-500/20"
+                                    placeholder="Capacity"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editingBundle.datahub_capacity || ""}
+                                    onChange={(e) => setEditingBundle({ ...editingBundle, datahub_capacity: e.target.value })}
+                                    className="w-24 px-2 py-1 border border-slate-200 rounded-lg text-[10px] font-mono"
+                                    placeholder="DH Capacity"
                                   />
                                 </div>
                               ) : (
                                 <div className="flex flex-col">
-                                  <span className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold mb-0.5">PURCHASE</span>
-                                  <span className="text-slate-500 font-mono italic bg-slate-50 px-2 py-1 rounded-md border border-slate-100 w-fit">
-                                    ₵{Number(bundle.cost_price || 0).toFixed(2)}
-                                  </span>
+                                  <span className="text-slate-900 font-black text-lg">{bundle.capacity}</span>
+                                  <span className="text-[10px] text-slate-400 font-mono">DH: {bundle.datahub_capacity || 'N/A'}</span>
                                 </div>
                               )}
                             </td>
                             <td className="px-6 py-4">
-                              {isEditing ? (
-                                <div className="relative">
-                                  <span className="absolute left-2 top-2 text-indigo-400 text-xs font-bold">
-                                    ₵
-                                  </span>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    value={editingBundle.selling_price || ""}
-                                    onChange={(e) =>
-                                      setEditingBundle({
-                                        ...editingBundle,
-                                        selling_price: e.target.value,
-                                      })
-                                    }
-                                    className="pl-5 pr-2 py-1.5 w-24 border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm font-bold text-indigo-700 bg-indigo-50/30"
-                                  />
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-3">
-                                  <div className="flex flex-col">
-                                    <span className="text-indigo-400 text-[10px] uppercase tracking-wider font-bold mb-0.5">MARKET PRICE</span>
-                                    <span className="font-black text-indigo-700 text-lg tabular-nums">
-                                      ₵{Number(bundle.selling_price).toFixed(2)}
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-col items-start gap-1">
-                                    <span className="text-[10px] text-emerald-600 uppercase tracking-widest font-bold">PROFIT</span>
-                                    <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-100 flex items-center gap-1 shadow-sm">
-                                      <TrendingUp size={10} />
-                                      ₵{(Number(bundle.selling_price) - Number(bundle.cost_price || 0)).toFixed(2)}
-                                    </span>
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="flex flex-col gap-1.5">
-                                <span className={`text-[10px] font-bold uppercase tracking-widest ${bundle.is_active ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                  {bundle.is_active ? 'Visible' : 'Hidden'}
-                                </span>
-                                <button
-                                  onClick={() =>
-                                    toggleBundleActive(
-                                      bundle.id,
-                                      bundle.is_active,
-                                    )
-                                  }
-                                  disabled={isActionProcessing}
-                                  className={`relative inline-flex h-5 w-10 items-center rounded-full transition-all duration-300 ${
-                                    bundle.is_active
-                                      ? "bg-emerald-500 shadow-md shadow-emerald-100"
-                                      : "bg-slate-200"
-                                  } ${isActionProcessing ? "opacity-50 cursor-not-allowed" : ""}`}
-                                >
-                                  <span
-                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform duration-300 border border-black/5 ${
-                                      bundle.is_active
-                                        ? "translate-x-5.5"
-                                        : "translate-x-1"
-                                    }`}
-                                  />
-                                </button>
+                              <div className="grid grid-cols-2 gap-4">
+                                {isEditing ? (
+                                  <>
+                                    <div>
+                                      <label className="text-[9px] uppercase font-bold text-slate-400 block mb-1">Cost</label>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={editingBundle.cost_price || ""}
+                                        onChange={(e) => setEditingBundle({ ...editingBundle, cost_price: e.target.value })}
+                                        className="w-20 px-2 py-1 border border-slate-200 rounded-lg text-sm text-slate-600 bg-slate-50"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[9px] uppercase font-bold text-indigo-400 block mb-1">Selling</label>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={editingBundle.selling_price || ""}
+                                        onChange={(e) => setEditingBundle({ ...editingBundle, selling_price: e.target.value })}
+                                        className="w-20 px-2 py-1 border border-indigo-200 rounded-lg text-sm font-bold text-indigo-600 bg-indigo-50/30"
+                                      />
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 flex flex-col justify-center">
+                                      <span className="text-[9px] font-bold text-slate-400 uppercase leading-none mb-1">Cost</span>
+                                      <span className="text-slate-600 font-mono text-sm leading-none">₵{Number(bundle.cost_price || 0).toFixed(2)}</span>
+                                    </div>
+                                    <div className="bg-indigo-50/50 p-2 rounded-xl border border-indigo-100/50 flex flex-col justify-center">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-[9px] font-bold text-indigo-400 uppercase leading-none">Retail</span>
+                                        <span className={`text-[8px] font-bold px-1 rounded ${profit > 0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                                          +₵{profit.toFixed(2)}
+                                        </span>
+                                      </div>
+                                      <span className="text-indigo-600 font-black text-sm leading-none">₵{Number(bundle.selling_price || 0).toFixed(2)}</span>
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-right">
-                              <div className="flex items-center justify-end gap-2 pr-4">
+                            <td className="px-6 py-4 text-center border-l border-slate-50">
+                              <button
+                                onClick={() => toggleBundleActive(bundle.id, bundle.is_active)}
+                                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                                  bundle.is_active 
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100 shadow-sm shadow-emerald-50" 
+                                    : "bg-rose-50 text-rose-700 border-rose-100 hover:bg-rose-100"
+                                }`}
+                              >
+                                {bundle.is_active ? "Live" : "Inactive"}
+                              </button>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <div className="flex items-center justify-center gap-2">
                                 {isEditing ? (
                                   <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-100">
                                     <button
                                       onClick={() =>
                                         handleUpdateBundle(bundle.id, {
-                                          description:
-                                            editingBundle.description,
+                                          description: editingBundle.description,
                                           capacity: editingBundle.capacity,
-                                          network_key:
-                                            editingBundle.network_key,
-                                          datahub_network_key:
-                                            editingBundle.network_key,
-                                          datahub_capacity:
-                                            editingBundle.capacity
-                                              ? editingBundle.capacity
-                                                  .toUpperCase()
-                                                  .replace("GB", "")
-                                                  .trim()
-                                              : "",
-                                          selling_price:
-                                            parseFloat(
-                                              editingBundle.selling_price,
-                                            ) || 0,
-                                          cost_price:
-                                            parseFloat(
-                                              editingBundle.cost_price || "0",
-                                            ) || 0,
+                                          network_key: editingBundle.network_key,
+                                          datahub_network_key: editingBundle.datahub_network_key || editingBundle.network_key,
+                                          datahub_capacity: editingBundle.datahub_capacity || (editingBundle.capacity ? editingBundle.capacity.toUpperCase().replace("GB", "").trim() : ""),
+                                          selling_price: parseFloat(editingBundle.selling_price) || 0,
+                                          cost_price: parseFloat(editingBundle.cost_price || "0") || 0,
                                         })
                                       }
                                       disabled={isActionProcessing}
@@ -3301,31 +3198,26 @@ export default function AdminDashboard() {
                                       ) : (
                                         <Check size={14} />
                                       )}
-                                      Save
                                     </button>
                                     <button
                                       onClick={() => setEditingBundle(null)}
-                                      disabled={isActionProcessing}
-                                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                      title="Cancel"
+                                      className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
                                     >
-                                      <X size={18} />
+                                      <X size={14} />
                                     </button>
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-1">
                                     <button
-                                      onClick={() => handleEditClick(bundle)}
-                                      disabled={isActionProcessing}
-                                      className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 rounded-xl transition-all group disabled:opacity-50"
+                                      onClick={() => setEditingBundle(bundle)}
+                                      className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all group"
                                       title="Edit Bundle"
                                     >
                                       <Edit2 size={18} className="group-hover:scale-110 transition-transform" />
                                     </button>
                                     <button
-                                      onClick={() => setBundleToDelete(bundle)}
-                                      disabled={isActionProcessing}
-                                      className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-xl transition-all group disabled:opacity-50"
+                                      onClick={() => handleDeleteBundle(bundle.id)}
+                                      className="p-2 text-rose-300 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all group"
                                       title="Delete Bundle"
                                     >
                                       <Trash2 size={18} className="group-hover:scale-110 transition-transform" />
@@ -4231,9 +4123,9 @@ export default function AdminDashboard() {
       </main>
 
       {/* Main Footer or generic content if needed */}
-      <AnimatePresence>
+      <AnimatePresence mode="wait">
         {bundleToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div key="modal-bundle-delete" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4283,7 +4175,7 @@ export default function AdminDashboard() {
         )}
 
         {customerToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div key="modal-customer-delete" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4334,7 +4226,7 @@ export default function AdminDashboard() {
         )}
 
         {viewingCustomerTransactions && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div key="modal-customer-tx-history" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4486,7 +4378,7 @@ export default function AdminDashboard() {
         )}
 
         {isAddingBundle && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div key="modal-add-bundle" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4706,7 +4598,7 @@ export default function AdminDashboard() {
         )}
 
         {showModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div key="modal-edit-bundle" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4723,7 +4615,7 @@ export default function AdminDashboard() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  handleUpdateBundle();
+                  handleUpdateBundle(selectedBundle?.id, form);
                 }}
                 className="flex flex-col h-full overflow-hidden"
               >
@@ -4887,218 +4779,16 @@ export default function AdminDashboard() {
         )}
 
         {/* Transaction Details Modal */}
-        {selectedTransaction && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSelectedTransaction(null)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-            >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
-                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <Activity className="text-indigo-500" size={20} />
-                  Transaction Details
-                </h3>
-                <button
-                  onClick={() => setSelectedTransaction(null)}
-                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="p-8 overflow-y-auto flex-1">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-6">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Internal Ref
-                      </label>
-                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100 break-all">
-                        {selectedTransaction.internal_reference || selectedTransaction.id}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Provider Ref
-                      </label>
-                      <p className="font-mono text-sm text-slate-900 bg-slate-50 p-2 rounded border border-slate-100 break-all">
-                        {selectedTransaction.provider_reference || selectedTransaction.external_reference || "N/A"}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Network
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-900 capitalize">
-                          {selectedTransaction.network}
-                        </span>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Recipient
-                      </label>
-                      <p className="font-bold text-lg text-slate-900">
-                        {selectedTransaction.recipient_phone}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Payer Phone
-                      </label>
-                      <p className="font-medium text-slate-900">
-                        {selectedTransaction.payer_phone_number ||
-                          selectedTransaction.payee_phone ||
-                          "N/A"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-6">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Paystack Receipt
-                      </label>
-                      <p className="font-mono text-sm text-slate-900">
-                        {selectedTransaction.reference || selectedTransaction.paystack_receipt || "N/A"}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Date & Time
-                      </label>
-                      <p className="font-medium text-slate-900">
-                        {new Date(
-                          selectedTransaction.created_at,
-                        ).toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                        Amount
-                      </label>
-                      <p className="text-2xl font-black text-indigo-600">
-                        ₵{Number(selectedTransaction.amount).toFixed(2)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-8 pt-8 border-t border-slate-100 grid grid-cols-2 gap-4">
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                      Reconciliation State
-                    </label>
-                    <span className="font-mono text-sm font-semibold text-slate-700 capitalize">
-                      {(selectedTransaction.reconciliation_state || "N/A").replace(/_/g, ' ')}
-                    </span>
-                  </div>
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                      Provider Accepted At
-                    </label>
-                    <p className="font-mono text-sm">
-                      {selectedTransaction.provider_accepted_at 
-                        ? new Date(selectedTransaction.provider_accepted_at).toLocaleString() 
-                        : "N/A"}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                      Payment Status
-                    </label>
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        selectedTransaction.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(selectedTransaction.status)
-                          ? "bg-green-100 text-green-700"
-                          : "bg-yellow-100 text-yellow-700"
-                      }`}
-                    >
-                      {selectedTransaction.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(selectedTransaction.status) ? "SUCCESS" : selectedTransaction.status.toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                      VTU Delivery Status
-                    </label>
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        selectedTransaction.delivery_status === "delivered" ||
-                        selectedTransaction.vtu_status === "success" ||
-                        selectedTransaction.vtu_status === "delivered"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : selectedTransaction.delivery_status === "failed" ||
-                              selectedTransaction.vtu_status === "failed"
-                            ? "bg-rose-100 text-rose-700"
-                            : selectedTransaction.delivery_status ===
-                                  "delivering" ||
-                                selectedTransaction.vtu_status === "processing"
-                              ? "bg-amber-100 text-amber-700 animate-pulse"
-                              : "bg-slate-100 text-slate-500"
-                      }`}
-                    >
-                      {selectedTransaction.delivery_status === "delivered" ||
-                      selectedTransaction.vtu_status === "delivered" ||
-                      selectedTransaction.vtu_status === "success"
-                        ? "DELIVERED"
-                        : selectedTransaction.delivery_status === "failed" ||
-                            selectedTransaction.vtu_status === "failed"
-                          ? "FAILED"
-                          : selectedTransaction.delivery_status ===
-                                "delivering" ||
-                              selectedTransaction.vtu_status === "processing"
-                            ? "PROCESSING"
-                            : selectedTransaction.vtu_status || "PENDING"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
-                {selectedTransaction.delivery_status !== 'delivered' && selectedTransaction.vtu_status !== 'success' && (
-                  <>
-                    <button
-                      onClick={() => reconcileStatus(selectedTransaction.id)}
-                      disabled={isReconciling === selectedTransaction.id}
-                      className="px-4 py-2 bg-indigo-50 text-indigo-700 font-bold rounded-xl hover:bg-indigo-100 transition-colors flex items-center gap-2"
-                    >
-                      <RefreshCw size={16} className={isReconciling === selectedTransaction.id ? "animate-spin" : ""} />
-                      Sync Status
-                    </button>
-                    <button
-                      onClick={() => retryVTU(selectedTransaction.id)}
-                      disabled={isRetryingVTU === selectedTransaction.id}
-                      className="px-4 py-2 bg-amber-50 text-amber-700 font-bold rounded-xl hover:bg-amber-100 transition-colors flex items-center gap-2"
-                    >
-                      <RefreshCw size={16} className={isRetryingVTU === selectedTransaction.id ? "animate-spin" : ""} />
-                      Force Retry
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setSelectedTransaction(null)}
-                  className="px-6 py-2 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+        <TransactionDetailsModal 
+          key="modal-tx-details"
+          isOpen={isViewModalOpen}
+          onClose={() => setIsViewModalOpen(false)}
+          transaction={viewingTransaction}
+        />
 
         {/* Delete Transaction Confirmation */}
         {txToDelete && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div key="modal-tx-delete" className="fixed inset-0 z-[110] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

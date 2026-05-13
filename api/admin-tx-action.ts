@@ -19,12 +19,35 @@ export default async function handler(req: any, res: any) {
   try {
     if (action === 'mark_delivered') {
       console.log(`=== ADMIN ACTION: MARK DELIVERED [${transactionId}] ===`);
+      
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.replace('Bearer ', '');
+      const { data: { user } } = await supabase.auth.getUser(token);
+      const adminEmail = user?.email || 'unknown_admin';
+
+      // 1. Fetch current audit log
+      const { data: tx } = await supabase
+        .from("transactions")
+        .select("audit_log")
+        .eq("id", transactionId)
+        .single();
+
+      const currentLog = Array.isArray(tx?.audit_log) ? tx.audit_log : [];
+      const newLogEntry = {
+        action: 'MANUAL_DELIVERY_OVERRIDE',
+        details: 'Admin manually marked as delivered bypassing provider.',
+        admin: adminEmail,
+        timestamp: new Date().toISOString()
+      };
+
       const { error } = await supabase
         .from("transactions")
         .update({
-          delivery_status: "delivered",
-          vtu_status: "success", // Ensure VTU status is also updated for UI consistency
-          delivery_updated_at: new Date().toISOString(),
+          delivery_status: "delivered", 
+          vtu_status: "delivered", 
+          fulfilled_at: new Date().toISOString(),
+          manual_override: true,
+          audit_log: [...currentLog, newLogEntry],
           updated_at: new Date().toISOString()
         })
         .eq("id", transactionId);

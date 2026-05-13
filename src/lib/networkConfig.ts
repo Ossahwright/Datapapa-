@@ -6,6 +6,7 @@ export interface NetworkInfo {
   label: string;
   provider: string; // The backend/database identifier
   networkKey: string; // The DataHubGH API identifier
+  color: string;
 }
 
 export const NETWORK_CONFIG: Record<NetworkId, NetworkInfo> = {
@@ -13,28 +14,32 @@ export const NETWORK_CONFIG: Record<NetworkId, NetworkInfo> = {
     id: "MTN",
     label: "MTN",
     provider: "mtn",
-    networkKey: "YELLO"
+    networkKey: "YELLO",
+    color: "bg-yellow-400"
   },
 
   AIRTELTIGO_PREMIUM: {
     id: "AIRTELTIGO_PREMIUM",
     label: "AirtelTigo-iShare",
     provider: "airteltigo",
-    networkKey: "AT_PREMIUM"
+    networkKey: "AT_PREMIUM",
+    color: "bg-blue-400"
   },
 
   AIRTELTIGO_BIGTIME: {
     id: "AIRTELTIGO_BIGTIME",
     label: "AirtelTigo-Bigtime",
     provider: "airteltigo",
-    networkKey: "AT_BIGTIME"
+    networkKey: "AT_BIGTIME",
+    color: "bg-blue-600"
   },
 
   TELECEL: {
     id: "TELECEL",
     label: "Telecel",
     provider: "telecel",
-    networkKey: "VODA"
+    networkKey: "VODA",
+    color: "bg-red-500"
   }
 };
 

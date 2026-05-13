@@ -27,50 +27,72 @@ export default function Receipt() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Robust UUID Validation Helper
+  const isUUID = (str: string | undefined): boolean => {
+    if (!str) return false;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(str.trim());
+  };
+
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      console.error("📍 Receipt Error: No ID found in URL params");
+      setLoading(false);
+      setError("Receipt identifier missing");
+      return;
+    }
 
     const fetchTransaction = async () => {
-      console.log("📍 Receipt Route Param (id):", id);
+      console.log("📍 Receipt Route Params - Raw ID:", id);
+      const cleanId = (id || '').trim();
       
-      // Simple UUID validation check (can use regex)
-      const isUUID = (str: string | undefined): boolean => {
-        if (!str) return false;
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        return uuidRegex.test(str);
-      };
+      if (!cleanId) {
+        setError("Receipt identifier missing");
+        setLoading(false);
+        return;
+      }
 
-      console.log("📍 UUID Validation Result:", isUUID(id));
+      const isValidUUID = isUUID(cleanId);
+      console.log("📍 UUID Validation:", isValidUUID);
 
       try {
-        console.log("📍 Fetching receipt by ID:", id);
-        const { data, error: fetchError } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('id', id)
-          .maybeSingle();
+        let query = supabase.from('transactions').select('*');
 
-        console.log("📍 Receipt Query Result:", data);
-        console.log("📍 Receipt Query Error:", fetchError);
+        if (isValidUUID) {
+          // If it's a UUID, we can safely query the 'id' column (which is a PK UUID)
+          console.log("📍 querying by UUID primary key...");
+          query = query.eq('id', cleanId);
+        } else {
+          // If it's NOT a UUID, querying the 'id' column directly will cause a Postgres 22P02 error.
+          // Instead, we query all valid TEXT-based reference columns.
+          console.log("📍 querying by text reference fields...");
+          query = query.or(`paystack_receipt.eq."${cleanId}",internal_reference.eq."${cleanId}",external_reference.eq."${cleanId}",provider_reference.eq."${cleanId}"`);
+        }
+
+        const { data, error: fetchError } = await query.maybeSingle();
 
         if (fetchError) {
-          // Check for invalid UUID syntax (error code 22P02)
+          console.error("📍 Supabase Fetch Error:", fetchError);
+          // 22P02 is specifically 'invalid input syntax for type uuid'
+          // This should be unreachable now due to the check above, but we keep it for safety.
           if (fetchError.code === '22P02') {
-            setError('Invalid receipt identifier');
+            setError('Invalid receipt identifier format.');
           } else {
-            throw fetchError;
+            setError(`Unable to load receipt: ${fetchError.message || 'Database error'}`);
           }
           return;
         }
         
         if (data) {
+          console.log("✅ Receipt Found:", data.id);
           setTransaction(data);
         } else {
-          setError('Transaction not found');
+          console.warn("📍 No transaction found for identifier:", cleanId);
+          setError('Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.');
         }
       } catch (err: any) {
-        console.error('Error fetching receipt:', err);
-        setError(err.message || 'An unexpected error occurred');
+        console.error('📍 Critical Error in Receipt Fetch:', err);
+        setError(err.message || 'An unexpected error occurred while loading your receipt.');
       } finally {
         setLoading(false);
       }
@@ -78,9 +100,9 @@ export default function Receipt() {
 
     fetchTransaction();
 
-    // Subscribe to realtime updates for this specific transaction
+    // Subscribe to realtime updates
     const channel = supabase
-      .channel(`receipt-${id}`)
+      .channel(`receipt-realtime-${id}`)
       .on(
         'postgres_changes',
         { 
@@ -90,7 +112,7 @@ export default function Receipt() {
           filter: `id=eq.${id}` 
         },
         (payload) => {
-          console.log('🔄 Receipt update:', payload.new);
+          console.log('🔄 Realtime Receipt Update Received:', payload.new);
           setTransaction(payload.new);
         }
       )
@@ -110,63 +132,86 @@ export default function Receipt() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getStatusInfo = (tx: any): { status: string; title: string; message: string; color: string; icon: React.ReactNode } => {
-    if (!tx) return { status: 'processing', title: 'Loading...', message: 'Please wait...', color: 'slate', icon: <Loader2 className="animate-spin" /> };
+  const getStatusInfo = (tx: any): { status: string; title: string; message: string; color: string; icon: React.ReactNode; subMessage: string } => {
+    if (!tx) return { status: 'processing', title: 'Loading...', message: 'Please wait...', color: 'slate', icon: <Loader2 className="animate-spin" />, subMessage: 'Verifying data with provider...' };
 
     const isPaid = tx.payment_status === 'success' || 
-                   tx.status === 'success' || 
-                   tx.status === 'payment_success' || 
-                   tx.status === 'fulfilled' || 
-                   tx.status === 'paid';
+                   ['success', 'paid', 'payment_success', 'fulfilled'].includes(tx.status?.toLowerCase());
                    
-    const isDelivered = tx.vtu_status === 'delivered' || tx.delivery_status === 'delivered' || tx.status === 'fulfilled';
-    const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.status === 'failed';
+    const isDelivered = tx.vtu_status === 'delivered' || tx.delivery_status === 'delivered' || tx.status?.toLowerCase() === 'fulfilled';
+    const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.status?.toLowerCase() === 'failed';
 
     if (isDelivered) {
       return {
         status: 'Delivered',
-        title: 'Transaction Successful',
-        message: 'Your data has been delivered successfully.',
+        title: 'PAYMENT SUCCESS',
+        message: 'Bundle Delivered!',
+        subMessage: 'Your transaction was successful and the data bundle has been credited to the recipient.',
         color: 'emerald',
-        icon: <CheckCircle2 className="w-12 h-12 text-emerald-600" />
-      };
-    }
-
-    if (isPaid) {
-      return {
-        status: 'Processing',
-        title: 'Payment Received',
-        message: 'Your payment is confirmed. Data delivery is in progress.',
-        color: 'indigo',
-        icon: <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+        icon: <div className="relative">
+                <CheckCircle2 className="w-20 h-20 text-emerald-500" />
+                <motion.div 
+                  initial={{ scale: 0 }}
+                  animate={{ scale: [1, 1.5, 1], opacity: [1, 0] }}
+                  transition={{ duration: 1, repeat: Infinity }}
+                  className="absolute inset-0 bg-emerald-400 rounded-full"
+                />
+              </div>
       };
     }
 
     if (isFailed) {
       return {
         status: 'Failed',
-        title: 'Transaction Failed',
-        message: 'We could not complete your request. Please contact support.',
+        title: 'ORDER ISSUE',
+        message: 'Payment Received',
+        subMessage: 'We received your payment but delivery failed. Our automated system is retrying or alerting an agent.',
         color: 'rose',
-        icon: <XCircle className="w-12 h-12 text-rose-600" />
+        icon: <XCircle className="w-20 h-20 text-rose-500" />
+      };
+    }
+
+    if (isPaid) {
+      return {
+        status: 'Processing',
+        title: 'PAYMENT SUCCESS',
+        message: 'Order Processing',
+        subMessage: 'Successful payment! We are now sending the data to the recipient. This usually takes 10-30 seconds.',
+        color: 'indigo',
+        icon: <div className="relative">
+                <CheckCircle2 className="w-20 h-20 text-indigo-500" />
+                <motion.div 
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  className="absolute inset-[-8px] border-2 border-dashed border-indigo-200 rounded-full"
+                />
+              </div>
       };
     }
 
     return {
-      status: 'Initialized',
-      title: 'Payment Pending',
-      message: 'Awaiting payment confirmation from Paystack.',
-      color: 'slate',
-      icon: <Loader2 className="w-12 h-12 text-slate-400 animate-spin" />
+      status: 'Awaiting',
+      title: 'PAYMENT PENDING',
+      message: 'Checking status...',
+      subMessage: 'We are waiting for a final confirmation from the payment provider.',
+      color: 'amber',
+      icon: <Loader2 className="w-16 h-16 text-amber-500 animate-spin" />
     };
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
-          <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Fetching Auth Receipt...</p>
+        <div className="flex flex-col items-center gap-6">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+            className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full"
+          />
+          <div className="text-center">
+            <h3 className="text-slate-900 font-black text-lg tracking-tight">Verifying Transaction</h3>
+            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">Please hold on...</p>
+          </div>
         </div>
       </div>
     );
@@ -175,19 +220,25 @@ export default function Receipt() {
   if (error || !transaction) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100 text-center">
-          <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-[2.5rem] p-10 shadow-2xl shadow-slate-200 border border-slate-100 text-center"
+        >
+          <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-8">
             <XCircle className="w-10 h-10 text-rose-600" />
           </div>
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight mb-2">Receipt Error</h2>
-          <p className="text-slate-500 text-sm mb-8">{error || 'The reference provided does not match any transaction.'}</p>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-4">Receipt Error</h2>
+          <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl mb-8">
+            <p className="text-rose-700 text-sm font-medium">{error || 'No transaction found'}</p>
+          </div>
           <button
             onClick={() => navigate('/')}
-            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all active:scale-95"
+            className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-sm hover:bg-slate-800 transition-all active:scale-95 shadow-xl shadow-slate-200"
           >
-            Return to Homepage
+            RETURN TO HOMEPAGE
           </button>
-        </div>
+        </motion.div>
       </div>
     );
   }
@@ -197,156 +248,149 @@ export default function Receipt() {
   const adminWhatsApp = "233244014207";
 
   return (
-    <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center">
+    <div className="min-h-screen bg-[#f8fafc] py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
+        initial={{ opacity: 0, y: 30 }}
+        animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-lg"
       >
-        {/* Receipt Container */}
-        <div className="bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/50 border border-slate-100 overflow-hidden relative">
-          {/* Top colored bar */}
-          <div className={`h-2 w-full bg-${statusInfo.color}-500`} />
-          
-          <div className="p-8 md:p-10">
-            {/* Success Icon & Header */}
-            <div className="flex flex-col items-center text-center mb-8">
-              <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-inner bg-${statusInfo.color}-50`}>
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: 'spring', stiffness: 200, damping: 20 }}
-                >
-                  {statusInfo.icon}
-                </motion.div>
-              </div>
-              <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-2">
-                {statusInfo.title}
-              </h2>
-              <p className="text-slate-500 text-sm max-w-xs mx-auto leading-relaxed">
-                {statusInfo.message}
-              </p>
-              
-              <div className="mt-4">
-                <span className={`px-3 py-1 rounded-full font-black text-[10px] tracking-widest uppercase border ${
-                  statusInfo.status === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                  statusInfo.status === 'processing' ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                  'bg-rose-50 text-rose-700 border-rose-100'
-                }`}>
-                  {statusInfo.status}
+        {/* Main Card */}
+        <div className="bg-white rounded-[3rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.08)] border border-white/50 overflow-hidden relative">
+          {/* Header Banner */}
+          <div className={`py-12 flex flex-col items-center text-center px-8 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/50 to-white`}>
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: 0.2, type: 'spring' }}
+              className={`w-24 h-24 rounded-full bg-white shadow-xl shadow-${statusInfo.color}-100 flex items-center justify-center mb-6 border border-${statusInfo.color}-50`}
+            >
+              {statusInfo.icon}
+            </motion.div>
+            
+            <h1 className={`text-4xl font-black tracking-tighter mb-2 ${
+              statusInfo.color === 'emerald' ? 'text-emerald-600' :
+              statusInfo.color === 'rose' ? 'text-rose-600' : 'text-indigo-600'
+            }`}>
+              {statusInfo.title}
+            </h1>
+            
+            <p className="text-slate-900 font-bold text-xl mb-2">{statusInfo.message}</p>
+            <p className="text-slate-500 text-sm max-w-xs mx-auto leading-relaxed">{statusInfo.subMessage}</p>
+          </div>
+
+          {/* Details Section */}
+          <div className="px-8 pb-10">
+            <div className="bg-slate-50/50 rounded-[2rem] p-8 border border-slate-100 flex flex-col items-center mb-8">
+              <span className="text-slate-400 font-black uppercase text-[11px] tracking-[0.2em] mb-3">Total Amount Paid</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-bold text-slate-400">₵</span>
+                <span className="text-5xl font-black text-slate-900 tracking-tighter">
+                  {Number(transaction.amount).toFixed(2)}
                 </span>
               </div>
             </div>
 
-            {/* Separator */}
-            <div className="flex items-center gap-4 mb-8">
-              <div className="h-px border-t border-dashed border-slate-200 flex-1" />
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Transaction Summary</p>
-              <div className="h-px border-t border-dashed border-slate-200 flex-1" />
-            </div>
-
-            {/* Receipt Content */}
-            <div className="space-y-6">
-              <div className="bg-slate-50/50 rounded-2xl p-6 border border-slate-100">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Total Amount</span>
-                </div>
-                <div className="text-3xl font-black text-slate-900 tracking-tighter">
-                  ₵{Number(transaction.amount).toFixed(2)}
+            <div className="space-y-5">
+              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
+                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Network Provider</span>
+                <div className="flex items-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${netConfig?.color || 'bg-slate-400'} shadow-sm`} />
+                  <span className="text-slate-900 font-black text-base">{netConfig?.label || transaction.network || 'Generic'}</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Network</span>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${netConfig?.color || 'bg-slate-400'}`} />
-                    <span className="text-slate-900 font-black text-sm">{netConfig?.label || transaction.network || 'Unknown'}</span>
-                  </div>
-                </div>
-                
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Service</span>
-                  <span className="text-slate-900 font-black text-sm">{transaction.display_bundle || transaction.capacity || 'Data Package'}</span>
-                </div>
+              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
+                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Bundle Package</span>
+                <span className="text-slate-900 font-black text-base">{transaction.display_bundle || transaction.capacity || 'Data Pack'}</span>
+              </div>
 
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Recipient</span>
-                  <span className="text-slate-900 font-mono font-black text-sm tracking-tight">{transaction.recipient_phone || transaction.phone}</span>
-                </div>
+              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
+                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Recipient Number</span>
+                <span className="text-slate-900 font-mono font-black text-base tabular-nums bg-slate-100 px-3 py-1 rounded-lg">
+                  {transaction.recipient_phone || transaction.phone}
+                </span>
+              </div>
 
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Status</span>
-                  <span className={`text-[11px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
-                    statusInfo.color === 'emerald' ? 'bg-emerald-100 text-emerald-700' :
-                    statusInfo.color === 'rose' ? 'bg-rose-100 text-rose-700' :
-                    'bg-indigo-100 text-indigo-700'
-                  }`}>
-                    {statusInfo.status}
-                  </span>
+              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
+                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Transaction ID</span>
+                <div className="flex items-center gap-2 group">
+                  <a 
+                    href={`https://checkout.paystack.com/receipt/${transaction.paystack_receipt || transaction.reference}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-slate-500 font-mono text-[11px] font-bold hover:text-indigo-600 transition-colors flex items-center gap-1"
+                  >
+                    {displayReference.slice(0, 18)}...
+                    <ExternalLink size={10} />
+                  </a>
+                  <button 
+                    onClick={handleCopy}
+                    className="p-1.5 bg-slate-100 rounded-lg hover:bg-indigo-50 transition-colors"
+                  >
+                    {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} className="text-slate-400" />}
+                  </button>
                 </div>
+              </div>
 
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Reference</span>
-                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 transition-colors hover:border-indigo-200">
-                    <span className="text-slate-900 font-mono text-[10px] font-black">{displayReference}</span>
-                    <button 
-                      onClick={handleCopy}
-                      className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
-                    >
-                      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex justify-between items-center px-2">
-                  <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Date & Time</span>
-                  <span className="text-slate-500 font-bold text-[11px]">{new Date(transaction.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
+              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
+                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Date & Time</span>
+                <span className="text-slate-500 font-bold text-[13px]">{new Date(transaction.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
             </div>
 
-            {/* Bottom Actions */}
+            {/* Main Action */}
             <div className="mt-12 space-y-4">
               <button
                 onClick={() => navigate('/')}
-                className="w-full flex items-center justify-center gap-2 py-5 bg-slate-900 text-white rounded-[2rem] font-black text-base hover:bg-slate-800 transition-all active:scale-95 shadow-2xl shadow-slate-300"
+                className="w-full relative group"
               >
-                Return to Homepage
+                <div className="absolute inset-0 bg-indigo-600 rounded-[2.5rem] blur-xl opacity-20 group-hover:opacity-40 transition-opacity" />
+                <div className="relative flex items-center justify-center gap-3 py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-lg hover:bg-black transition-all active:scale-[0.98] shadow-2xl">
+                  <span>RETURN TO HOMEPAGE</span>
+                  <ArrowLeft size={20} className="rotate-180 group-hover:translate-x-1 transition-transform" />
+                </div>
               </button>
               
-              <div className="flex gap-3">
+              <div className="grid grid-cols-2 gap-4">
                 <button
-                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I have an issue with my transaction ${displayReference}. Recipient: ${transaction.recipient_phone}.` })}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-white text-slate-600 border border-slate-200 rounded-2xl font-bold text-xs hover:bg-slate-50 transition-all active:scale-95"
+                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I need help with transaction: ${displayReference}. For number: ${transaction.recipient_phone}` })}
+                  className="flex items-center justify-center gap-2 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold text-sm hover:bg-slate-50 hover:border-slate-200 transition-all"
                 >
-                  <MessageCircle size={14} />
+                  <MessageCircle size={18} className="text-emerald-500" />
                   Support
                 </button>
                 <button
                   onClick={() => window.print()}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-white text-slate-600 border border-slate-200 rounded-2xl font-bold text-xs hover:bg-slate-50 transition-all active:scale-95"
+                  className="flex items-center justify-center gap-2 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold text-sm hover:bg-slate-50 hover:border-slate-200 transition-all"
                 >
-                  <Smartphone size={14} />
-                  Print
+                  <Smartphone size={18} className="text-indigo-500" />
+                  Save App
                 </button>
               </div>
             </div>
           </div>
           
-          {/* Footer branding */}
-          <div className="bg-slate-50/50 p-6 flex flex-col items-center border-t border-slate-50">
-            <div className="flex items-center gap-2 mb-2">
-              <ShieldCheck size={16} className="text-indigo-600" />
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bank-Grade Security</p>
+          {/* Footer Card Section */}
+          <div className="bg-slate-50 px-8 py-6 border-t border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm">
+                <ShieldCheck size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Secured by Datapapa</p>
+                <p className="text-[9px] text-slate-300 font-medium leading-none">Instant Bundle Delivery Guaranteed</p>
+              </div>
             </div>
-            <p className="text-[9px] text-slate-300 font-medium">Datapapa Financial Services • Authorized Merchant</p>
+            
+            {/* Tiny receipt cut effect */}
+            <div className="flex gap-1">
+              {[1,2,3,4].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-slate-200" />)}
+            </div>
           </div>
         </div>
         
-        {/* Help Link */}
-        <p className="text-center mt-8 text-slate-400 text-sm">
-          Having trouble? <button onClick={() => navigate('/support')} className="text-indigo-600 font-bold hover:underline">Visit Support Center</button>
+        <p className="text-center mt-10 text-slate-400 text-sm font-medium">
+          Is the data not showing up? <button onClick={() => navigate('/support')} className="text-indigo-600 font-bold hover:underline underline-offset-4">Open a Ticket</button>
         </p>
       </motion.div>
     </div>
