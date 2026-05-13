@@ -35,11 +35,29 @@ export async function sendTelegramNotification({
   transaction,
   metadata
 }: TelegramNotificationOptions) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  let botToken = process.env.TELEGRAM_BOT_TOKEN;
+  let chatId = process.env.TELEGRAM_CHAT_ID;
+
+  // 🛡️ FALLBACK: Check Supabase settings if env vars are missing
+  if (!botToken || !chatId) {
+    try {
+      const { data } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'secure')
+        .maybeSingle();
+      
+      if (data?.value) {
+        botToken = botToken || data.value.telegram_bot_token;
+        chatId = chatId || data.value.telegram_chat_id;
+      }
+    } catch (err) {
+      console.error("[Telegram Config] Fallback fetch failed:", err);
+    }
+  }
 
   if (!botToken || !chatId) {
-    console.warn("[TELEGRAM NOTIFICATION SKIPPED] Bot credentials missing.");
+    console.warn("[TELEGRAM NOTIFICATION SKIPPED] Bot credentials missing in both ENV and DB.");
     return;
   }
 

@@ -248,34 +248,50 @@ export default function Receipt() {
   const adminWhatsApp = "233244014207";
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center">
+    <div className="min-h-screen bg-[#0f172a] py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center relative overflow-hidden">
+      {/* Background ambient glow */}
+      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-${statusInfo.color}-500/10 blur-[120px] rounded-full pointer-events-none`} />
+      
       <motion.div
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-lg"
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-lg z-10"
       >
         {/* Main Card */}
-        <div className="bg-white rounded-[3rem] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.08)] border border-white/50 overflow-hidden relative">
+        <div className="bg-white rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.5)] border border-white/20 overflow-hidden relative">
           {/* Header Banner */}
-          <div className={`py-12 flex flex-col items-center text-center px-8 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/50 to-white`}>
+          <div className={`py-12 flex flex-col items-center text-center px-8 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/30 to-white relative`}>
+            {/* Glossy corner highlight */}
+            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-white/40 to-transparent pointer-events-none" />
+            
             <motion.div
               initial={{ scale: 0.5, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2, type: 'spring' }}
-              className={`w-24 h-24 rounded-full bg-white shadow-xl shadow-${statusInfo.color}-100 flex items-center justify-center mb-6 border border-${statusInfo.color}-50`}
+              transition={{ delay: 0.2, type: 'spring', damping: 15 }}
+              className={`w-28 h-28 rounded-full bg-white shadow-2xl shadow-${statusInfo.color}-200/50 flex items-center justify-center mb-8 border border-${statusInfo.color}-100/50 relative z-10`}
             >
               {statusInfo.icon}
             </motion.div>
             
-            <h1 className={`text-4xl font-black tracking-tighter mb-2 ${
+            <h1 className={`text-4xl font-black tracking-tighter mb-3 leading-none ${
               statusInfo.color === 'emerald' ? 'text-emerald-600' :
               statusInfo.color === 'rose' ? 'text-rose-600' : 'text-indigo-600'
             }`}>
               {statusInfo.title}
             </h1>
             
-            <p className="text-slate-900 font-bold text-xl mb-2">{statusInfo.message}</p>
-            <p className="text-slate-500 text-sm max-w-xs mx-auto leading-relaxed">{statusInfo.subMessage}</p>
+            <p className="text-slate-900 font-black text-2xl mb-2 tracking-tight">{statusInfo.message}</p>
+            <p className="text-slate-500 text-sm max-w-xs mx-auto leading-relaxed font-medium">{statusInfo.subMessage}</p>
+          </div>
+
+          {/* Dotted separator */}
+          <div className="relative h-px mx-8">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t-2 border-dashed border-slate-100" />
+            </div>
+            <div className="absolute -left-10 -top-4 w-8 h-8 rounded-full bg-[#0f172a]" />
+            <div className="absolute -right-10 -top-4 w-8 h-8 rounded-full bg-[#0f172a]" />
           </div>
 
           {/* Details Section */}

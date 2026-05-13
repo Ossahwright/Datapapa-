@@ -766,9 +766,13 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       }
 
       // 📱 Trigger Telegram Notification for Delivery
-      // Note: We use a small delay or check if it actually reached delivered state via polling
-      // but we can also trigger VTU_DELIVERED here if the result indicates immediate success
-      const isActuallyDelivered = result.status === 'DELIVERED' || result.success === true;
+      // Robust success detection for immediate notification
+      const isActuallyDelivered = 
+        result.status === 'DELIVERED' || 
+        result.status === 'SUCCESS' || 
+        result.success === true ||
+        (result.data?.status === 'DELIVERED' || result.data?.status === 'SUCCESS');
+
       if (isActuallyDelivered) {
           const { data: finalTxState } = await supabase.from("transactions").select("*").eq("id", authoritativeId).single();
           if (finalTxState) {
