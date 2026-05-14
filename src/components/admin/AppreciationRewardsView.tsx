@@ -247,8 +247,10 @@ export const AppreciationRewardsView = () => {
   };
 
   return (
-    <div className="space-y-6 w-full overflow-x-auto overflow-y-auto max-h-[90vh] pb-8 pr-2 custom-scrollbar">
-      <header className="mb-8 sticky top-0 bg-slate-50/80 backdrop-blur-md z-10 py-2">
+    <div className="h-[calc(100vh-120px)] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="p-6 md:p-8 overflow-auto custom-scrollbar flex-1">
+        <div className="min-w-[1200px] space-y-6">
+          <header className="mb-8 sticky top-0 bg-white/95 backdrop-blur-md z-20 py-2">
         <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Gift className="text-emerald-500" /> Appreciation Rewards
         </h1>
@@ -257,8 +259,8 @@ export const AppreciationRewardsView = () => {
         </p>
       </header>
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200 sticky top-[88px] bg-white/95 backdrop-blur-md z-20">
         <button
           onClick={() => setActiveTab("overview")}
           className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${
@@ -298,12 +300,12 @@ export const AppreciationRewardsView = () => {
         </button>
       </div>
 
-      {isLoading ? (
-        <div className="py-12 flex justify-center">
-          <Loader2 className="animate-spin text-slate-300" size={32} />
-        </div>
-      ) : (
-        <div className="mt-6">
+          {isLoading ? (
+            <div className="py-12 flex justify-center">
+              <Loader2 className="animate-spin text-slate-300" size={32} />
+            </div>
+          ) : (
+            <div className="mt-6">
           
           {/* OVERVIEW TAB */}
           {activeTab === "overview" && (
@@ -365,8 +367,8 @@ export const AppreciationRewardsView = () => {
 
           {/* ELIGIBLE TAB */}
           {activeTab === "eligible" && (
-            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[60vh]">
-              <table className="w-full text-left text-sm whitespace-nowrap min-w-[800px]">
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
+              <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                   <tr>
                     <th className="px-6 py-4">Phone Number</th>
@@ -411,8 +413,8 @@ export const AppreciationRewardsView = () => {
 
           {/* PENDING / MANUAL APPROVAL TAB */}
           {activeTab === "pending" && (
-            <div className="bg-amber-50/30 border border-amber-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[60vh]">
-               <div className="p-6 border-b border-amber-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-white sticky top-0 z-10">
+            <div className="bg-amber-50/30 border border-amber-100 rounded-2xl shadow-sm overflow-hidden">
+               <div className="p-6 border-b border-amber-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-white">
                   <div>
                     <h3 className="font-bold text-amber-900 flex items-center gap-2">
                        <PlayCircle className="text-amber-500" /> Pending Approval
@@ -469,8 +471,8 @@ export const AppreciationRewardsView = () => {
 
           {/* HISTORY TAB */}
           {activeTab === "history" && (
-            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[60vh]">
-               <table className="w-full text-left text-sm whitespace-nowrap min-w-[900px]">
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
+               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                   <tr>
                     <th className="px-6 py-4">Phone Number</th>
@@ -518,6 +520,8 @@ export const AppreciationRewardsView = () => {
 
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };
