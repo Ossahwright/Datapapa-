@@ -77,8 +77,8 @@ export default function Receipt() {
         } else {
           // If it's NOT a UUID, querying the 'id' column directly will cause a Postgres 22P02 error.
           // Instead, we query all valid TEXT-based reference columns.
-          console.log("📍 querying by text reference fields...");
-          query = query.or(`paystack_receipt.eq.${cleanId},internal_reference.eq.${cleanId},external_reference.eq.${cleanId},provider_reference.eq.${cleanId}`);
+          console.log("📍 Querying by text reference fields...");
+          query = query.or(`paystack_receipt.eq.${cleanId},internal_reference.eq.${cleanId},external_reference.eq.${cleanId},provider_reference.eq.${cleanId},reference.eq.${cleanId}`);
         }
 
         const { data, error: fetchError } = await query.maybeSingle();

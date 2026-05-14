@@ -68,9 +68,9 @@ export default async function handler(req: any, res: any) {
     let query = supabase.from("transactions").select("*");
     
     if (isUuid) {
-      query = query.or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}",id.eq."${providerRef}"`);
+      query = query.or(`provider_reference.eq.${providerRef},external_reference.eq.${providerRef},internal_reference.eq.${providerRef},id.eq.${providerRef}`);
     } else {
-      query = query.or(`provider_reference.eq."${providerRef}",external_reference.eq."${providerRef}",internal_reference.eq."${providerRef}"`);
+      query = query.or(`provider_reference.eq.${providerRef},external_reference.eq.${providerRef},internal_reference.eq.${providerRef}`);
     }
 
     let { data: tx, error: findError } = await query.maybeSingle();
@@ -137,7 +137,7 @@ export default async function handler(req: any, res: any) {
     const statusStr = String(data.status || payload.status || "").toUpperCase();
     console.log("Incoming Provider Status:", statusStr);
 
-    const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL"].includes(statusStr);
+    const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL", "PROCESSED", "FULFILLED"].includes(statusStr);
     const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(statusStr);
 
     if (!isSuccess && !isFailed) {

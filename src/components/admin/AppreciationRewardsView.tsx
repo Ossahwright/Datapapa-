@@ -68,35 +68,50 @@ export const AppreciationRewardsView = () => {
   };
 
   const fetchEligibleCustomers = async () => {
-    // Sync and connect with the Customers tab data using the unified RPC
-    const { data: summariesData, error: summariesError } = await supabase.rpc(
-      "get_customers_summary",
-    );
+    console.log("🔍 [Appreciation] Syncing with Customers data...");
+    try {
+      const { data: summariesData, error: summariesError } = await supabase.rpc(
+        "get_customers_summary",
+      );
 
-    if (summariesError) throw summariesError;
+      if (summariesError) {
+        console.error("❌ [Appreciation] Customers summary RPC error:", summariesError);
+        throw summariesError;
+      }
 
-    const customersMap = new Map<string, any>();
-    
-    (summariesData || []).forEach((c: any) => {
-      const phone = c.recipient_phone;
-      if (!phone || phone === "NONE" || phone === "No phone recorded") return;
+      console.log(`📊 [Appreciation] Summary RPC returned ${summariesData?.length || 0} rows`);
+
+      const customersMap = new Map<string, any>();
       
-      customersMap.set(phone, {
-        phone: c.recipient_phone,
-        network: c.network,
-        total_spend: Number(c.total_spent || 0),
-        transaction_count: Number(c.transaction_count || 0),
-        last_purchase: c.last_transaction,
-        txs: [] // we don't have individual txs from summary, but it's not strictly needed for the view
+      (summariesData || []).forEach((c: any) => {
+        // Fallback checks for various phone field names
+        const phone = c.recipient_phone || c.phone || c.customer_phone;
+        
+        if (!phone || phone === "NONE" || phone === "No phone recorded") return;
+        
+        // We use the same grouping logic as the Customers tab
+        customersMap.set(phone, {
+          phone: phone,
+          network: c.network || 'Unknown',
+          total_spend: Number(c.total_spent || c.total_spend || 0),
+          transaction_count: Number(c.transaction_count || 0),
+          last_purchase: c.last_transaction || c.last_purchase || new Date().toISOString(),
+          txs: []
+        });
       });
-    });
 
-    // Filter >= 25 GHS total spend (you can adjust this threshold if needed)
-    const eligible = Array.from(customersMap.values()).filter(c => c.total_spend >= 25);
-    // Sort by spend
-    eligible.sort((a, b) => b.total_spend - a.total_spend);
-    
-    setEligibleCustomers(eligible);
+      // Show even small spenders to confirm connection
+      const eligible = Array.from(customersMap.values()).filter(c => c.total_spend > 0);
+      
+      // Sort by spend
+      eligible.sort((a, b) => b.total_spend - a.total_spend);
+      
+      console.log(`✅ [Appreciation] Formatted ${eligible.length} eligible customers`);
+      setEligibleCustomers(eligible);
+    } catch (err: any) {
+      console.error("❌ [Appreciation] Critical fetch error:", err);
+      toast.error("Connecting to Customers tab failed. See console for details.");
+    }
   };
 
   const fetchPendingRewards = async () => {
@@ -166,7 +181,7 @@ export const AppreciationRewardsView = () => {
       const candidates = eligibleCustomers.filter(c => !existingWinnerPhones.has(c.phone));
 
       if (candidates.length === 0) {
-        toast.info("All eligible customers have already been randomly selected.");
+        toast("All eligible customers have already been randomly selected.", { icon: "ℹ️" });
         setIsSelecting(false);
         return;
       }
@@ -366,7 +381,7 @@ export const AppreciationRewardsView = () => {
                   {eligibleCustomers.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
-                        No customers have spent GHS 25 or more this week yet.
+                        No customers found with at least GHS 1.00 spend.
                       </td>
                     </tr>
                   ) : (

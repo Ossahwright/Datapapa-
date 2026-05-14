@@ -430,183 +430,115 @@ export default function AdminDashboard() {
 
   const [providerMetrics, setProviderMetrics] = useState({ success: 0, failed: 0, blocked: 0 });
 
-  // Today metrics effect
+  // 🚀 MASTER REALTIME & KPI ORCHESTRATOR
   useEffect(() => {
-    const fetchKPI = async () => {
-      // Fetch total transactions for dashboard pagination
-      const { count: dashboardCount } = await supabase
-        .from("transactions")
-        .select("*", { count: "exact", head: true });
-      if (dashboardCount !== null) setTotalDashboardTransactions(dashboardCount);
-
-      const { data, error } = await supabase.rpc("get_today_kpi");
-      if (!error && data) {
-        // RPC returns an array in some Supabase versions, or a single object if configured
-        const stats = Array.isArray(data) ? data[0] : data;
-        setKpi({
-          total: stats?.total_tx ?? 0,
-          revenue: stats?.revenue ?? 0,
-          success: stats?.success_count ?? 0,
-          failed: stats?.failed_count ?? 0,
-        });
-      } else {
-        // Fallback to manual query if RPC fails
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        const { data: txs } = await supabase
+    console.log("=== 🔄 INITIALIZING MASTER ADMIN SYNC ===");
+    
+    // Use refs logic for callbacks to prevent re-subscriptions on state change
+    const fetchFuncs = {
+      transactions: () => fetchTransactions(),
+      dashboard: async () => {
+        const from = (dashboardPage - 1) * ITEMS_PER_PAGE;
+        const { data, count } = await supabase
           .from("transactions")
-          .select("amount, vtu_status, delivery_status")
-          .gte("created_at", today.toISOString());
+          .select("*", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .range(from, from + ITEMS_PER_PAGE - 1);
+        if (data) setRows(data);
+        if (count !== null) setTotalDashboardTransactions(count);
+      },
+      stats: () => fetchDashboardStats(),
+      customers: () => currentView === "customers" ? fetchCustomers() : null,
+      kpi: async () => {
+        const { data, error } = await supabase.rpc("get_today_kpi");
+        if (!error && data) {
+          const stats = Array.isArray(data) ? data[0] : data;
+          setKpi({
+            total: stats?.total_tx ?? 0,
+            revenue: stats?.revenue ?? 0,
+            success: stats?.success_count ?? 0,
+            failed: stats?.failed_count ?? 0,
+          });
+        }
 
-        if (txs) {
-          const total = txs.length;
-          const revenue = txs.reduce((sum, tx) => sum + Number(tx.amount), 0);
-          const success = txs.filter(
-            (tx) =>
-              tx.delivery_status === VTU_STATUSES.DELIVERED ||
-              tx.vtu_status === VTU_STATUSES.SUCCESS ||
-              tx.vtu_status === VTU_STATUSES.DELIVERED,
-          ).length;
-          const failed = txs.filter(
-            (tx) =>
-              tx.delivery_status === VTU_STATUSES.FAILED || 
-              tx.vtu_status === VTU_STATUSES.FAILED ||
-              tx.vtu_status === VTU_STATUSES.PROVIDER_REJECTED,
-          ).length;
-          setKpi({ total, revenue, success, failed });
+        // Fetch Provider Metrics
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const { data: logsData } = await supabase
+          .from("datahub_logs")
+          .select("status")
+          .gte("created_at", todayDate.toISOString());
+
+        if (logsData) {
+          const success = logsData.filter(log => log.status === "success" || log.status === VTU_STATUSES.SUCCESS).length;
+          const failed = logsData.filter(log => log.status === "failed").length;
+          const blocked = logsData.filter(log => log.status === "blocked_source").length;
+          setProviderMetrics({ success, failed, blocked });
         }
       }
-
-      // 🚀 Step 10: Provider execution metrics from datahub_logs
-      const todayDate = new Date();
-      todayDate.setHours(0, 0, 0, 0);
-      const { data: logsData } = await supabase
-        .from("datahub_logs")
-        .select("status")
-        .gte("created_at", todayDate.toISOString());
-
-      if (logsData) {
-        const success = logsData.filter(log => log.status === VTU_STATUSES.SUCCESS).length;
-        const failed = logsData.filter(log => log.status === VTU_STATUSES.FAILED).length;
-        const blocked = logsData.filter(log => log.status === "blocked_source").length;
-        setProviderMetrics({ success, failed, blocked });
-      }
-    };
-    fetchKPI();
-    const t = setInterval(fetchKPI, 60000); // refresh KPIs every minute
-    return () => clearInterval(t);
-  }, []);
-
-  // Real-time transactions effect
-  useEffect(() => {
-    // initial load with pagination for dashboard
-    const fetchDashboardRows = async () => {
-      const from = (dashboardPage - 1) * ITEMS_PER_PAGE;
-      const to = from + ITEMS_PER_PAGE - 1;
-      
-      const { data, count } = await supabase
-        .from("transactions")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range(from, to);
-      
-      setRows(data ?? []);
-      if (count !== null) setTotalDashboardTransactions(count);
     };
 
-    fetchDashboardRows();
+    // Initial load
+    fetchFuncs.dashboard();
+    fetchFuncs.kpi();
 
-    const handleRefetch = () => {
-      fetchDashboardRows();
-      // If the parent has `fetchTransactions`, we dispatch to it or we can do it generically. Oh wait, `fetchTransactions` is defined elsewhere.
-    };
-    window.addEventListener('refetch-transactions', handleRefetch);
-
-    // realtime
-    const ch = supabase
-      .channel("transactions-live")
+    // 📡 Master Channel
+    const masterChannel = supabase
+      .channel("admin-master-channel")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "transactions" },
         (payload) => {
-          console.log("=== REALTIME TRANSACTION UPDATE ===");
-          console.log(payload);
+          console.log("=== ⚡ REALTIME EVENT ===");
+          
+          fetchFuncs.kpi();
+          fetchFuncs.stats();
+          fetchFuncs.dashboard();
+          
+          if (currentView === "transactions") fetchFuncs.transactions();
+          if (currentView === "customers") fetchFuncs.customers();
 
-          // Trigger a re-fetch to respect pagination and filters
-          window.dispatchEvent(new CustomEvent('refetch-transactions'));
+          // Detail view sync
+          const activeTx = selectedTxRef.current;
+          if (activeTx && payload.new && (payload.new as any).id === activeTx.id) {
+            setSelectedTransaction(payload.new);
+          }
 
-          const updatedTx = payload.new as any;
-
-          // 🚀 DIRECT STATE UPDATE FOR REALTIME FEEL
+          // Global Row Merging (Prevent unnecessary re-renders)
           if (payload.eventType === "UPDATE") {
-            setTransactions((prev) => 
-              prev.map((t) => t.id === updatedTx.id ? { ...t, ...updatedTx } : t)
-            );
-            setRows((prev) => 
-               prev.map((t) => t.id === updatedTx.id ? { ...t, ...updatedTx } : t)
-            );
+            const updated = payload.new as any;
+            setTransactions(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+            setRows(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r));
           }
-
-          // Check if it's a failure event
-          const newTx = payload.new as any;
-          const oldTx = payload.old as any;
-
-          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
-            const isFailedNow = (newTx.delivery_status === "failed" || newTx.vtu_status === "failed");
-            const wasFailedBefore = oldTx && (oldTx.delivery_status === "failed" || oldTx.vtu_status === "failed");
-
-            if (isFailedNow && !wasFailedBefore) {
-              // 🚨 Subtle notification
-              toast.error(
-                (t) => (
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
-                      <ShieldAlert size={20} />
-                    </div>
-                    <div>
-                      <p className="font-bold text-sm text-slate-900">Transaction Failed</p>
-                      <p className="text-xs text-slate-500">
-                        {newTx.recipient_phone || "Unknown"} • {newTx.capacity} {newTx.network}
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => {
-                        toast.dismiss(t.id);
-                      }}
-                      className="ml-4 p-1 hover:bg-slate-100 rounded-md transition-colors"
-                    >
-                      <X size={14} className="text-slate-400" />
-                    </button>
-                  </div>
-                ),
-                { 
-                  duration: 6000,
-                  position: "top-right",
-                  style: {
-                    padding: '8px 12px',
-                    borderRadius: '16px',
-                    background: '#fff',
-                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
-                    border: '1px solid #f1f5f9'
-                  }
-                }
-              );
-
-              // 🎵 Subtle alert sound
-              const audio = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3");
-              audio.play().catch(() => {}); // Ignore errors if browser blocks autoplay
-            }
-          }
-        },
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bundles" },
+        () => {
+           fetchBundles();
+        }
       )
       .subscribe();
 
+    // 💓 Safety Poll
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchFuncs.kpi();
+      }
+    }, 60000);
+
+    const handleManualRefetch = () => fetchFuncs.dashboard();
+    window.addEventListener('refetch-transactions', handleManualRefetch);
+
     return () => {
-      supabase.removeChannel(ch);
-      window.removeEventListener('refetch-transactions', handleRefetch);
+      console.log("=== 🧹 CLEANING MASTER SYNC ===");
+      supabase.removeChannel(masterChannel);
+      clearInterval(interval);
+      window.removeEventListener('refetch-transactions', handleManualRefetch);
     };
-  }, [dashboardPage]);
+  }, [dashboardPage, currentView]); // Minimal dependencies
+
 
   const successRate = kpi.total
     ? ((kpi.success / kpi.total) * 100).toFixed(1)
@@ -737,16 +669,6 @@ export default function AdminDashboard() {
       delayDebounceFn = setTimeout(() => {
         fetchTransactions();
       }, 300);
-      
-      const handleRefetchTransactions = () => {
-        fetchTransactions();
-      };
-      window.addEventListener('refetch-transactions', handleRefetchTransactions);
-
-      return () => {
-        clearTimeout(delayDebounceFn);
-        window.removeEventListener('refetch-transactions', handleRefetchTransactions);
-      };
     } else if (currentView === "customers") {
       fetchCustomers();
     } else if (currentView === "settings") {
@@ -960,23 +882,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchBundles();
-
-    const channel = supabase
-      .channel("bundles-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "bundles" },
-        (payload) => {
-          console.log("🔄 REALTIME UPDATE:", payload);
-          fetchBundles();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  }, [fetchBundles]);
 
   const handleEditClick = (bundle: any) => {
     setSelectedBundle(bundle);
@@ -1725,55 +1631,7 @@ export default function AdminDashboard() {
     filterDate,
   ]);
 
-  useEffect(() => {
-    const bundlesChannel = supabase
-      .channel("bundles-sync")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "bundles",
-        },
-        () => {
-          fetchBundles();
-        },
-      )
-      .subscribe();
-
-    const transactionsChannel = supabase
-      .channel("transactions-global-sync")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "transactions" },
-        (payload: any) => {
-          console.log("🔄 [Realtime] Transaction Change Detected. Syncing...");
-          // We trigger both stats (KPIs) and the main table list refresh
-          fetchDashboardStats();
-          fetchTransactions();
-          
-          // Real-time update for the currently viewed transaction details
-          const activeTx = selectedTxRef.current;
-          if (activeTx && payload.new && activeTx.id === payload.new.id) {
-             console.log("🎯 [Realtime] Updating active detail view for:", payload.new.id);
-             setSelectedTransaction(payload.new);
-          }
-          
-          if (currentView === "customers") {
-            fetchCustomers();
-            if (selectedCustomerPhone) {
-              viewCustomer(selectedCustomerPhone);
-            }
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(bundlesChannel);
-      supabase.removeChannel(transactionsChannel);
-    };
-  }, [fetchTransactions, fetchDashboardStats, fetchBundles, currentView]);
+  // Handled by master realtime effect
 
   const handleLogout = async () => {
     await supabase.auth.signOut();

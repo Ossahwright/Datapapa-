@@ -127,7 +127,8 @@ export default async function handler(req: Request, res: Response) {
                                `🕒 *Time*: ${new Date().toLocaleString()}`;
                                
              // Fire and forget Telegram logging
-             logWebhook({ reference: 'telegram_reward_alert', payload: { message: tgMessage } });
+                           logWebhook({ reference: 'telegram_reward_alert', payload: { message: tgMessage }, status: 'processed' });
+
              try {
                 const { data: dhSettings } = await supabaseAdmin.from('settings').select('value').eq('key', 'secure').single();
                 if (dhSettings?.value?.telegram_bot_token && dhSettings?.value?.telegram_chat_id) {
