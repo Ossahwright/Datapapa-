@@ -28,6 +28,27 @@ export const AppreciationRewardsView = () => {
 
   useEffect(() => {
     fetchInitialData();
+
+    // Set up realtime subscriptions
+    const transactionsChannel = supabase
+      .channel('appreciation-tx-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        fetchEligibleCustomers();
+      })
+      .subscribe();
+
+    const rewardsChannel = supabase
+      .channel('appreciation-rewards-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'appreciation_rewards' }, () => {
+        fetchPendingRewards();
+        fetchWinnersHistory();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(transactionsChannel);
+      supabase.removeChannel(rewardsChannel);
+    };
   }, []);
 
   const fetchInitialData = async () => {
@@ -47,42 +68,30 @@ export const AppreciationRewardsView = () => {
   };
 
   const fetchEligibleCustomers = async () => {
-    const startOfCurrentWeek = startOfWeek(new Date(), { weekStartsOn: 1 }).toISOString();
-    
-    // Efficient weekly aggregation using Supabase API
-    const { data: txs, error } = await supabase
-      .from('transactions')
-      .select('recipient_phone, amount, network, created_at')
-      .gte('created_at', startOfCurrentWeek)
-      .in('status', ['success', 'paid', 'payment_verified', 'completed'])
-      .not('recipient_phone', 'is', null);
+    // Sync and connect with the Customers tab data using the unified RPC
+    const { data: summariesData, error: summariesError } = await supabase.rpc(
+      "get_customers_summary",
+    );
 
-    if (error) throw error;
+    if (summariesError) throw summariesError;
 
-    // Aggregate by phone
     const customersMap = new Map<string, any>();
     
-    (txs || []).forEach(tx => {
-      const phone = tx.recipient_phone;
-      if (!customersMap.has(phone)) {
-        customersMap.set(phone, {
-          phone,
-          network: tx.network,
-          total_spend: 0,
-          transaction_count: 0,
-          last_purchase: tx.created_at,
-          txs: []
-        });
-      }
-      const c = customersMap.get(phone);
-      c.total_spend += Number(tx.amount || 0);
-      c.transaction_count += 1;
-      if (new Date(tx.created_at) > new Date(c.last_purchase)) {
-        c.last_purchase = tx.created_at;
-      }
+    (summariesData || []).forEach((c: any) => {
+      const phone = c.recipient_phone;
+      if (!phone || phone === "NONE" || phone === "No phone recorded") return;
+      
+      customersMap.set(phone, {
+        phone: c.recipient_phone,
+        network: c.network,
+        total_spend: Number(c.total_spent || 0),
+        transaction_count: Number(c.transaction_count || 0),
+        last_purchase: c.last_transaction,
+        txs: [] // we don't have individual txs from summary, but it's not strictly needed for the view
+      });
     });
 
-    // Filter >= 25 GHS
+    // Filter >= 25 GHS total spend (you can adjust this threshold if needed)
     const eligible = Array.from(customersMap.values()).filter(c => c.total_spend >= 25);
     // Sort by spend
     eligible.sort((a, b) => b.total_spend - a.total_spend);

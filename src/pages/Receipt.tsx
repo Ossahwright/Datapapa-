@@ -52,6 +52,9 @@ export default function Receipt() {
     }
 
     const fetchTransaction = async () => {
+      // 🚀 CRITICAL FIX: explicit await for session to ensure it's hydrated before RLS query
+      await supabase.auth.getSession();
+      
       console.log("📍 Receipt Route Params - Raw ID:", id);
       const cleanId = (id || '').trim();
       
@@ -75,7 +78,7 @@ export default function Receipt() {
           // If it's NOT a UUID, querying the 'id' column directly will cause a Postgres 22P02 error.
           // Instead, we query all valid TEXT-based reference columns.
           console.log("📍 querying by text reference fields...");
-          query = query.or(`paystack_receipt.eq."${cleanId}",internal_reference.eq."${cleanId}",external_reference.eq."${cleanId}",provider_reference.eq."${cleanId}"`);
+          query = query.or(`paystack_receipt.eq.${cleanId},internal_reference.eq.${cleanId},external_reference.eq.${cleanId},provider_reference.eq.${cleanId}`);
         }
 
         const { data, error: fetchError } = await query.maybeSingle();

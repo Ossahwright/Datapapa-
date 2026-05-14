@@ -130,9 +130,9 @@ export default async function handler(req: any, res: any) {
     let query = supabase.from("transactions").select("*");
     
     if (isUuid) {
-      query = query.or(`id.eq."${txId}",external_reference.eq."${txId}",paystack_receipt.eq."${txId}"`);
+      query = query.or(`id.eq.${txId},external_reference.eq.${txId},paystack_receipt.eq.${txId}`);
     } else {
-      query = query.or(`internal_reference.eq."${txId}",external_reference.eq."${txId}",paystack_receipt.eq."${txId}"`);
+      query = query.or(`internal_reference.eq.${txId},external_reference.eq.${txId},paystack_receipt.eq.${txId}`);
     }
 
     const { data: tx, error: lookupError } = await query.maybeSingle();
