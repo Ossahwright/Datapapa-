@@ -7,6 +7,7 @@ import toast, { Toaster } from "react-hot-toast";
 import { ReportsView } from "../components/reports/ReportsView";
 import { SystemHealthView } from "../components/admin/SystemHealthView";
 import { SyncedHorizontalScroll } from "../components/admin/SyncedHorizontalScroll";
+import { AppreciationRewardsView } from "../components/admin/AppreciationRewardsView";
 import {
   LogOut,
   LayoutDashboard,
@@ -38,6 +39,7 @@ import {
   FilterX,
   Home,
   Lock,
+  Gift,
   Unlock,
   BarChart3,
   ShieldAlert,
@@ -1857,6 +1859,7 @@ export default function AdminDashboard() {
               { id: "transactions", label: "Transactions", icon: CreditCard },
               { id: "bundles", label: "Bundles", icon: Database },
               { id: "customers", label: "Customers", icon: Users },
+              { id: "rewards", label: "Appreciation Rewards", icon: Gift },
             ].map((item) => (
               <button
                 key={item.id}
@@ -2408,9 +2411,9 @@ export default function AdminDashboard() {
                                   </button>
                                   <button
                                     onClick={() => handleWhatsAppMessage(tx)}
-                                    disabled={!isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
-                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-slate-100 text-slate-600 hover:bg-emerald-500 hover:text-white" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
-                                    title={isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
+                                    disabled={tx.whatsapp_sent || !isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${tx.whatsapp_sent ? "bg-slate-50 text-slate-300 cursor-not-allowed" : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-slate-100 text-slate-600 hover:bg-emerald-500 hover:text-white" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
+                                    title={tx.whatsapp_sent ? "Message Already Sent" : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
                                   >
                                     <svg
                                       xmlns="http://www.w3.org/2000/svg"
@@ -2530,6 +2533,16 @@ export default function AdminDashboard() {
                 </div>
               )}
             </div>
+          </motion.div>
+        )}
+
+        {currentView === "rewards" && (
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+          >
+            <AppreciationRewardsView />
           </motion.div>
         )}
 
@@ -2939,10 +2952,11 @@ export default function AdminDashboard() {
                                       {isDelivered && (
                                         <button
                                           onClick={() => handleWhatsAppMessage(tx)}
-                                          className="p-2.5 text-emerald-500 hover:bg-emerald-50 border border-emerald-100 rounded-xl transition-all group"
-                                          title="Send WhatsApp Receipt"
+                                          disabled={tx.whatsapp_sent}
+                                          className={`p-2.5 rounded-xl transition-all group ${tx.whatsapp_sent ? 'text-slate-300 bg-slate-50 cursor-not-allowed' : 'text-emerald-500 hover:bg-emerald-50 border border-emerald-100'}`}
+                                          title={tx.whatsapp_sent ? "Message Already Sent" : "Send WhatsApp Receipt"}
                                         >
-                                          <MessageCircle size={18} className="group-hover:scale-110 transition-transform" />
+                                          <MessageCircle size={18} className={tx.whatsapp_sent ? "" : "group-hover:scale-110 transition-transform"} />
                                         </button>
                                       )}
                                     </>
@@ -3633,9 +3647,9 @@ export default function AdminDashboard() {
                                   <div className="flex gap-1">
                                     <button
                                       onClick={() => handleWhatsAppMessage(tx)}
-                                      disabled={!isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
-                                      className={`p-1.5 rounded-lg transition-colors ${isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
-                                      title={isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
+                                      disabled={tx.whatsapp_sent || !isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                                      className={`p-1.5 rounded-lg transition-colors ${tx.whatsapp_sent ? "bg-slate-50 text-slate-300 cursor-not-allowed" : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-slate-50 text-slate-300 cursor-not-allowed"}`}
+                                      title={tx.whatsapp_sent ? "Message Already Sent" : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
                                     >
                                       <svg
                                         xmlns="http://www.w3.org/2000/svg"
@@ -4393,8 +4407,9 @@ export default function AdminDashboard() {
                                 e.stopPropagation();
                                 handleWhatsAppMessage(tx);
                               }}
-                              className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors"
-                              title="Message via WhatsApp"
+                              disabled={tx.whatsapp_sent}
+                              className={`p-1 rounded transition-colors ${tx.whatsapp_sent ? 'text-slate-300 bg-slate-50 cursor-not-allowed' : 'text-emerald-600 hover:bg-emerald-50'}`}
+                              title={tx.whatsapp_sent ? "Message Already Sent" : "Message via WhatsApp"}
                             >
                               <svg
                                 xmlns="http://www.w3.org/2000/svg"

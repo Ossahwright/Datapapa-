@@ -18,6 +18,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../../lib/supabase";
 import { format } from "date-fns";
+import axios from "axios";
 import { API_ROUTES } from "../../../lib/constants";
 
 interface HealthIndicatorProps {

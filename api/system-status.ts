@@ -75,10 +75,11 @@ export default async function handler(req: any, res: any) {
       services: { api: "operational", database: "operational", voucherPurchase: "healthy" }
     };
 
+    let startTime = Date.now();
     try {
       const { apiKey, baseUrl } = await getDataHubConfig();
       const endpoint = `${baseUrl.replace(/\/+$/, "")}/status`;
-      const startTime = Date.now();
+      startTime = Date.now();
       
       let response;
       try {
