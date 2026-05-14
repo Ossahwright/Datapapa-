@@ -89,6 +89,7 @@ export default async function handler(req: any, res: any) {
         };
 
         const { error } = await supabase.from("transactions").update({
+          status: "fulfilled",
           delivery_status: "delivered", 
           vtu_status: "delivered", 
           audit_log: [...currentLog, newLogEntry],

@@ -377,6 +377,33 @@ async function fetchWithRetry(endpoint: string, options: any, maxRetries = 3) {
 }
 
 /**
+ * 🚀 STEP 1.1 — AUTHORITATIVE PROVIDER STATUS NORMALIZER
+ * Responsibility: Classifies raw provider responses into deterministic lifecycle states.
+ */
+export function normalizeProviderDeliveryStatus(rawStatus: any): 'delivered' | 'failed' | 'processing' {
+  const statusStr = String(rawStatus || "").toUpperCase().trim();
+  
+  const successMarkers = [
+    "DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL", 
+    "PROCESSED", "FULFILLED", "ORDER_COMPLETED", "DELIVERED SUCCESSFULY"
+  ];
+  const failureMarkers = [
+    "FAILED", "REJECTED", "REVERSED", "CANCELLED", 
+    "ERROR", "DECLINED", "EXPIRED", "VOIDED"
+  ];
+
+  if (successMarkers.some(marker => statusStr.includes(marker))) {
+    return 'delivered';
+  }
+  
+  if (failureMarkers.some(marker => statusStr.includes(marker))) {
+    return 'failed';
+  }
+
+  return 'processing';
+}
+
+/**
  * 🚀 STEP 5: PROVIDER RECONCILIATION CHECK
  * Attempts to poll DataHub API for real-time status truth.
  */
@@ -406,11 +433,20 @@ export async function checkProviderTransactionStatus(tx: any) {
 
       const result = response.data?.data || response.data;
       if (response.status === 200 && result) {
-        const status = String(result.status || result.delivery_status || "").toUpperCase();
-        const isSuccess = ["DELIVERED", "SUCCESS", "COMPLETED", "SUCCESSFUL", "FULFILLED", "PROCESSED"].includes(status);
-        const isFailed = ["FAILED", "REJECTED", "REVERSED", "CANCELLED", "ERROR"].includes(status);
+        const rawStatus = result.status || result.delivery_status || result.orderStatus || "";
+        const normalized = normalizeProviderDeliveryStatus(rawStatus);
         
-        return { success: true, isSuccess, isFailed, providerStatus: status, data: result };
+        console.log("=== PROVIDER DELIVERY RECONCILIATION STATUS ===");
+        console.log("RAW:", rawStatus);
+        console.log("NORMALIZED:", normalized);
+
+        return { 
+          success: true, 
+          isSuccess: normalized === 'delivered', 
+          isFailed: normalized === 'failed', 
+          providerStatus: rawStatus, 
+          data: result 
+        };
       }
       if (response.status === 429) {
         return { error: "Rate limited by provider", rateLimited: true };
@@ -492,18 +528,26 @@ export async function reconcileTransaction(transactionId: string) {
   ].includes(tx.vtu_status) || [VTU_STATUSES.FULFILLMENT_PROCESSING].includes(tx.status as any);
 
   if (isWaiting) {
+    console.log(`=== PROVIDER DELIVERY RECONCILIATION START ===`);
     console.log(`[Reconcile] UUID: ${tx.id} is in waiting state: ${tx.vtu_status}. Polling provider...`);
     const poll = await checkProviderTransactionStatus(tx);
+    
     if (poll.success && (poll.isSuccess || poll.isFailed)) {
       const vtuStatus = poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.PROVIDER_REJECTED;
-      const finalStatus = poll.isSuccess ? VTU_STATUSES.FULFILLED : PAYMENT_STATUSES.FAILED;
+      const finalStatus = poll.isSuccess ? VTU_STATUSES.FULFILLED : tx.status; // Success status is immutable once reached
+      const deliveryStatus = poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED;
 
-      console.log(`✅ [Reconcile] Provider Truth Found for UUID: ${tx.id} -> ${vtuStatus}`);
+      console.log(`=== DATAHUB DELIVERY RESPONSE ===`, poll.data);
+      console.log(`=== NORMALIZED DELIVERY STATUS ===`, poll.isSuccess ? 'delivered' : 'failed');
+      console.log(`=== TRANSACTION PROMOTED TO DELIVERED ===`);
+
       await supabase.from("transactions").update({
         status: finalStatus,
         vtu_status: vtuStatus,
-        delivery_status: poll.isSuccess ? VTU_STATUSES.DELIVERED : VTU_STATUSES.FAILED,
+        delivery_status: deliveryStatus,
+        reconciliation_state: RECONCILIATION_STATES.COMPLETED,
         updated_at: timestamp,
+        delivery_updated_at: timestamp,
         api_response: poll.data
       }).eq("id", transactionId);
 
@@ -735,27 +779,41 @@ export async function purchaseData(transaction: any, source: string = "unknown")
       (response as any)?.id ||
       null;
 
-    const isAccepted = (response.status >= 200 && response.status < 300) && (
+    const rawStatus = result.status || result.data?.status || "";
+    const normalized = normalizeProviderDeliveryStatus(rawStatus);
+    const isActuallyDelivered = normalized === 'delivered';
+
+    const providerAccepted = (response.status >= 200 && response.status < 300) && (
       result.success === true || result.status === true || 
-      ["SUCCESSFUL", "PROCESSING", "SUCCESS", "DELIVERED", "PENDING"].includes(String(result.status || "").toUpperCase()) ||
+      ["SUCCESSFUL", "PROCESSING", "SUCCESS", "DELIVERED", "PENDING"].includes(String(rawStatus).toUpperCase()) ||
       result.code === 200 || result.code === '200'
     );
 
-    if (isAccepted || providerReference) {
-      const acceptanceTime = new Date().toISOString();
+    if (providerAccepted || providerReference) {
       console.log(`✅ [${executionId}] PROVIDER ACCEPTED. ATOMIC COMMITTING REF:`, providerReference);
       
+      const vtuStatus = isActuallyDelivered ? VTU_STATUSES.DELIVERED : VTU_STATUSES.PROVIDER_ACCEPTED;
+      const deliveryStatus = isActuallyDelivered ? VTU_STATUSES.DELIVERED : "pending";
+      const finalStatus = isActuallyDelivered ? VTU_STATUSES.FULFILLED : VTU_STATUSES.FULFILLMENT_PROCESSING;
+      const reconciliationState = isActuallyDelivered ? RECONCILIATION_STATES.COMPLETED : RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION;
+
+      if (isActuallyDelivered) {
+        console.log(`=== TRANSACTION PROMOTED TO DELIVERED (IMMEDIATE) ===`);
+      }
+
       const { error: atomicError } = await supabase
         .from("transactions")
         .update({
-          status: VTU_STATUSES.FULFILLMENT_PROCESSING,
-          vtu_status: VTU_STATUSES.PROVIDER_ACCEPTED,
+          status: finalStatus as any,
+          vtu_status: vtuStatus,
+          delivery_status: deliveryStatus,
           provider_reference: providerReference || authoritativeId,
           external_reference: providerReference || authoritativeId,
           provider_payload: result,
-          reconciliation_state: RECONCILIATION_STATES.AWAITING_PROVIDER_CONFIRMATION,
+          reconciliation_state: reconciliationState,
           api_response: result,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          delivery_updated_at: isActuallyDelivered ? new Date().toISOString() : null
         })
         .eq("id", authoritativeId);
         
@@ -765,12 +823,6 @@ export async function purchaseData(transaction: any, source: string = "unknown")
 
       // 📱 Trigger Telegram Notification for Delivery
       // Robust success detection for immediate notification
-      const isActuallyDelivered = 
-        result.status === 'DELIVERED' || 
-        result.status === 'SUCCESS' || 
-        result.success === true ||
-        (result.data?.status === 'DELIVERED' || result.data?.status === 'SUCCESS');
-
       if (isActuallyDelivered) {
           const { data: finalTxState } = await supabase.from("transactions").select("*").eq("id", authoritativeId).single();
           if (finalTxState) {
