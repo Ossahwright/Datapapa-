@@ -89,6 +89,7 @@ export default async function handler(req: Request, res: Response) {
           recipient_phone: phoneNumber,
           payer_phone_number: phoneNumber,
           status: 'paid',
+          payment_status: 'success',
           delivery_status: 'pending',
           external_reference: `REWARD-${rewardId}`,
           api_status: 'initiated'
@@ -106,7 +107,7 @@ export default async function handler(req: Request, res: Response) {
 
       try {
          // Fire off Datahub purchase directly!
-         const vtuResult = await purchaseData(targetBundle, phoneNumber, transaction.id);
+         const vtuResult = await purchaseData(transaction, 'manual_retry');
          
          const isDelivered = vtuResult.success || vtuResult.status === 'delivered' || vtuResult.status === 'success';
          
@@ -120,13 +121,13 @@ export default async function handler(req: Request, res: Response) {
              // Send Telegram Admin Notification
              const tgMessage = `🎉 *REWARD DISPATCHED*\n\n` +
                                `👤 *Customer*: ${phoneNumber}\n` +
-                               `📱 *Network*: ${targetBundle.network.toUpperCase()}\n` +
+                               `📱 *Network*: ${targetBundle.network_key.toUpperCase()}\n` +
                                `🎁 *Reward*: ${targetBundle.capacity}\n` +
                                `✅ *Status*: Delivered\n` +
                                `🕒 *Time*: ${new Date().toLocaleString()}`;
                                
              // Fire and forget Telegram logging
-             logWebhook('telegram_reward_alert', { message: tgMessage });
+             logWebhook({ reference: 'telegram_reward_alert', payload: { message: tgMessage } });
              try {
                 const { data: dhSettings } = await supabaseAdmin.from('settings').select('value').eq('key', 'secure').single();
                 if (dhSettings?.value?.telegram_bot_token && dhSettings?.value?.telegram_chat_id) {
