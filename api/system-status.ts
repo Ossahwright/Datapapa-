@@ -9,7 +9,8 @@ import axios from 'axios';
 import { LOG_MARKERS, PROVIDER_HEALTH } from '../lib/constants.js';
 
 export default async function handler(req: any, res: any) {
-  const { feature } = req.query;
+  const query = req.query || {};
+  const { feature } = query;
 
   // General health check (GET /api/system-status?feature=health)
   if (feature === 'health') {

@@ -400,7 +400,7 @@ export default function AdminDashboard() {
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
 
       const [dhRes] = await Promise.allSettled([
-        axios.get("/api/check-datahub", { headers }),
+        axios.get(`${API_ROUTES.SYSTEM_STATUS}?feature=datahub`, { headers }),
       ]);
 
       const dh =
@@ -630,7 +630,7 @@ export default function AdminDashboard() {
       try {
         const { session } = await getSafeSession();
         const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-        const res = await axios.get("/api/health", { headers });
+        const res = await axios.get(`${API_ROUTES.SYSTEM_STATUS}?feature=health`, { headers });
         if (res.status === 200) setServerStatus("up");
         else setServerStatus("down");
       } catch (e) {
@@ -1268,9 +1268,10 @@ export default function AdminDashboard() {
     setIsReconciling(transactionId);
     try {
       const { data: session } = await supabase.auth.getSession();
-      const res = await axios.post("/api/reconcile-tx", 
-        { transactionId },
-        { headers: { Authorization: `Bearer ${session?.session?.access_token}` } }
+      const headers = session?.session?.access_token ? { Authorization: `Bearer ${session?.session?.access_token}` } : {};
+      const res = await axios.post(API_ROUTES.ADMIN_OPS, 
+        { action: 'reconcile_single', transactionId },
+        { headers }
       );
       
       if (res.data.success) {
@@ -1412,7 +1413,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleWhatsAppMessage = (tx: any) => {
+  const handleWhatsAppMessage = async (tx: any) => {
     // 🛡️ STRICT PRIORITY: Always target the human recipient first
     const rawPhone = tx.recipient_phone || tx.payer_phone_number || tx.phone || "";
     if (!rawPhone) {
@@ -1428,6 +1429,32 @@ export default function AdminDashboard() {
     const message = `Hello 👋\n\nYour ${appSettings.app_name} transaction is being processed successfully.\n\n📶 Network: ${network}\n📦 Bundle: ${bundle}\n📱 Recipient: ${recipient}\n🧾 Reference: ${reference}\n\nThank you for choosing ${appSettings.app_name}.`;
 
     console.log("🛠️ Preparing direct WhatsApp chat for customer:", { recipient, rawPhone, network });
+
+    try {
+      // 🛡️ Track communication to prevent duplicates
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      
+      // We perform tracking just before opening the chat
+      await axios.post(API_ROUTES.ADMIN_OPS, {
+        action: 'track_whatsapp',
+        transactionId: tx.id,
+        message: message
+      }, { headers });
+      
+      // Update UI state locally to show tracked immediately
+      setTransactions(prev => prev.map(t => 
+        t.id === tx.id ? { 
+          ...t, 
+          whatsapp_sent: true,
+          whatsapp_sent_at: new Date().toISOString()
+        } : t
+      ));
+      
+      toast.success("WhatsApp delivery message tracked.");
+    } catch (err) {
+      console.warn("Failed to track WhatsApp message, but continuing to open chat:", err);
+    }
 
     openWhatsApp({
       phone: rawPhone,
@@ -2873,11 +2900,29 @@ export default function AdminDashboard() {
                                 
                                 {(() => {
                                   const state = getTransactionStatus(tx);
-                                  const isDelivered = ['delivered', 'manual_override', 'success', 'fulfilled'].includes(tx.vtu_status?.toLowerCase());
+                                  const isDelivered = ['delivered', 'manual_override', 'success', 'fulfilled'].includes(tx.vtu_status?.toLowerCase()) || tx.delivery_status === 'delivered';
 
                                   return (
                                     <>
-                                      {!isDelivered && tx.payment_status === 'success' && (
+                                      <button
+                                        onClick={() => syncWithProvider(tx.id)}
+                                        disabled={isReconciling === tx.id || isDelivered}
+                                        className={`p-2.5 rounded-xl transition-all border ${isReconciling === tx.id || isDelivered ? "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border-transparent hover:border-indigo-100 group"}`}
+                                        title="Sync Status With Provider"
+                                      >
+                                        <ShieldCheck size={18} className={isReconciling === tx.id ? "animate-spin" : "group-hover:scale-110 transition-transform"} />
+                                      </button>
+
+                                      <button
+                                        onClick={() => retryVTU(tx.id)}
+                                        disabled={isRetryingVTU === tx.id || isDelivered || tx.vtu_status === 'processing'}
+                                        className={`p-2.5 rounded-xl transition-all border ${isRetryingVTU === tx.id || isDelivered || tx.vtu_status === 'processing' ? "bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-amber-600 hover:bg-amber-50 border-transparent hover:border-amber-100 group"}`}
+                                        title="Retry Delivery"
+                                      >
+                                        <RefreshCw size={18} className={isRetryingVTU === tx.id ? "animate-spin" : "group-hover:scale-110 transition-transform"} />
+                                      </button>
+
+                                      {!isDelivered && (tx.payment_status === 'success' || tx.status === 'paid' || tx.status === 'success') && (
                                         <button
                                           onClick={() => {
                                             if (confirm("Are you sure you want to manually mark this transaction as delivered?")) {
@@ -2885,7 +2930,7 @@ export default function AdminDashboard() {
                                             }
                                           }}
                                           className="p-2.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 border border-transparent hover:border-emerald-100 rounded-xl transition-all group"
-                                          title="Mark as Delivered"
+                                          title="Force Mark Delivered"
                                         >
                                           <CheckCircle2 size={18} className="group-hover:scale-110 transition-transform" />
                                         </button>
@@ -2895,20 +2940,9 @@ export default function AdminDashboard() {
                                         <button
                                           onClick={() => handleWhatsAppMessage(tx)}
                                           className="p-2.5 text-emerald-500 hover:bg-emerald-50 border border-emerald-100 rounded-xl transition-all group"
-                                          title="WhatsApp Receipt"
+                                          title="Send WhatsApp Receipt"
                                         >
                                           <MessageCircle size={18} className="group-hover:scale-110 transition-transform" />
-                                        </button>
-                                      )}
-
-                                      {state.reconcile && (
-                                        <button
-                                          onClick={() => reconcileStatus(tx.id)}
-                                          disabled={isReconciling === tx.id}
-                                          className={`p-2.5 rounded-xl transition-all border ${isReconciling === tx.id ? "bg-indigo-50 border-indigo-100 text-indigo-600" : "text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border-transparent hover:border-indigo-100"}`}
-                                          title="Sync Status"
-                                        >
-                                          <RefreshCw size={16} className={isReconciling === tx.id ? "animate-spin" : ""} />
                                         </button>
                                       )}
                                     </>

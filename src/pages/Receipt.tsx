@@ -263,160 +263,140 @@ export default function Receipt() {
       <div className={`absolute top-0 left-0 w-full h-1 bg-${statusInfo.color}-600`} />
       
       <motion.div
-        initial={{ opacity: 0, y: 30 }}
+        initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-lg z-10"
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-[320px] z-10 px-2"
       >
-        <div className="text-center mb-8">
-            <h2 className="text-sm font-black text-slate-400 uppercase tracking-[0.3em]">{settings?.app_name || 'DATAPAPA'} TRANSACTION</h2>
+        <div className="text-center mb-4">
+            <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">{settings?.app_name || 'DATAPAPA'}</h2>
         </div>
 
         {/* Main Card */}
-        <div className="bg-white rounded-[1.5rem] shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] border border-slate-100 overflow-hidden relative">
+        <div className="bg-white rounded-[1.5rem] shadow-[0_15px_40px_-12px_rgba(0,0,0,0.08)] border border-slate-100 overflow-hidden relative">
           {/* Status Banner */}
-          <div className={`py-12 flex flex-col items-center text-center px-8 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/50 to-white`}>
+          <div className={`py-6 flex flex-col items-center text-center px-4 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/50 to-white`}>
             
             <motion.div
               initial={{ scale: 0.5, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2, type: 'spring', damping: 15 }}
-              className={`w-24 h-24 rounded-full bg-white shadow-xl shadow-${statusInfo.color}-100 flex items-center justify-center mb-6 border border-${statusInfo.color}-50 relative z-10`}
+              transition={{ delay: 0.1, type: 'spring', damping: 15 }}
+              className={`w-14 h-14 rounded-full bg-white shadow-md shadow-${statusInfo.color}-100 flex items-center justify-center mb-3 border border-${statusInfo.color}-50 relative z-10`}
             >
-              {statusInfo.icon}
+              {React.cloneElement(statusInfo.icon as React.ReactElement, { className: 'w-8 h-8' })}
             </motion.div>
             
-            <h1 className={`text-3xl font-black tracking-tighter mb-2 ${
+            <h1 className={`text-xl font-black tracking-tighter mb-0.5 ${
               statusInfo.color === 'emerald' ? 'text-emerald-600' :
               statusInfo.color === 'rose' ? 'text-rose-600' : 'text-indigo-600'
             }`}>
               {statusInfo.title}
             </h1>
             
-            <p className="text-slate-900 font-bold text-xl mb-1">{statusInfo.message}</p>
-            <p className="text-slate-500 text-[13px] max-w-[280px] mx-auto leading-relaxed font-medium">{statusInfo.subMessage}</p>
+            <p className="text-slate-900 font-bold text-base mb-0.5">{statusInfo.message}</p>
+            <p className="text-slate-500 text-[10px] max-w-[200px] mx-auto leading-tight font-medium">{statusInfo.subMessage}</p>
           </div>
 
-          {/* Dotted separator with physical feel */}
-          <div className="relative py-4">
-            <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 border-t-2 border-dashed border-slate-100" />
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 -ml-4 w-8 h-8 rounded-full bg-[#fcfcfd] border border-slate-100" />
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 -mr-4 w-8 h-8 rounded-full bg-[#fcfcfd] border border-slate-100" />
+          {/* Dotted separator */}
+          <div className="relative py-1">
+            <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 border-t border-dashed border-slate-100" />
+            <div className="absolute left-0 top-1/2 -translate-y-1/2 -ml-2.5 w-5 h-5 rounded-full bg-[#fcfcfd] border border-slate-100" />
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 -mr-2.5 w-5 h-5 rounded-full bg-[#fcfcfd] border border-slate-100" />
           </div>
 
           {/* Details Section */}
-          <div className="px-10 pb-10">
-            <div className="bg-slate-50 rounded-2xl p-6 flex flex-col items-center mb-8 border border-slate-100/50 shadow-inner">
-              <span className="text-slate-400 font-bold uppercase text-[9px] tracking-widest mb-2">Amount Paid</span>
-              <div className="flex items-baseline gap-1">
-                <span className="text-xl font-bold text-slate-400">₵</span>
-                <span className="text-4xl font-black text-slate-900 tracking-tighter">
+          <div className="px-6 pb-6">
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col items-center mb-4 border border-slate-100/50 shadow-inner">
+              <span className="text-slate-400 font-bold uppercase text-[7px] tracking-widest mb-0.5">Amount Paid</span>
+              <div className="flex items-baseline gap-0.5">
+                <span className="text-sm font-bold text-slate-400">₵</span>
+                <span className="text-2xl font-black text-slate-900 tracking-tighter">
                   {Number(transaction.amount).toFixed(2)}
                 </span>
               </div>
             </div>
 
-            <div className="space-y-5">
-              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Network Provider</span>
-                <div className="flex items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${netConfig?.color || 'bg-slate-400'} shadow-sm`} />
-                  <span className="text-slate-900 font-black text-base">{netConfig?.label || transaction.network || 'Generic'}</span>
+            <div className="space-y-2.5">
+              <div className="flex justify-between items-center p-0.5">
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Network</span>
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full ${netConfig?.color || 'bg-slate-400'}`} />
+                  <span className="text-slate-900 font-black text-xs">{netConfig?.label || transaction.network || 'Generic'}</span>
                 </div>
               </div>
 
-              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Bundle Package</span>
-                <span className="text-slate-900 font-black text-base">{transaction.display_bundle || transaction.capacity || 'Data Pack'}</span>
+              <div className="flex justify-between items-center p-0.5">
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Plan</span>
+                <span className="text-slate-900 font-black text-xs">{transaction.display_bundle || transaction.capacity || 'Data Pack'}</span>
               </div>
 
-              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Recipient Number</span>
-                <span className="text-slate-900 font-mono font-black text-base tabular-nums bg-slate-100 px-3 py-1 rounded-lg">
+              <div className="flex justify-between items-center p-0.5">
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Number</span>
+                <span className="text-slate-900 font-mono font-black text-xs tabular-nums bg-slate-100 px-2.5 py-0.5 rounded">
                   {transaction.recipient_phone || transaction.phone}
                 </span>
               </div>
 
-              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Transaction ID</span>
-                <div className="flex items-center gap-2 group">
-                  <a 
-                    href={`https://checkout.paystack.com/receipt/${transaction.paystack_receipt || transaction.reference}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-slate-500 font-mono text-[11px] font-bold hover:text-indigo-600 transition-colors flex items-center gap-1"
-                  >
-                    {displayReference.slice(0, 18)}...
-                    <ExternalLink size={10} />
-                  </a>
+              <div className="flex justify-between items-center p-0.5">
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Ref</span>
+                <div className="flex items-center gap-1.5">
                   <button 
                     onClick={handleCopy}
-                    className="p-1.5 bg-slate-100 rounded-lg hover:bg-indigo-50 transition-colors"
+                    className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 rounded hover:bg-indigo-50 transition-colors text-slate-500 font-mono text-[9px] font-bold"
                   >
-                    {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} className="text-slate-400" />}
+                    {displayReference.slice(0, 10)}...
+                    {copied ? <Check size={8} className="text-emerald-500" /> : <Copy size={8} className="text-slate-400" />}
                   </button>
                 </div>
-              </div>
-
-              <div className="flex justify-between items-center transition-all hover:bg-slate-50 p-2 rounded-xl">
-                <span className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Date & Time</span>
-                <span className="text-slate-500 font-bold text-[13px]">{new Date(transaction.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
             </div>
 
             {/* Main Action */}
-            <div className="mt-12 space-y-4">
+            <div className="mt-6 space-y-2">
               <button
                 onClick={() => navigate('/')}
                 className="w-full relative group"
               >
-                <div className="absolute inset-0 bg-indigo-600 rounded-[2.5rem] blur-xl opacity-20 group-hover:opacity-40 transition-opacity" />
-                <div className="relative flex items-center justify-center gap-3 py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-lg hover:bg-black transition-all active:scale-[0.98] shadow-2xl">
-                  <span>RETURN TO HOMEPAGE</span>
-                  <ArrowLeft size={20} className="rotate-180 group-hover:translate-x-1 transition-transform" />
+                <div className="relative flex items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-xl font-black text-xs hover:bg-black transition-all active:scale-[0.98] shadow-lg">
+                  <span>BACK TO HOME</span>
+                  <ArrowLeft size={14} className="rotate-180 group-hover:translate-x-1 transition-transform" />
                 </div>
               </button>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I need help with transaction: ${displayReference}. For number: ${transaction.recipient_phone}` })}
-                  className="flex items-center justify-center gap-2 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold text-sm hover:bg-slate-50 hover:border-slate-200 transition-all"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white text-slate-600 border border-slate-100 rounded-xl font-bold text-[10px] hover:bg-slate-50 transition-all"
                 >
-                  <MessageCircle size={18} className="text-emerald-500" />
+                  <MessageCircle size={12} className="text-emerald-500" />
                   Support
                 </button>
                 <button
                   onClick={() => window.print()}
-                  className="flex items-center justify-center gap-2 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold text-sm hover:bg-slate-50 hover:border-slate-200 transition-all"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white text-slate-600 border border-slate-100 rounded-xl font-bold text-[10px] hover:bg-slate-50 transition-all"
                 >
-                  <Smartphone size={18} className="text-indigo-500" />
-                  Save App
+                  <Smartphone size={12} className="text-indigo-500" />
+                  Print
                 </button>
               </div>
             </div>
           </div>
           
           {/* Footer Card Section */}
-          <div className="bg-slate-50 px-8 py-6 border-t border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm">
-                <ShieldCheck size={16} className="text-indigo-600" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Secured by Datapapa</p>
-                <p className="text-[9px] text-slate-300 font-medium leading-none">Instant Bundle Delivery Guaranteed</p>
-              </div>
+          <div className="bg-slate-50 px-6 py-2 border-t border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck size={10} className="text-indigo-600" />
+              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest leading-none">Secured by Datapapa</p>
             </div>
             
-            {/* Tiny receipt cut effect */}
-            <div className="flex gap-1">
-              {[1,2,3,4].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-slate-200" />)}
+            <div className="flex gap-0.5">
+              {[1,2,3].map(i => <div key={i} className="w-0.5 h-0.5 rounded-full bg-slate-200" />)}
             </div>
           </div>
         </div>
         
-        <p className="text-center mt-10 text-slate-400 text-sm font-medium">
-          Is the data not showing up? <button onClick={() => navigate('/support')} className="text-indigo-600 font-bold hover:underline underline-offset-4">Open a Ticket</button>
+        <p className="text-center mt-4 text-slate-400 text-[10px] font-medium">
+          Issues? <button onClick={() => navigate('/support')} className="text-indigo-600 font-bold hover:underline underline-offset-4">Get Help</button>
         </p>
       </motion.div>
     </div>

@@ -90,9 +90,7 @@ export async function sendTelegramNotification({
     const amount = transaction.amount_paid || transaction.amount || 0;
     const formattedAmount = `GHS ${Number(amount).toFixed(2)}`;
     
-    // Masking phone slightly for privacy in the log
-    const recipientRaw = transaction.recipient_phone || transaction.receiver_phone || transaction.phone || 'N/A';
-    const recipient = recipientRaw.length > 5 ? `${recipientRaw.substring(0, 3)}XXXXXXX` : recipientRaw;
+    const recipient = transaction.recipient_phone || transaction.receiver_phone || transaction.phone || 'N/A';
     
     const reference = transaction.reference || transaction.provider_reference || transaction.id;
     const network = String(transaction.network || 'Unknown').toUpperCase();

@@ -12,16 +12,39 @@ import { callDataHubAPI } from '../lib/datahub-client.js';
 const globalRateLimit = new Map<string, number[]>();
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+  const method = (req.method || 'GET').toUpperCase();
+  
+  // 🛡️ Handle CORS Preflight
+  if (method === 'OPTIONS') {
+    return res.status(200).end();
   }
+
+  if (method !== 'POST') {
+    console.warn(`[Admin Ops] Received ${method} request to ${req.url}. This endpoint expects POST for actions.`);
+    // If it's a GET, maybe they just want to ping it? Return 200 for health but 405 for actions.
+    if (method === 'GET') {
+      return res.status(200).json({ status: 'Admin Ops Endpoint is alive. Use POST for actions.' });
+    }
+    return res.status(405).json({ error: `Method ${method} not allowed. Use POST.` });
+  }
+
+  // 🛡️ Robust Body Parsing
+  let body = req.body;
+  if (typeof body === 'string' && body.length > 0) {
+    try {
+      body = JSON.parse(body);
+    } catch (e) {
+      console.error("[Admin Ops] Failed to parse body string:", e);
+    }
+  }
+  body = body || {};
 
   const isAuthorized = await isAdminAuth(req);
   if (!isAuthorized) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { action, ...payload } = req.body;
+  const { action, ...payload } = body;
 
   try {
     switch (action) {
@@ -36,7 +59,7 @@ export default async function handler(req: any, res: any) {
           transaction: {
             id: 'TEST-MODE-UUID',
             amount: 88.88,
-            recipient_phone: '024XXXXXXX',
+            recipient_phone: '0241234567',
             network: 'TEST',
             display_bundle: '1GB TEST PACK',
             reference: 'TEST-REF'
@@ -68,8 +91,6 @@ export default async function handler(req: any, res: any) {
         const { error } = await supabase.from("transactions").update({
           delivery_status: "delivered", 
           vtu_status: "delivered", 
-          fulfilled_at: new Date().toISOString(),
-          manual_override: true,
           audit_log: [...currentLog, newLogEntry],
           updated_at: new Date().toISOString()
         }).eq("id", transactionId);
