@@ -206,17 +206,21 @@ async function performExhaustiveDiscovery(config: any): Promise<ProviderHealthRe
  */
 export async function syncProviderWallet(force = false): Promise<any> {
   try {
-    const { data: currentSettings } = await supabase
+    const { data: currentSettings, error: dbErr } = await supabase
       .from("provider_settings")
       .select("*")
       .eq("provider_name", "datahubgh")
-      .single();
+      .maybeSingle();
+
+    if (dbErr) {
+      console.warn("⚠️ [Health Engine] Database lookup failed for provider_settings:", dbErr.message);
+    }
 
     // 🛡️ Prevent log flooding and excessive retries (15 Minute Cooldown)
     if (!force && currentSettings?.next_retry_at) {
       const nextRetry = new Date(currentSettings.next_retry_at).getTime();
       if (Date.now() < nextRetry) {
-        return { success: true, throttled: true, balance: currentSettings.wallet_balance, status: "degraded" };
+        return { success: true, throttled: true, balance: currentSettings?.wallet_balance ?? 0, status: "degraded" };
       }
     }
 
@@ -243,14 +247,21 @@ export async function syncProviderWallet(force = false): Promise<any> {
       console.warn(`⚠️ [Sync Wallet] Observability degraded. Using cached balance. Next retry at: ${nextRetryAt}`);
     }
 
-    await supabase
-      .from("provider_settings")
-      .update(updateData)
-      .eq("provider_name", "datahubgh");
+    // Attempt to update DB but don't crash if it fails
+    try {
+      await supabase
+        .from("provider_settings")
+        .update(updateData)
+        .eq("provider_name", "datahubgh");
+    } catch (dbUpdateErr: any) {
+      console.error("❌ [Health Engine] Failed to update provider_settings table:", dbUpdateErr.message);
+    }
+
+    const cachedBalance = currentSettings?.wallet_balance ?? 0;
 
     return { 
       success: true, // We return success: true because we are non-blocking and using a cache
-      balance: report.status === ProviderState.HEALTHY ? report.wallet_balance : (currentSettings?.wallet_balance || 0),
+      balance: report.status === ProviderState.HEALTHY ? report.wallet_balance : cachedBalance,
       status: updateData.status,
       error: report.error
     };

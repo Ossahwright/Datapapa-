@@ -232,20 +232,33 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'sync_wallet': {
-        const { force } = payload;
-        const result = await syncProviderWallet(!!force);
-        
-        // 🛡️ Transform to non-blocking observability response
-        return res.status(200).json({ 
-          success: true, 
-          balance: result.balance,
-          throttled: result.throttled,
-          degraded: result.status !== 'online',
-          provider_status: result.status,
-          wallet_sync_status: result.status === 'online' ? 'available' : 'unavailable',
-          message: result.status === 'online' ? 'Provider balance synchronized' : 'Using cached provider balance',
-          error: result.error
-        });
+        try {
+          const { force } = payload;
+          const result = await syncProviderWallet(!!force);
+          
+          // 🛡️ Transform to non-blocking observability response
+          return res.status(200).json({ 
+            success: true, 
+            balance: result?.balance ?? 0,
+            throttled: result?.throttled ?? false,
+            degraded: result?.status !== 'online',
+            provider_status: result?.status ?? 'degraded',
+            wallet_sync_status: result?.status === 'online' ? 'available' : 'unavailable',
+            message: result?.status === 'online' ? 'Provider balance synchronized' : 'Using cached provider balance',
+            error: result?.error
+          });
+        } catch (innerError: any) {
+          console.warn("⚠️ [Admin Ops] Suppressed sync_wallet crash, returning degraded state:", innerError.message);
+          return res.status(200).json({
+            success: true,
+            degraded: true,
+            provider_status: "degraded",
+            wallet_sync_status: "unavailable",
+            balance: 0,
+            message: "Provider wallet sync unavailable - graceful degradation active.",
+            error: innerError.message
+          });
+        }
       }
 
       default:
