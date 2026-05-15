@@ -25,12 +25,39 @@ export function ReportsView() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const txRes = await supabase.from("transactions").select("*").order("created_at", { ascending: false });
-      const logsRes = await supabase.from("datahub_logs").select("*").order("created_at", { ascending: false }).limit(2000);
+      let allTxs: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      while (true) {
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+        if (error) throw error;
+        if (data) allTxs = allTxs.concat(data);
+        if (!data || data.length < pageSize) break;
+        page++;
+      }
 
-      if (txRes.error) throw txRes.error;
-      setData(txRes.data || []);
-      setLogs(logsRes.data || []);
+      let allLogs: any[] = [];
+      let logPage = 0;
+      while (logPage < 50) { // Limit to 50k logs max for client-side
+        const { data: logsData, error: logsError } = await supabase
+          .from("datahub_logs")
+          .select("endpoint, status")
+          .order("created_at", { ascending: false })
+          .range(logPage * pageSize, (logPage + 1) * pageSize - 1);
+        
+        if (logsError) throw logsError;
+        if (logsData) allLogs = allLogs.concat(logsData);
+        if (!logsData || logsData.length < pageSize) break;
+        logPage++;
+      }
+
+      setData(allTxs);
+      setLogs(allLogs);
     } catch (err) {
       console.error("❌ Failed to fetch report data:", err);
     } finally {
@@ -40,6 +67,27 @@ export function ReportsView() {
 
   useEffect(() => {
     fetchData();
+
+    // Set up realtime subscriptions
+    const transactionsChannel = supabase
+      .channel('reports-tx-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    const logsChannel = supabase
+      .channel('reports-logs-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'datahub_logs' }, () => {
+        // Debounce or directly fetch, let's just fetchData for now.
+        fetchData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(transactionsChannel);
+      supabase.removeChannel(logsChannel);
+    };
   }, []);
 
   // Derived Intelligence
@@ -72,14 +120,17 @@ export function ReportsView() {
 
     data.forEach(tx => {
       const amount = Number(tx.amount || 0);
-      const isSuccess = tx.status === 'success' || tx.status === 'completed';
-      const isFailed = tx.status === 'failed';
-      const isPending = tx.status === 'pending';
+      const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.payment_status === 'success';
+      const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'success' || tx.delivery_status === 'delivered';
+      
+      const isSuccess = isPaid || isDelivered; // Consider it a successful transaction order if it was paid or delivered.
+      const isFailed = tx.status === 'failed' || tx.payment_status === 'failed' || tx.vtu_status === 'failed' || tx.delivery_status === 'failed';
+      const isPending = tx.status === 'pending' || tx.status === 'initialized' || tx.status === 'fulfillment_processing';
 
       if (isSuccess) {
         kpi.totalRevenue += amount;
-        kpi.successCount++;
-        deliveryStatus[0].value++;
+        kpi.successCount += isDelivered ? 1 : 0; // Success delivery count separately.
+        deliveryStatus[0].value += isDelivered ? 1 : 0;
         
         // Revenue trend
         const day = format(new Date(tx.created_at), "MMM dd");
@@ -87,21 +138,25 @@ export function ReportsView() {
           revenueByDay[day] += amount;
         }
 
-        // Capacity tracking
-        const capStr = (tx.capacity || tx.volume || "").toLowerCase();
-        if (capStr.includes("gb")) {
-          kpi.totalDataSold += parseFloat(capStr);
-        } else if (capStr.includes("mb")) {
-          kpi.totalDataSold += parseFloat(capStr) / 1024;
-        }
+        if (isDelivered) {
+          // Capacity tracking
+          const capStr = (tx.capacity || tx.volume || "").toLowerCase();
+          if (capStr.includes("gb")) {
+            kpi.totalDataSold += parseFloat(capStr);
+          } else if (capStr.includes("mb")) {
+            kpi.totalDataSold += parseFloat(capStr) / 1024;
+          }
 
-        // Bundle popularity
-        const bundleName = `${tx.network} ${tx.capacity || tx.volume}`;
-        bundlePopularity[bundleName] = (bundlePopularity[bundleName] || 0) + 1;
-      } else if (isFailed) {
+          // Bundle popularity
+          const bundleName = `${tx.network} ${tx.capacity || tx.volume}`;
+          bundlePopularity[bundleName] = (bundlePopularity[bundleName] || 0) + 1;
+        }
+      } 
+      
+      if (isFailed && !isDelivered) {
         kpi.failedCount++;
         deliveryStatus[2].value++;
-      } else if (isPending) {
+      } else if (isPending && !isDelivered && !isFailed) {
         kpi.pendingCount++;
         deliveryStatus[1].value++;
       }
@@ -113,7 +168,10 @@ export function ReportsView() {
       networkDistribution[net] = (networkDistribution[net] || 0) + 1;
     });
 
-    kpi.avgOrderValue = kpi.successCount > 0 ? kpi.totalRevenue / kpi.successCount : 0;
+    // We compute paid transaction count for average order value
+    const paidTxsCount = data.filter(tx => tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.payment_status === 'success' || tx.vtu_status === 'delivered' || tx.vtu_status === 'success' || tx.delivery_status === 'delivered').length;
+    
+    kpi.avgOrderValue = paidTxsCount > 0 ? kpi.totalRevenue / paidTxsCount : 0;
 
     return {
       kpi,
