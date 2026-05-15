@@ -198,14 +198,36 @@ export async function syncWalletSilently() {
 
     // 🌐 Call DataHubGH API
     const startTime = Date.now();
-    const endpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
+    let endpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
     
-    const response = await fetch(endpoint, {
+    let response = await fetch(endpoint, {
       method: "GET",
       headers: {
         "X-API-Key": apiKey,
       },
     });
+
+    if (response.status === 404) {
+      console.warn("⚠️ [Silent Sync] User endpoint 404. Trying /balance fallback...");
+      endpoint = `${baseUrl.replace(/\/+$/, "")}/balance`;
+      response = await fetch(endpoint, {
+        method: "GET",
+        headers: {
+          "X-API-Key": apiKey,
+        },
+      });
+    }
+
+    if (response.status === 404 && baseUrl.includes("/external")) {
+      console.warn("⚠️ [Silent Sync] /balance also 404. Trying root /balance fallback...");
+      endpoint = `${baseUrl.replace("/external", "").replace(/\/+$/, "")}/balance`;
+      response = await fetch(endpoint, {
+        method: "GET",
+        headers: {
+          "X-API-Key": apiKey,
+        },
+      });
+    }
 
     const duration = Date.now() - startTime;
     let result: any = null;

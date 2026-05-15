@@ -11,7 +11,8 @@ import {
   Calendar,
   ShieldAlert,
   ChevronDown,
-  Printer
+  Printer,
+  Download
 } from "lucide-react";
 import { SummaryCards } from "./SummaryCards";
 import { AnalyticsCharts } from "./AnalyticsCharts";
@@ -153,6 +154,14 @@ export function ReportsView() {
     setShowPdfPreview(true);
   };
 
+  // Expose globally for sub-components
+  useEffect(() => {
+    (window as any).triggerPdfExport = handlePdfPreview;
+    return () => {
+      delete (window as any).triggerPdfExport;
+    };
+  }, []);
+
 
   // Derived Intelligence
   const intelligence = useMemo(() => {
@@ -290,11 +299,11 @@ export function ReportsView() {
         <div className="flex items-center gap-3 relative">
           <button
             onClick={handlePdfPreview}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 border border-indigo-700 shadow-sm shadow-indigo-600/30 hover:bg-indigo-700 transition-colors"
-            title="Export Intelligence PDF"
+            className="px-6 py-2.5 bg-slate-900 text-white rounded-2xl font-bold flex items-center gap-2 border border-slate-800 shadow-xl shadow-slate-900/20 hover:bg-black transition-all transform hover:-translate-y-0.5"
+            title="Generate Intelligence Audit PDF"
           >
-            <Printer size={18} />
-            <span className="text-sm">Export PDF</span>
+            <Download size={18} className="text-emerald-400" />
+            <span className="text-sm">Download Report</span>
           </button>
 
           <div className="relative">

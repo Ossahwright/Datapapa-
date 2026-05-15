@@ -118,8 +118,15 @@ export const TransactionIntelligence = ({
               onClick={exportToCSV}
               className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition-colors"
             >
-              <Download size={18} />
-              Export CSV
+              <FileSpreadsheet size={18} className="text-emerald-600" />
+              CSV
+            </button>
+            <button 
+              onClick={() => (window as any).triggerPdfExport?.()}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-semibold transition-colors shadow-lg shadow-slate-900/20"
+            >
+              <FileText size={18} className="text-indigo-400" />
+              Intelligence PDF
             </button>
             <button 
               onClick={onRefresh}

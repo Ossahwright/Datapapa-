@@ -231,15 +231,48 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'sync_wallet': {
-        const result = await callDataHubAPI("user", { method: 'GET' });
+        // 🛡️ Try common endpoints for balance sync
+        let result = await callDataHubAPI("user", { method: 'GET' });
+        
+        if (!result.success || result.error?.includes("404")) {
+          console.log("⚠️ [Sync Wallet] /user endpoint failed. Trying /balance...");
+          result = await callDataHubAPI("balance", { method: 'GET' });
+        }
+
+        // 🛡️ Final attempt: root balance endpoint (some versions use this)
+        if (!result.success || result.error?.includes("404")) {
+           const { baseUrl } = await getDataHubConfig();
+           if (baseUrl.includes("/external")) {
+              const rootBase = baseUrl.replace("/external", "");
+              console.log("⚠️ [Sync Wallet] Typical endpoints failed. Trying root balance endpoint:", `${rootBase}/balance`);
+              
+              // We'll call fetch directly to avoid the /external base logic in callDataHubAPI
+              const { apiKey } = await getDataHubConfig();
+              try {
+                const rootRes = await fetch(`${rootBase.replace(/\/+$/, "")}/balance`, {
+                  method: 'GET',
+                  headers: { "X-API-Key": apiKey }
+                });
+                if (rootRes.ok) {
+                   const rootData = await rootRes.json();
+                   result = { success: true, data: rootData };
+                }
+              } catch (e) {}
+           }
+        }
+
         if (!result.success) throw new Error(result.error);
+        
         const data = result.data;
-        const balance = data?.wallet_balance ?? data?.balance ?? data?.user?.wallet_balance ?? data?.user?.balance ?? 0;
+        const walletData = data?.data || data;
+        const balance = walletData?.wallet_balance ?? walletData?.balance ?? walletData?.user?.wallet_balance ?? walletData?.user?.balance ?? 0;
+        
         await supabase.from("provider_settings").update({
           wallet_balance: balance,
           last_synced_at: new Date().toISOString(),
           status: "online",
         }).eq("provider_name", "datahubgh");
+        
         return res.status(200).json({ success: true, balance });
       }
 
