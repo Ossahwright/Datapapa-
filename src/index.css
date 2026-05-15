@@ -54,3 +54,21 @@
 .wallet-topup-success-message {
   @apply text-green-700 text-sm font-medium;
 }
+
+@media print {
+  /* Hide practically everything except the print layout */
+  body * {
+    visibility: hidden;
+  }
+  #print-report-layout, #print-report-layout * {
+    visibility: visible;
+  }
+  #print-report-layout {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+}

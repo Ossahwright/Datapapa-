@@ -9,21 +9,49 @@ import {
   AlertCircle,
   FileText,
   Calendar,
-  ShieldAlert
+  ShieldAlert,
+  ChevronDown,
+  Printer
 } from "lucide-react";
 import { SummaryCards } from "./SummaryCards";
 import { AnalyticsCharts } from "./AnalyticsCharts";
 import { TransactionIntelligence } from "./TransactionIntelligence";
 import { supabase } from "../../lib/supabase";
 import { format, subDays, startOfDay, endOfDay, isWithinInterval } from "date-fns";
+import { PdfPreviewModal } from "./PdfPreviewModal";
+
+type DateFilterType = "today" | "yesterday" | "7d" | "30d" | "all";
 
 export function ReportsView() {
   const [data, setData] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [dateFilter, setDateFilter] = useState<DateFilterType>("30d");
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
+
+  const getDateRange = () => {
+    const now = new Date();
+    switch (dateFilter) {
+      case "today":
+        return { start: startOfDay(now), end: endOfDay(now), label: "Today" };
+      case "yesterday":
+        return { start: startOfDay(subDays(now, 1)), end: endOfDay(subDays(now, 1)), label: "Yesterday" };
+      case "7d":
+        return { start: startOfDay(subDays(now, 7)), end: endOfDay(now), label: "Last 7 Days" };
+      case "30d":
+        return { start: startOfDay(subDays(now, 30)), end: endOfDay(now), label: "Last 30 Days" };
+      case "all":
+      default:
+        return { start: new Date(2020, 0, 1), end: endOfDay(now), label: "All Time" };
+    }
+  };
+
+  const { start: startDate, end: endDate, label: dateRangeLabel } = getDateRange();
 
   const fetchData = async () => {
     setIsLoading(true);
+    console.log("=== REPORT FILTER APPLIED ===", { start: startDate, end: endDate });
     try {
       let allTxs: any[] = [];
       let page = 0;
@@ -32,6 +60,8 @@ export function ReportsView() {
         const { data, error } = await supabase
           .from("transactions")
           .select("*")
+          .gte("created_at", startDate.toISOString())
+          .lte("created_at", endDate.toISOString())
           .order("created_at", { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1);
         
@@ -43,10 +73,12 @@ export function ReportsView() {
 
       let allLogs: any[] = [];
       let logPage = 0;
-      while (logPage < 50) { // Limit to 50k logs max for client-side
+      while (logPage < 50) { 
         const { data: logsData, error: logsError } = await supabase
           .from("datahub_logs")
-          .select("endpoint, status")
+          .select("endpoint, status, created_at")
+          .gte("created_at", startDate.toISOString())
+          .lte("created_at", endDate.toISOString())
           .order("created_at", { ascending: false })
           .range(logPage * pageSize, (logPage + 1) * pageSize - 1);
         
@@ -56,6 +88,7 @@ export function ReportsView() {
         logPage++;
       }
 
+      console.log("=== REPORT DATASET SIZE ===", { transactions: allTxs.length, logs: allLogs.length });
       setData(allTxs);
       setLogs(allLogs);
     } catch (err) {
@@ -72,32 +105,39 @@ export function ReportsView() {
     const transactionsChannel = supabase
       .channel('reports-tx-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
-        setData((currentData) => {
-          if (payload.eventType === 'INSERT') {
-            return [payload.new, ...currentData];
-          } else if (payload.eventType === 'UPDATE') {
-            return currentData.map(tx => tx.id === payload.new.id ? { ...tx, ...payload.new } : tx);
-          } else if (payload.eventType === 'DELETE') {
-            return currentData.filter(tx => tx.id !== payload.old.id);
-          }
-          return currentData;
-        });
+        // Only accept if within current date range
+        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
+        if (createdDate >= startDate && createdDate <= endDate) {
+          setData((currentData) => {
+            if (payload.eventType === 'INSERT') {
+              return [payload.new, ...currentData];
+            } else if (payload.eventType === 'UPDATE') {
+              return currentData.map(tx => tx.id === payload.new.id ? { ...tx, ...payload.new } : tx);
+            } else if (payload.eventType === 'DELETE') {
+              return currentData.filter(tx => tx.id !== payload.old.id);
+            }
+            return currentData;
+          });
+        }
       })
       .subscribe();
 
     const logsChannel = supabase
       .channel('reports-logs-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'datahub_logs' }, (payload) => {
-        setLogs((currentLogs) => {
-          if (payload.eventType === 'INSERT') {
-            return [payload.new, ...currentLogs];
-          } else if (payload.eventType === 'UPDATE') {
-            return currentLogs.map(log => log.id === payload.new.id ? { ...log, ...payload.new } : log);
-          } else if (payload.eventType === 'DELETE') {
-            return currentLogs.filter(log => log.id !== payload.old.id);
-          }
-          return currentLogs;
-        });
+        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
+        if (createdDate >= startDate && createdDate <= endDate) {
+          setLogs((currentLogs) => {
+            if (payload.eventType === 'INSERT') {
+              return [payload.new, ...currentLogs];
+            } else if (payload.eventType === 'UPDATE') {
+              return currentLogs.map(log => log.id === payload.new.id ? { ...log, ...payload.new } : log);
+            } else if (payload.eventType === 'DELETE') {
+              return currentLogs.filter(log => log.id !== payload.old.id);
+            }
+            return currentLogs;
+          });
+        }
       })
       .subscribe();
 
@@ -105,7 +145,14 @@ export function ReportsView() {
       supabase.removeChannel(transactionsChannel);
       supabase.removeChannel(logsChannel);
     };
-  }, []);
+  }, [dateFilter]); // Re-run when date filter changes
+
+  const handlePdfPreview = () => {
+    console.log("=== PDF GENERATION START ===");
+    console.log("=== PDF PREVIEW OPENED ===");
+    setShowPdfPreview(true);
+  };
+
 
   // Derived Intelligence
   const intelligence = useMemo(() => {
@@ -240,14 +287,55 @@ export function ReportsView() {
           <p className="text-slate-500 font-medium">Datapapa operational intelligence and financial auditing</p>
         </div>
         
-        <div className="flex items-center gap-3">
-          <div className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-2xl flex items-center gap-2 border border-indigo-100 shadow-sm shadow-indigo-100/50">
-            <Calendar size={18} />
-            <span className="text-sm font-bold">Last 30 Days</span>
+        <div className="flex items-center gap-3 relative">
+          <button
+            onClick={handlePdfPreview}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-2xl font-bold flex items-center gap-2 border border-indigo-700 shadow-sm shadow-indigo-600/30 hover:bg-indigo-700 transition-colors"
+            title="Export Intelligence PDF"
+          >
+            <Printer size={18} />
+            <span className="text-sm">Export PDF</span>
+          </button>
+
+          <div className="relative">
+            <button 
+              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              className="px-4 py-2 bg-white text-slate-700 rounded-2xl flex items-center gap-2 border border-slate-200 shadow-sm hover:bg-slate-50 transition-colors"
+            >
+              <Calendar size={18} className="text-slate-500" />
+              <span className="text-sm font-bold min-w-[90px] text-left">{dateRangeLabel}</span>
+              <ChevronDown size={16} className={`text-slate-400 transition-transform ${showFilterDropdown ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showFilterDropdown && (
+              <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden">
+                <div className="py-2 flex flex-col">
+                  {[
+                    { id: 'today', label: 'Today' },
+                    { id: 'yesterday', label: 'Yesterday' },
+                    { id: '7d', label: 'Last 7 Days' },
+                    { id: '30d', label: 'Last 30 Days' },
+                    { id: 'all', label: 'All Time' }
+                  ].map(filter => (
+                    <button
+                      key={filter.id}
+                      onClick={() => {
+                        setDateFilter(filter.id as DateFilterType);
+                        setShowFilterDropdown(false);
+                      }}
+                      className={`px-4 py-2 text-sm text-left font-medium transition-colors hover:bg-slate-50 ${dateFilter === filter.id ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600'}`}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+          
           <button 
             onClick={fetchData}
-            className="p-3 bg-white border border-slate-200 text-slate-600 rounded-2xl hover:bg-slate-50 transition-all shadow-sm"
+            className="p-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl hover:bg-slate-50 transition-all shadow-sm"
             title="Refresh Intelligence"
           >
             <RefreshCw size={20} className={isLoading ? "animate-spin" : ""} />
@@ -390,6 +478,15 @@ export function ReportsView() {
           </div>
         </div>
       </div>
+
+      <PdfPreviewModal
+        isOpen={showPdfPreview}
+        onClose={() => setShowPdfPreview(false)}
+        data={data}
+        kpi={intelligence.kpi}
+        dateRangeLabel={dateRangeLabel}
+        generatedBy="Admin"
+      />
     </div>
   );
 }
