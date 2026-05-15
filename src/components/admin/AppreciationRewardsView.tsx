@@ -22,6 +22,7 @@ export const AppreciationRewardsView = () => {
   // Selection/Generation state
   const [isSelecting, setIsSelecting] = useState(false);
   const [numWinners, setNumWinners] = useState(5);
+  const [cooldownDays, setCooldownDays] = useState(30);
   
   // Processing state
   const [isApproving, setIsApproving] = useState<string | null>(null);
@@ -65,6 +66,7 @@ export const AppreciationRewardsView = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'appreciation_rewards' }, () => {
         fetchPendingRewards();
         fetchWinnersHistory();
+        fetchEligibleCustomers();
       })
       .subscribe();
 
@@ -72,7 +74,7 @@ export const AppreciationRewardsView = () => {
       supabase.removeChannel(transactionsChannel);
       supabase.removeChannel(rewardsChannel);
     };
-  }, []);
+  }, [cooldownDays]);
 
   const fetchInitialData = async () => {
     setIsLoading(true);
@@ -125,11 +127,36 @@ export const AppreciationRewardsView = () => {
       });
 
       // STRICT ELIGIBILITY: At least GHS 25 in the last 7 days
-      const eligible = Array.from(customersMap.values()).filter(c => c.weekly_spend >= 25);
+      let eligible = Array.from(customersMap.values()).filter(c => c.weekly_spend >= 25);
       
       // Sort by weekly spend
       eligible.sort((a, b) => b.weekly_spend - a.weekly_spend);
       
+      // Fetch recent winners to mark them down
+      const cooldownDate = new Date();
+      cooldownDate.setDate(cooldownDate.getDate() - parseInt(cooldownDays.toString(), 10));
+
+      const { data: recentWinners } = await supabase
+        .from('appreciation_rewards')
+        .select('customer_phone, created_at')
+        .gte('created_at', cooldownDate.toISOString())
+        .in('status', ['pending_approval', 'sent']);
+
+      if (recentWinners) {
+        const resetMap = new Map<string, string>();
+        for (const w of recentWinners) {
+           // map phone to recent winner date
+           resetMap.set(w.customer_phone, w.created_at);
+        }
+        eligible = eligible.map(c => {
+           return {
+             ...c,
+             in_cooldown: resetMap.has(c.phone),
+             last_rewarded: resetMap.get(c.phone) || null
+           }
+        });
+      }
+
       console.log(`✅ [Appreciation] Formatted ${eligible.length} eligible customers`);
       setEligibleCustomers(eligible);
     } catch (err: any) {
@@ -194,18 +221,13 @@ export const AppreciationRewardsView = () => {
 
       if (cycleErr) throw cycleErr;
 
-      // Ensure we don't pick previous winners from this same cycle
-      const { data: existingWinners } = await supabase
-        .from('appreciation_rewards')
-        .select('customer_phone')
-        .in('status', ['pending_approval', 'sent']);
-
-      const existingWinnerPhones = new Set((existingWinners || []).map(w => w.customer_phone));
-
-      const candidates = eligibleCustomers.filter(c => !existingWinnerPhones.has(c.phone));
+      // Ensure we don't pick previous winners from this same cycle or within the cooldown period
+      const existingWinnerPhones = new Set();
+      // We already marked in_cooldown on eligibleCustomers based on cooldownDays
+      const candidates = eligibleCustomers.filter(c => !c.in_cooldown);
 
       if (candidates.length === 0) {
-        toast("All eligible customers have already been randomly selected.", { icon: "ℹ️" });
+        toast("All eligible customers have already been randomly selected or are in cooldown.", { icon: "ℹ️" });
         setIsSelecting(false);
         return;
       }
@@ -377,6 +399,17 @@ export const AppreciationRewardsView = () => {
                      <option value={5}>5 Winners</option>
                      <option value={10}>10 Winners</option>
                    </select>
+                   <select 
+                     className="bg-indigo-700 text-white border-none rounded-lg text-sm flex-1 outline-none font-bold p-2"
+                     value={cooldownDays}
+                     onChange={e => setCooldownDays(Number(e.target.value))}
+                   >
+                     <option value={7}>7 Days Cooldown</option>
+                     <option value={14}>14 Days Cooldown</option>
+                     <option value={30}>30 Days Cooldown</option>
+                     <option value={60}>60 Days Cooldown</option>
+                     <option value={90}>90 Days Cooldown</option>
+                   </select>
                  </div>
                  <button 
                   onClick={handlePickRandomWinners}
@@ -412,8 +445,15 @@ export const AppreciationRewardsView = () => {
                     </tr>
                   ) : (
                     eligibleCustomers.map((c) => (
-                      <tr key={c.phone} className="hover:bg-slate-50/50">
-                        <td className="px-6 py-4 font-bold text-slate-800">{c.phone}</td>
+                      <tr key={c.phone} className={c.in_cooldown ? "bg-slate-50 opacity-60" : "hover:bg-slate-50/50"}>
+                        <td className="px-6 py-4 font-bold text-slate-800">
+                          {c.phone}
+                          {c.in_cooldown && (
+                            <span className="block text-[10px] text-amber-600 font-medium">
+                              Won {new Date(c.last_rewarded).toLocaleDateString()}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-6 py-4">
                           <span className="inline-flex uppercase tracking-wider text-[10px] font-bold px-2 py-1 rounded bg-slate-100 text-slate-600">
                             {c.network}
@@ -423,9 +463,15 @@ export const AppreciationRewardsView = () => {
                         <td className="px-6 py-4">{c.transaction_count}</td>
                         <td className="px-6 py-4 text-slate-500">{new Date(c.last_purchase).toLocaleString()}</td>
                         <td className="px-6 py-4 text-center">
-                          <span className="inline-flex items-center gap-1 text-emerald-500 bg-emerald-50 px-2 py-1 rounded-full text-[10px] font-bold uppercase">
-                            <CheckCircle2 size={12} /> Eligible
-                          </span>
+                          {c.in_cooldown ? (
+                            <span className="inline-flex items-center gap-1 text-amber-500 bg-amber-50 px-2 py-1 rounded-full text-[10px] font-bold uppercase">
+                              Cooldown
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-emerald-500 bg-emerald-50 px-2 py-1 rounded-full text-[10px] font-bold uppercase">
+                              <CheckCircle2 size={12} /> Eligible
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))
