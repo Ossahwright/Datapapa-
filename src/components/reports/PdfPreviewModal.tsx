@@ -11,15 +11,37 @@ interface PdfPreviewModalProps {
   kpi: any;
   dateRangeLabel: string;
   generatedBy: string;
+  networkStats?: any[];
+  deliveryStats?: any[];
 }
 
-export const PdfPreviewModal = ({ isOpen, onClose, data, kpi, dateRangeLabel, generatedBy }: PdfPreviewModalProps) => {
+export const PdfPreviewModal = ({ 
+  isOpen, 
+  onClose, 
+  data, 
+  kpi, 
+  dateRangeLabel, 
+  generatedBy,
+  networkStats = [],
+  deliveryStats = []
+}: PdfPreviewModalProps) => {
   if (!isOpen) return null;
 
   const handlePrint = () => {
     console.log("=== REPORT PRINT STARTED ===");
     window.print();
   };
+
+  const pdfDoc = (
+    <ReportPDFTemplate 
+      data={data} 
+      kpi={kpi} 
+      dateRangeLabel={dateRangeLabel} 
+      generatedBy={generatedBy}
+      networkStats={networkStats}
+      deliveryStats={deliveryStats}
+    />
+  );
 
   return (
     <>
@@ -47,7 +69,7 @@ export const PdfPreviewModal = ({ isOpen, onClose, data, kpi, dateRangeLabel, ge
               </button>
 
               <PDFDownloadLink
-                document={<ReportPDFTemplate data={data} kpi={kpi} dateRangeLabel={dateRangeLabel} generatedBy={generatedBy} />}
+                document={pdfDoc}
                 fileName={`Datapapa_Report_${dateRangeLabel.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 transition-colors flex items-center gap-2"
               >
@@ -69,7 +91,7 @@ export const PdfPreviewModal = ({ isOpen, onClose, data, kpi, dateRangeLabel, ge
           {/* PDF Viewer Body */}
           <div className="flex-1 bg-slate-100 p-4">
             <PDFViewer width="100%" height="100%" className="rounded-xl border border-slate-200 shadow-sm">
-              <ReportPDFTemplate data={data} kpi={kpi} dateRangeLabel={dateRangeLabel} generatedBy={generatedBy} />
+              {pdfDoc}
             </PDFViewer>
           </div>
 
@@ -77,7 +99,12 @@ export const PdfPreviewModal = ({ isOpen, onClose, data, kpi, dateRangeLabel, ge
       </div>
       
       {/* Hidden layout only visible during window.print() */}
-      <PrintReportLayout data={data} kpi={kpi} dateRangeLabel={dateRangeLabel} generatedBy={generatedBy} />
+      <PrintReportLayout 
+        data={data} 
+        kpi={kpi} 
+        dateRangeLabel={dateRangeLabel} 
+        generatedBy={generatedBy}
+      />
     </>
   );
 };

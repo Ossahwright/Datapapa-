@@ -173,15 +173,18 @@ export function ReportsView() {
       pendingCount: 0,
       totalDataSold: 0,
       avgOrderValue: 0,
-      retryCount: 0
+      retryCount: 0,
+      mtnTransactions: 0,
+      airtelTigoTransactions: 0,
+      telecelTransactions: 0
     };
 
     const revenueByDay: Record<string, number> = {};
-    const networkDistribution: Record<string, number> = {};
+    const networkDistribution: Record<string, { count: number; revenue: number }> = {};
     const bundlePopularity: Record<string, number> = {};
     const deliveryStatus = [
-      { name: "Success", value: 0 },
-      { name: "Pending", value: 0 },
+      { name: "Delivered", value: 0 },
+      { name: "Processing", value: 0 },
       { name: "Failed", value: 0 }
     ];
 
@@ -193,6 +196,8 @@ export function ReportsView() {
 
     data.forEach(tx => {
       const amount = Number(tx.amount || 0);
+      const net = String(tx.network || "UNKNOWN").toUpperCase();
+      
       const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'payment_success' || tx.payment_status === 'success';
       const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'fulfilled' || tx.vtu_status === 'success' || tx.status === 'fulfilled' || tx.status === 'delivered' || tx.delivery_status === 'delivered';
       
@@ -200,11 +205,21 @@ export function ReportsView() {
       const isFailed = tx.status === 'failed' || tx.payment_status === 'failed' || tx.vtu_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.delivery_status === 'failed';
       const isPending = tx.status === 'pending' || tx.status === 'initialized' || tx.status === 'payment_pending' || tx.vtu_status === 'pending' || tx.vtu_status === 'processing' || tx.vtu_status === 'provider_accepted' || tx.status === 'fulfillment_processing';
 
+      // Network Counters
+      if (net.includes("MTN")) kpi.mtnTransactions++;
+      else if (net.includes("AIRTEL") || net.includes("TIGO")) kpi.airtelTigoTransactions++;
+      else if (net.includes("TELECEL") || net.includes("VODAFONE")) kpi.telecelTransactions++;
+
+      if (!networkDistribution[net]) networkDistribution[net] = { count: 0, revenue: 0 };
+      networkDistribution[net].count++;
+
       if (isSuccess) {
         kpi.totalRevenue += amount;
-        kpi.successCount += isDelivered ? 1 : 0; // Success delivery count separately.
+        kpi.successCount += isDelivered ? 1 : 0; 
         deliveryStatus[0].value += isDelivered ? 1 : 0;
         
+        networkDistribution[net].revenue += amount;
+
         // Revenue trend
         const day = format(new Date(tx.created_at), "MMM dd");
         if (revenueByDay[day] !== undefined) {
@@ -235,13 +250,8 @@ export function ReportsView() {
       }
 
       kpi.retryCount += (tx.retry_count || 0);
-
-      // Network Distribution
-      const net = tx.network || "UNKNOWN";
-      networkDistribution[net] = (networkDistribution[net] || 0) + 1;
     });
 
-    // We compute paid transaction count for average order value
     const paidTxsCount = data.filter(tx => {
       const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'payment_success' || tx.payment_status === 'success';
       const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'fulfilled' || tx.vtu_status === 'success' || tx.status === 'fulfilled' || tx.status === 'delivered' || tx.delivery_status === 'delivered';
@@ -253,7 +263,7 @@ export function ReportsView() {
     return {
       kpi,
       revenueTrend: Object.entries(revenueByDay).map(([date, amount]) => ({ date, amount })),
-      networkStats: Object.entries(networkDistribution).map(([name, count]) => ({ name, count })).sort((a,b) => b.count - a.count),
+      networkStats: Object.entries(networkDistribution).map(([name, stats]) => ({ name, ...stats })).sort((a,b) => b.count - a.count),
       bundleStats: Object.entries(bundlePopularity).map(([name, sales]) => ({ name, sales })).sort((a,b) => b.sales - a.sales).slice(0, 10),
       deliveryStatus
     };
@@ -495,6 +505,8 @@ export function ReportsView() {
         kpi={intelligence.kpi}
         dateRangeLabel={dateRangeLabel}
         generatedBy="Admin"
+        networkStats={intelligence.networkStats}
+        deliveryStats={intelligence.deliveryStatus}
       />
     </div>
   );
