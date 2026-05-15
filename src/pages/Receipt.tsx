@@ -160,15 +160,17 @@ export default function Receipt() {
         message: 'Bundle Delivered!',
         subMessage: 'Your transaction was successful and the data bundle has been credited to the recipient.',
         color: 'emerald',
-        icon: <div className="relative flex items-center justify-center w-12 h-12">
-                <motion.div 
-                  initial={{ scale: 0 }}
-                  animate={{ scale: [1, 2, 1], opacity: [0.3, 0, 0] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-                  className="absolute inset-0 bg-emerald-400 rounded-full"
-                />
-                <CheckCircle2 className="w-full h-full text-emerald-500 relative z-10" />
-              </div>
+        icon: (
+          <div className="relative flex items-center justify-center">
+            <motion.div 
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: [1, 2], opacity: [0.4, 0] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+              className="absolute w-10 h-10 bg-emerald-200 rounded-full"
+            />
+            <CheckCircle2 className="w-10 h-10 text-emerald-500 relative z-10" />
+          </div>
+        )
       };
     }
 
@@ -179,7 +181,7 @@ export default function Receipt() {
         message: 'Payment Received',
         subMessage: 'We received your payment but delivery failed. Our automated system is retrying or alerting an agent.',
         color: 'rose',
-        icon: <XCircle className="w-12 h-12 text-rose-500" />
+        icon: <XCircle className="w-10 h-10 text-rose-500" />
       };
     }
 
@@ -190,14 +192,16 @@ export default function Receipt() {
         message: 'Order Processing',
         subMessage: 'Successful payment! We are now sending the data to the recipient. This usually takes 10-30 seconds.',
         color: 'indigo',
-        icon: <div className="relative flex items-center justify-center w-12 h-12">
-                <motion.div 
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
-                  className="absolute inset-[-6px] border-2 border-dashed border-indigo-200 rounded-full"
-                />
-                <CheckCircle2 className="w-full h-full text-indigo-500 relative z-10" />
-              </div>
+        icon: (
+          <div className="relative flex items-center justify-center">
+            <motion.div 
+              animate={{ rotate: 360 }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+              className="absolute w-12 h-12 border-2 border-dashed border-indigo-200 rounded-full"
+            />
+            <CheckCircle2 className="w-10 h-10 text-indigo-500 relative z-10" />
+          </div>
+        )
       };
     }
 
