@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { 
   Zap, 
   ShieldCheck, 
@@ -244,12 +243,6 @@ export default function Home({ settings }: HomeProps) {
           </div>
 
           <div className="flex items-center gap-6">
-             <Link 
-              to="/admin/auth" 
-              className="text-slate-700 hover:text-slate-500 text-[10px] uppercase tracking-widest font-bold transition-all duration-300"
-            >
-              Admin Access
-            </Link>
           </div>
         </div>
       </footer>

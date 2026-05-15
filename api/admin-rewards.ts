@@ -53,14 +53,28 @@ export default async function handler(req: Request, res: Response) {
       const network = reward.network.toLowerCase();
       
       // Look up appropriate 1GB bundle
-      const { data: bundles, error: bundleErr } = await supabaseAdmin
+      let bundles: any[] = [];
+      const { data: initialBundles, error: bundleErr } = await supabaseAdmin
         .from('bundles')
         .select('*')
-        .eq('network_key', network)
+        .ilike('network_key', network)
         .eq('is_active', true);
         
+      if (initialBundles) bundles = initialBundles;
+        
       if (bundleErr || !bundles || bundles.length === 0) {
-        return res.status(400).json({ error: 'No active bundles found for ' + network });
+        // Try fallback to network column
+        const { data: altBundles, error: altErr } = await supabaseAdmin
+          .from('bundles')
+          .select('*')
+          .ilike('network', `%${network}%`)
+          .eq('is_active', true);
+          
+        if (altErr || !altBundles || altBundles.length === 0) {
+           return res.status(400).json({ error: `No active bundles found for ${network} (${reward.network})` });
+        }
+        
+        bundles = altBundles;
       }
       
       // Find 1GB
@@ -83,7 +97,7 @@ export default async function handler(req: Request, res: Response) {
         .from('transactions')
         .insert({
           amount: 0,
-          network: targetBundle.network_key.toUpperCase(),
+          network: targetBundle.network,
           network_key: targetBundle.network_key,
           capacity: targetBundle.capacity,
           recipient_phone: phoneNumber,
@@ -92,7 +106,12 @@ export default async function handler(req: Request, res: Response) {
           payment_status: 'success',
           delivery_status: 'pending',
           external_reference: `REWARD-${rewardId}`,
-          api_status: 'initiated'
+          api_status: 'initiated',
+          display_bundle: targetBundle.capacity,
+          internal_bundle_id: targetBundle.id,
+          provider_network_key: targetBundle.datahub_network_key || targetBundle.network_key,
+          provider_capacity: targetBundle.datahub_capacity || targetBundle.volume || targetBundle.capacity,
+          profit: 0
         })
         .select()
         .single();
@@ -156,6 +175,18 @@ export default async function handler(req: Request, res: Response) {
          }).eq('id', rewardId);
          throw err;
       }
+    }
+
+    if (action === 'delete_reward') {
+      if (!rewardId) return res.status(400).json({ error: 'Missing rewardId' });
+      await supabaseAdmin.from('appreciation_rewards').delete().eq('id', rewardId);
+      return res.json({ success: true, message: 'Reward deleted manually.' });
+    }
+
+    if (action === 'reset_reward') {
+      if (!rewardId) return res.status(400).json({ error: 'Missing rewardId' });
+      await supabaseAdmin.from('appreciation_rewards').update({ status: 'pending_approval' }).eq('id', rewardId);
+      return res.json({ success: true, message: 'Reward reset to pending.' });
     }
 
     res.status(400).json({ error: 'Unknown action' });

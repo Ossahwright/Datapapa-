@@ -25,6 +25,29 @@ export const AppreciationRewardsView = () => {
   
   // Processing state
   const [isApproving, setIsApproving] = useState<string | null>(null);
+  const [selectedReward, setSelectedReward] = useState<any>(null);
+
+  const handleAction = async (actionLabel: 'delete_reward' | 'reset_reward', rewardId: string) => {
+    if (!confirm(`Are you sure you want to ${actionLabel.split('_')[0]} this reward?`)) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      
+      const res = await axios.post('/api/admin-rewards', {
+        action: actionLabel,
+        rewardId
+      }, { headers });
+
+      if (res.data.success) {
+        toast.success(res.data.message);
+        await Promise.all([fetchPendingRewards(), fetchWinnersHistory()]);
+      } else {
+        throw new Error(res.data.error || "Unknown error");
+      }
+    } catch (e: any) {
+      toast.error(`Failed to ${actionLabel.split('_')[0]}: ` + (e.response?.data?.error || e.message));
+    }
+  };
 
   useEffect(() => {
     fetchInitialData();
@@ -454,13 +477,33 @@ export const AppreciationRewardsView = () => {
                         <td className="px-6 py-4 font-bold text-emerald-600">{r.reward_value}</td>
                         <td className="px-6 py-4 text-slate-500">{new Date(r.created_at).toLocaleString()}</td>
                         <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={() => handleApproveReward(r.id, r.customer_phone, r.network)}
-                            disabled={isApproving !== null}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 inline-flex"
-                          >
-                             {isApproving === r.id ? <Loader2 size={14} className="animate-spin" /> : <Gift size={14} />} Approve & Send
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                                onClick={() => setSelectedReward(r)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-3 py-2 rounded-xl text-xs inline-flex"
+                              >
+                                 View
+                            </button>
+                            <button
+                                onClick={() => handleAction('reset_reward', r.id)}
+                                className="bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold px-3 py-2 rounded-xl text-xs inline-flex"
+                              >
+                                 Reset
+                            </button>
+                            <button
+                                onClick={() => handleAction('delete_reward', r.id)}
+                                className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-3 py-2 rounded-xl text-xs inline-flex"
+                              >
+                                 Delete
+                            </button>
+                            <button
+                              onClick={() => handleApproveReward(r.id, r.customer_phone, r.network)}
+                              disabled={isApproving !== null}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 inline-flex"
+                            >
+                               {isApproving === r.id ? <Loader2 size={14} className="animate-spin" /> : <Gift size={14} />} Approve & Send
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -523,6 +566,42 @@ export const AppreciationRewardsView = () => {
       )}
         </div>
       </div>
+
+      {selectedReward && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-xl font-bold text-slate-900 mb-4">Reward Details</h3>
+            <div className="space-y-3 mb-6">
+              <div className="flex justify-between border-b pb-2">
+                <span className="text-slate-500 text-sm">Customer Phone</span>
+                <span className="font-bold text-slate-800">{selectedReward.customer_phone}</span>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <span className="text-slate-500 text-sm">Network</span>
+                <span className="font-bold uppercase text-slate-800">{selectedReward.network}</span>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <span className="text-slate-500 text-sm">Reward Value</span>
+                <span className="font-bold text-emerald-600">{selectedReward.reward_value}</span>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <span className="text-slate-500 text-sm">Status</span>
+                <span className="font-bold uppercase text-slate-800">{selectedReward.status}</span>
+              </div>
+              <div className="flex justify-between py-2">
+                <span className="text-slate-500 text-sm">Created At</span>
+                <span className="font-medium text-slate-800 text-sm">{new Date(selectedReward.created_at).toLocaleString()}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setSelectedReward(null)}
+              className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-3 rounded-xl transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
