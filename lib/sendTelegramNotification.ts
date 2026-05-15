@@ -91,6 +91,7 @@ export async function sendTelegramNotification({
     const formattedAmount = `GHS ${Number(amount).toFixed(2)}`;
     
     const recipient = transaction.recipient_phone || transaction.receiver_phone || transaction.phone || 'N/A';
+    const payer = transaction.payer_phone_number || transaction.payer_phone || 'N/A';
     
     const reference = transaction.reference || transaction.provider_reference || transaction.id;
     const network = String(transaction.network || 'Unknown').toUpperCase();
@@ -104,6 +105,7 @@ export async function sendTelegramNotification({
         message += `<b>Bundle:</b> ${bundle}\n`;
     }
     
+    message += `<b>Payer:</b> ${payer}\n`;
     message += `<b>Recipient:</b> ${recipient}\n`;
     message += `<b>Reference:</b> ${reference}\n`;
     

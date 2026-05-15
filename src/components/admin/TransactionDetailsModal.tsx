@@ -52,10 +52,11 @@ export const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = (
     const network = String(transaction.network || "N/A").toUpperCase();
     const bundle = transaction.display_bundle || transaction.capacity || "N/A";
     const recipient = transaction.recipient_phone || "N/A";
+    const payer = transaction.payer_phone_number || transaction.payer_phone || "N/A";
     const refId = transaction.reference || `DP-${transaction.id.slice(0, 8)}`;
     const amount = Number(transaction.amount).toFixed(2);
 
-    return `Hello 👋\n\nYour Datapapa transaction has been successfully delivered.\n\nReference: ${refId}\nNetwork: ${network}\nBundle: ${bundle}\nRecipient: ${recipient}\nAmount: GHS ${amount}\n\nThank you for choosing Datapapa.`;
+    return `Hello 👋\n\nYour Datapapa transaction has been successfully delivered.\n\nReference: ${refId}\nNetwork: ${network}\nBundle: ${bundle}\nPayer: ${payer}\nRecipient: ${recipient}\nAmount: GHS ${amount}\n\nThank you for choosing Datapapa.`;
   };
 
   const trackWhatsAppContact = async (message: string) => {

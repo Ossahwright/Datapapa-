@@ -1332,9 +1332,10 @@ export default function AdminDashboard() {
     const network = String(tx.network || "N/A").toUpperCase();
     const bundle = tx.capacity || tx.bundle_name || tx.volume || "N/A";
     const recipient = tx.recipient_phone || "N/A";
+    const payer = tx.payer_phone_number || tx.payer_phone || "N/A";
     const reference = tx.id || "N/A";
 
-    const message = `Hello 👋\n\nYour ${appSettings.app_name} transaction is being processed successfully.\n\n📶 Network: ${network}\n📦 Bundle: ${bundle}\n📱 Recipient: ${recipient}\n🧾 Reference: ${reference}\n\nThank you for choosing ${appSettings.app_name}.`;
+    const message = `Hello 👋\n\nYour ${appSettings.app_name} transaction is being processed successfully.\n\n📶 Network: ${network}\n📦 Bundle: ${bundle}\n👤 Payer: ${payer}\n📱 Recipient: ${recipient}\n🧾 Reference: ${reference}\n\nThank you for choosing ${appSettings.app_name}.`;
 
     console.log("🛠️ Preparing direct WhatsApp chat for customer:", { recipient, rawPhone, network });
 
