@@ -17,6 +17,7 @@ import { calculateExecutionMetrics } from './metrics.js';
 import { findNetworkConfig } from './networkConfig.js';
 import { BUNDLE_CONFIG } from './bundleConfig.js';
 import { syncProviderWallet, checkProviderHealth } from './provider-health.js';
+import { getDataHubConfig } from './config-utils.js';
 import { sendTelegramNotification } from './sendTelegramNotification.js';
 import { 
   PAYMENT_STATUSES, 
@@ -199,68 +200,7 @@ export function formatPhone(phone: string): string {
   return cleaned;
 }
 
-let cachedConfig: { apiKey: string, baseUrl: string } | null = null;
-let lastConfigFetch = 0;
-
-/**
- * Centralized DataHub Config Helper
- */
-export async function getDataHubConfig() {
-  const now = Date.now();
-  // Cache for 5 minutes
-  if (cachedConfig && (now - lastConfigFetch < 300000)) {
-    return cachedConfig;
-  }
-
-  const defaultUrl = "https://app.datahubgh.com/api/external";
-  const envKey = process.env.DATAHUB_API_KEY;
-  let envUrl = process.env.DATAHUB_BASE_URL;
-
-  // 🛡️ Sanitize: If envUrl is literally "undefined" or empty, use default
-  if (!envUrl || envUrl === "undefined" || envUrl === "null") {
-    envUrl = defaultUrl;
-  }
-
-  const sanitizeUrl = (url: string) => {
-    let clean = url.trim().replace(/\/+$/, "");
-    if (clean.endsWith("/data-purchase")) {
-      clean = clean.replace("/data-purchase", "");
-    }
-    return clean;
-  };
-
-  if (envKey) {
-    cachedConfig = {
-      apiKey: envKey.trim(),
-      baseUrl: sanitizeUrl(envUrl)
-    };
-    lastConfigFetch = now;
-    return cachedConfig;
-  }
-
-  try {
-    const { data: dhData } = await supabase
-      .from('settings')
-      .select('value')
-      .eq('key', 'datahubgh')
-      .maybeSingle();
-    
-    if (dhData?.value?.api_key) {
-      const dbUrl = dhData.value.base_url;
-      const finalUrl = (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl : dbUrl;
-      cachedConfig = {
-        apiKey: dhData.value.api_key.trim(),
-        baseUrl: sanitizeUrl(finalUrl)
-      };
-      lastConfigFetch = now;
-      return cachedConfig;
-    }
-  } catch (err) {
-    console.error("[DataHub Config] Error:", err);
-  }
-
-  return { apiKey: "", baseUrl: sanitizeUrl(envUrl) };
-}
+// getDataHubConfig is now imported from config-utils.ts
 
 export async function logWebhook({
   reference,

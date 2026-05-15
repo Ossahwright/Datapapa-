@@ -2,10 +2,10 @@ import {
   supabase, 
   validateEnv, 
   isAdminAuth, 
-  getDataHubConfig,
   apiClient,
   logDataHubApiCall
 } from '../lib/server-utils.js';
+import { getDataHubConfig } from '../lib/config-utils.js';
 import axios from 'axios';
 import { LOG_MARKERS, PROVIDER_HEALTH } from '../lib/constants.js';
 import { checkProviderHealth, ProviderState } from '../lib/provider-health.js';

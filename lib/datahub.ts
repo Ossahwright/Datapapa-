@@ -7,6 +7,7 @@
 import axios from "axios";
 import { supabase } from "./supabase.js";
 import { logDataHubApiCall } from "./server-utils.js";
+import { getDataHubConfig } from "./config-utils.js";
 
 import { NETWORKS } from "./networkConfig.js";
 
@@ -64,53 +65,7 @@ async function checkApiHealth(baseUrl: string, apiKey: string) {
   }
 }
 
-export async function getDataHubConfig() {
-  const defaultUrl = "https://app.datahubgh.com/api/external";
-  const envKey = process.env.DATAHUB_API_KEY;
-  let envUrl = process.env.DATAHUB_BASE_URL;
-
-  // 🛡️ Sanitize: If envUrl is literally "undefined" or empty, use default
-  if (!envUrl || envUrl === "undefined" || envUrl === "null") {
-    envUrl = defaultUrl;
-  }
-
-  // 🛡️ Forensic Clean: Ensure baseUrl is the ROOT and does not already contain the endpoint path
-  const sanitizeUrl = (url: string) => {
-    let clean = url.trim().replace(/\/+$/, "");
-    if (clean.endsWith("/data-purchase")) {
-      clean = clean.replace("/data-purchase", "");
-    }
-    return clean;
-  };
-
-  if (envKey) {
-    return {
-      apiKey: envKey.trim(),
-      baseUrl: sanitizeUrl(envUrl)
-    };
-  }
-
-  try {
-    const { data: dhData } = await supabase
-      .from('settings')
-      .select('value')
-      .eq('key', 'datahubgh')
-      .maybeSingle();
-    
-    if (dhData?.value?.api_key) {
-      const dbUrl = dhData.value.base_url;
-      const finalUrl = (!dbUrl || dbUrl === "undefined" || dbUrl === "null") ? envUrl : dbUrl;
-      return {
-        apiKey: dhData.value.api_key.trim(),
-        baseUrl: sanitizeUrl(finalUrl)
-      };
-    }
-  } catch (err) {
-    console.error("[DataHub Config] Error:", err);
-  }
-
-  return { apiKey: "", baseUrl: sanitizeUrl(envUrl) };
-}
+// Configuration is now imported from config-utils.ts
 
 /**
  * Core DataHub Purchase Function

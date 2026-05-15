@@ -3,12 +3,11 @@ import {
   reconcileTransaction, 
   isAdminAuth, 
   purchaseData, 
-  syncWalletSilently,
-  getDataHubConfig 
+  syncWalletSilently
 } from '../lib/server-utils.js';
+import { getDataHubConfig } from '../lib/config-utils.js';
 import { syncProviderWallet } from '../lib/provider-health.js';
 import { sendTelegramNotification } from '../lib/sendTelegramNotification.js';
-import { callDataHubAPI } from '../lib/datahub-client.js';
 
 // rate limiter for sensitive ops
 const globalRateLimit = new Map<string, number[]>();
@@ -236,11 +235,15 @@ export default async function handler(req: any, res: any) {
         const { force } = payload;
         const result = await syncProviderWallet(!!force);
         
+        // 🛡️ Transform to non-blocking observability response
         return res.status(200).json({ 
           success: true, 
           balance: result.balance,
           throttled: result.throttled,
-          status: result.status,
+          degraded: result.status !== 'online',
+          provider_status: result.status,
+          wallet_sync_status: result.status === 'online' ? 'available' : 'unavailable',
+          message: result.status === 'online' ? 'Provider balance synchronized' : 'Using cached provider balance',
           error: result.error
         });
       }

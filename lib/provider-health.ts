@@ -1,5 +1,5 @@
-import { supabase, getDataHubConfig, logDataHubApiCall } from './server-utils.js';
-import { callDataHubAPI } from './datahub-client.js';
+import { supabase, logDataHubApiCall } from './server-utils.js';
+import { getDataHubConfig } from './config-utils.js';
 
 export enum ProviderState {
   HEALTHY = "healthy",
@@ -80,8 +80,8 @@ export async function checkProviderHealth(): Promise<ProviderHealthReport> {
     const isHtml = contentType.includes("text/html");
 
     if (isHtml) {
-      console.error("📡 [Health Engine] Provider returned HTML instead of JSON. Infrastructure mismatch.");
-      report.status = ProviderState.OFFLINE;
+      console.warn("📡 [Health Engine] Provider returned HTML (Likely 404/Maintenance). Marking as degraded.");
+      report.status = ProviderState.DEGRADED;
       report.error = `Provider returned HTML ${dhRes.status}`;
       return report;
     }
@@ -113,8 +113,8 @@ export async function checkProviderHealth(): Promise<ProviderHealthReport> {
 
     return report;
   } catch (error: any) {
-    report.status = ProviderState.OFFLINE;
-    report.error = error.message;
+    report.status = ProviderState.DEGRADED;
+    report.error = `Observability failure: ${error.message}`;
     return report;
   }
 }
@@ -205,54 +205,64 @@ async function performExhaustiveDiscovery(config: any): Promise<ProviderHealthRe
  * Stabilized Wallet Synchronization with Throttling & Degradation Handling
  */
 export async function syncProviderWallet(force = false): Promise<any> {
-  const { data: currentSettings } = await supabase
-    .from("provider_settings")
-    .select("*")
-    .eq("provider_name", "datahubgh")
-    .single();
+  try {
+    const { data: currentSettings } = await supabase
+      .from("provider_settings")
+      .select("*")
+      .eq("provider_name", "datahubgh")
+      .single();
 
-  // 🛡️ Prevent log flooding and excessive retries (15 Minute Cooldown)
-  if (!force && currentSettings?.next_retry_at) {
-    const nextRetry = new Date(currentSettings.next_retry_at).getTime();
-    if (Date.now() < nextRetry) {
-      return { success: true, throttled: true, balance: currentSettings.wallet_balance, status: "degraded" };
+    // 🛡️ Prevent log flooding and excessive retries (15 Minute Cooldown)
+    if (!force && currentSettings?.next_retry_at) {
+      const nextRetry = new Date(currentSettings.next_retry_at).getTime();
+      if (Date.now() < nextRetry) {
+        return { success: true, throttled: true, balance: currentSettings.wallet_balance, status: "degraded" };
+      }
     }
+
+    console.log("=== PROVIDER OBSERVABILITY SYNC START ===");
+    const config = await getDataHubConfig();
+    const report = await performExhaustiveDiscovery(config);
+
+    const updateData: any = {
+      // 🛡️ Note: "degraded" means observability is failing, but execution may still work.
+      status: report.status === ProviderState.HEALTHY ? "online" : "degraded",
+      last_synced_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    if (report.status === ProviderState.HEALTHY) {
+      updateData.wallet_balance = report.wallet_balance;
+      updateData.next_retry_at = null; // Reset retry timer on success
+      console.log("✅ [Sync Wallet] Successfully synchronized with provider.");
+    } else {
+      // 🛡️ 15 Minute Cooldown on failure to prevent log spamming
+      const cooldownMinutes = 15; 
+      const nextRetryAt = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
+      updateData.next_retry_at = nextRetryAt;
+      console.warn(`⚠️ [Sync Wallet] Observability degraded. Using cached balance. Next retry at: ${nextRetryAt}`);
+    }
+
+    await supabase
+      .from("provider_settings")
+      .update(updateData)
+      .eq("provider_name", "datahubgh");
+
+    return { 
+      success: true, // We return success: true because we are non-blocking and using a cache
+      balance: report.status === ProviderState.HEALTHY ? report.wallet_balance : (currentSettings?.wallet_balance || 0),
+      status: updateData.status,
+      error: report.error
+    };
+  } catch (error: any) {
+    console.error("❌ [Health Engine] CRITICAL SYNC FAILURE (Caught):", error.message);
+    return {
+      success: true, // Still returning true to prevent admin crash
+      balance: 0,
+      status: "degraded",
+      error: `Fatal background error: ${error.message}`
+    };
   }
-
-  console.log("=== PROVIDER OBSERVABILITY SYNC START ===");
-  const config = await getDataHubConfig();
-  const report = await performExhaustiveDiscovery(config);
-
-  const updateData: any = {
-    // 🛡️ Note: "degraded" means observability is failing, but execution may still work.
-    status: report.status === ProviderState.HEALTHY ? "online" : "degraded",
-    last_synced_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-
-  if (report.status === ProviderState.HEALTHY) {
-    updateData.wallet_balance = report.wallet_balance;
-    updateData.next_retry_at = null; // Reset retry timer on success
-    console.log("✅ [Sync Wallet] Successfully synchronized with provider.");
-  } else {
-    // 🛡️ 15 Minute Cooldown on failure to prevent log spamming
-    const cooldownMinutes = 15; 
-    const nextRetryAt = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
-    updateData.next_retry_at = nextRetryAt;
-    console.warn(`⚠️ [Sync Wallet] Observability degraded. Using cached balance. Next retry at: ${nextRetryAt}`);
-  }
-
-  await supabase
-    .from("provider_settings")
-    .update(updateData)
-    .eq("provider_name", "datahubgh");
-
-  return { 
-    success: true, // We return success: true because we are non-blocking and using a cache
-    balance: report.status === ProviderState.HEALTHY ? report.wallet_balance : (currentSettings?.wallet_balance || 0),
-    status: updateData.status,
-    error: report.error
-  };
 }
 
 function extractBalance(data: any): number {
