@@ -3,7 +3,8 @@ import {
   reconcileTransaction, 
   isAdminAuth, 
   purchaseData, 
-  syncWalletSilently 
+  syncWalletSilently,
+  getDataHubConfig 
 } from '../lib/server-utils.js';
 import { sendTelegramNotification } from '../lib/sendTelegramNotification.js';
 import { callDataHubAPI } from '../lib/datahub-client.js';
@@ -231,39 +232,54 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'sync_wallet': {
-        // 🛡️ Try common endpoints for balance sync
-        let result = await callDataHubAPI("user", { method: 'GET' });
-        
-        if (!result.success || result.error?.includes("404")) {
-          console.log("⚠️ [Sync Wallet] /user endpoint failed. Trying /balance...");
-          result = await callDataHubAPI("balance", { method: 'GET' });
+        const candidateEndpoints = ["user", "balance", "status", "profile", "wallet"];
+        let finalResult: any = { success: false, error: "Initialization failure" };
+        let found = false;
+
+        console.log("🔄 [Sync Wallet] Starting exhaustive discovery for balance endpoint...");
+
+        for (const endpoint of candidateEndpoints) {
+          try {
+            const res = await callDataHubAPI(endpoint, { method: 'GET' });
+            if (res.success) {
+              finalResult = res;
+              found = true;
+              console.log(`✅ [Sync Wallet] Balance discovery successful at endpoint: /${endpoint}`);
+              break;
+            }
+          } catch (e) {}
         }
 
         // 🛡️ Final attempt: root balance endpoint (some versions use this)
-        if (!result.success || result.error?.includes("404")) {
-           const { baseUrl } = await getDataHubConfig();
-           if (baseUrl.includes("/external")) {
-              const rootBase = baseUrl.replace("/external", "");
+        if (!found) {
+           const config = await getDataHubConfig();
+           if (config?.baseUrl?.includes("/external")) {
+              const rootBase = config.baseUrl.split("/external")[0];
               console.log("⚠️ [Sync Wallet] Typical endpoints failed. Trying root balance endpoint:", `${rootBase}/balance`);
               
-              // We'll call fetch directly to avoid the /external base logic in callDataHubAPI
-              const { apiKey } = await getDataHubConfig();
               try {
                 const rootRes = await fetch(`${rootBase.replace(/\/+$/, "")}/balance`, {
                   method: 'GET',
-                  headers: { "X-API-Key": apiKey }
+                  headers: { 
+                    "X-API-Key": config.apiKey,
+                    "Accept": "application/json"
+                  }
                 });
                 if (rootRes.ok) {
                    const rootData = await rootRes.json();
-                   result = { success: true, data: rootData };
+                   finalResult = { success: true, data: rootData };
+                   found = true;
                 }
               } catch (e) {}
            }
         }
 
-        if (!result.success) throw new Error(result.error);
+        if (!found) {
+          console.error("❌ [Sync Wallet] Exhaustive discovery failed. Provider might be offline or API changed.");
+          return res.status(200).json({ success: false, error: "Provider balance endpoint not found (404/Discovery Failure)" });
+        }
         
-        const data = result.data;
+        const data = finalResult.data;
         const walletData = data?.data || data;
         const balance = walletData?.wallet_balance ?? walletData?.balance ?? walletData?.user?.wallet_balance ?? walletData?.user?.balance ?? 0;
         
