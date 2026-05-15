@@ -16,6 +16,7 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 import { calculateExecutionMetrics } from './metrics.js';
 import { findNetworkConfig } from './networkConfig.js';
 import { BUNDLE_CONFIG } from './bundleConfig.js';
+import { syncProviderWallet, checkProviderHealth } from './provider-health.js';
 import { sendTelegramNotification } from './sendTelegramNotification.js';
 import { 
   PAYMENT_STATUSES, 
@@ -176,108 +177,11 @@ export function validateDataHubCapacity(capacity: string): boolean {
 
 export async function syncWalletSilently() {
   try {
-    // 🔍 Check last sync time
-    const { data } = await supabase
-      .from("provider_settings")
-      .select("last_synced_at")
-      .eq("provider_name", "datahubgh")
-      .single();
-
-    const lastSync = data?.last_synced_at
-      ? new Date(data.last_synced_at)
-      : null;
-
-    const now = new Date();
-
-    // ⛔ Rate limit: only sync if > 30 seconds ago
-    if (lastSync && now.getTime() - lastSync.getTime() < 30000) {
-      return; // skip silently
-    }
-
-    const { apiKey, baseUrl } = await getDataHubConfig();
-
-    // 🌐 Call DataHubGH API
-    const startTime = Date.now();
-    let endpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
-    
-    let response = await fetch(endpoint, {
-      method: "GET",
-      headers: {
-        "X-API-Key": apiKey,
-      },
-    });
-
-    if (response.status === 404) {
-      console.warn("⚠️ [Silent Sync] User endpoint 404. Trying /balance fallback...");
-      endpoint = `${baseUrl.replace(/\/+$/, "")}/balance`;
-      response = await fetch(endpoint, {
-        method: "GET",
-        headers: {
-          "X-API-Key": apiKey,
-        },
-      });
-    }
-
-    if (response.status === 404 && baseUrl.includes("/external")) {
-      console.warn("⚠️ [Silent Sync] /balance also 404. Trying root /balance fallback...");
-      endpoint = `${baseUrl.replace("/external", "").replace(/\/+$/, "")}/balance`;
-      response = await fetch(endpoint, {
-        method: "GET",
-        headers: {
-          "X-API-Key": apiKey,
-        },
-      });
-    }
-
-    const duration = Date.now() - startTime;
-    let result: any = null;
-    try {
-      result = await response.json();
-    } catch (e) {
-      result = { error: "Failed to parse JSON" };
-    }
-
-    await logDataHubApiCall({
-      endpoint: "/user (balance sync)",
-      httpStatus: response.status,
-      duration,
-      response: result
-    });
-
-    if (response.status === 404) {
-      console.warn("⚠️ [Silent Sync] User endpoint 404. Skipping sync.");
-      return;
-    }
-
-    console.log("DATAHUB BALANCE RESPONSE:", result);
-
-    const walletData = result?.data || result;
-    const balance =
-      walletData?.wallet_balance ??
-      walletData?.balance ??
-      walletData?.user?.wallet_balance ??
-      walletData?.user?.balance ??
-      0;
-
-    if (!response.ok) throw new Error(`Balance fetch failed: ${response.status}`);
-
-    // 💾 Update DB
-    await supabase
-      .from("provider_settings")
-      .update({
-        wallet_balance: balance,
-        last_synced_at: now.toISOString(),
-        status: "online",
-      })
-      .eq("provider_name", "datahubgh");
-
+    // This now delegates to the hardened provider health engine
+    // it handles rate limiting, discovery, and logging internally
+    await syncProviderWallet(false);
   } catch (err) {
-    console.error("Silent wallet sync failed:", err);
-
-    await supabase
-      .from("provider_settings")
-      .update({ status: "offline" })
-      .eq("provider_name", "datahubgh");
+    console.error("Silent wallet sync wrapper failed:", err);
   }
 }
 

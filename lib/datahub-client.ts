@@ -17,12 +17,19 @@ export async function callDataHubAPI(endpoint: string, options: any = {}, maxRet
 
     const cleanEndpoint = endpoint.replace(/^\/+/, "");
     
-    // 🛡️ Guard against double-concatenation
-    const base = baseUrl.replace(/\/+$/, "");
-    let url = `${base}/${cleanEndpoint}`;
-    
-    if (base.toLowerCase().endsWith(cleanEndpoint.toLowerCase())) {
-       url = base; 
+    // 🛡️ Authoritative URL Normalization using new URL()
+    let url: string;
+    try {
+      const base = baseUrl.replace(/\/+$/, "");
+      url = new URL(cleanEndpoint, base + "/").toString();
+      
+      // Guard against common malformations where endpoint might be double-joined
+      if (base.toLowerCase().endsWith(cleanEndpoint.toLowerCase())) {
+         url = base; 
+      }
+    } catch (e) {
+      console.warn("⚠️ [DataHub Client] URL normalization failed for:", { baseUrl, endpoint });
+      url = `${baseUrl.replace(/\/+$/, "")}/${cleanEndpoint}`;
     }
     
     const startTime = Date.now();

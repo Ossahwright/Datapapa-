@@ -6,6 +6,7 @@ import {
   syncWalletSilently,
   getDataHubConfig 
 } from '../lib/server-utils.js';
+import { syncProviderWallet } from '../lib/provider-health.js';
 import { sendTelegramNotification } from '../lib/sendTelegramNotification.js';
 import { callDataHubAPI } from '../lib/datahub-client.js';
 
@@ -232,64 +233,23 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'sync_wallet': {
-        const candidateEndpoints = ["user", "balance", "status", "profile", "wallet"];
-        let finalResult: any = { success: false, error: "Initialization failure" };
-        let found = false;
-
-        console.log("🔄 [Sync Wallet] Starting exhaustive discovery for balance endpoint...");
-
-        for (const endpoint of candidateEndpoints) {
-          try {
-            const res = await callDataHubAPI(endpoint, { method: 'GET' });
-            if (res.success) {
-              finalResult = res;
-              found = true;
-              console.log(`✅ [Sync Wallet] Balance discovery successful at endpoint: /${endpoint}`);
-              break;
-            }
-          } catch (e) {}
-        }
-
-        // 🛡️ Final attempt: root balance endpoint (some versions use this)
-        if (!found) {
-           const config = await getDataHubConfig();
-           if (config?.baseUrl?.includes("/external")) {
-              const rootBase = config.baseUrl.split("/external")[0];
-              console.log("⚠️ [Sync Wallet] Typical endpoints failed. Trying root balance endpoint:", `${rootBase}/balance`);
-              
-              try {
-                const rootRes = await fetch(`${rootBase.replace(/\/+$/, "")}/balance`, {
-                  method: 'GET',
-                  headers: { 
-                    "X-API-Key": config.apiKey,
-                    "Accept": "application/json"
-                  }
-                });
-                if (rootRes.ok) {
-                   const rootData = await rootRes.json();
-                   finalResult = { success: true, data: rootData };
-                   found = true;
-                }
-              } catch (e) {}
-           }
-        }
-
-        if (!found) {
-          console.error("❌ [Sync Wallet] Exhaustive discovery failed. Provider might be offline or API changed.");
-          return res.status(200).json({ success: false, error: "Provider balance endpoint not found (404/Discovery Failure)" });
+        const { force } = payload;
+        const result = await syncProviderWallet(!!force);
+        
+        if (!result.success && !result.throttled) {
+          return res.status(200).json({ 
+            success: false, 
+            error: result.error || "Provider synchronization failed",
+            status: "degraded"
+          });
         }
         
-        const data = finalResult.data;
-        const walletData = data?.data || data;
-        const balance = walletData?.wallet_balance ?? walletData?.balance ?? walletData?.user?.wallet_balance ?? walletData?.user?.balance ?? 0;
-        
-        await supabase.from("provider_settings").update({
-          wallet_balance: balance,
-          last_synced_at: new Date().toISOString(),
-          status: "online",
-        }).eq("provider_name", "datahubgh");
-        
-        return res.status(200).json({ success: true, balance });
+        return res.status(200).json({ 
+          success: true, 
+          balance: result.balance,
+          throttled: result.throttled,
+          status: result.success ? "online" : "degraded"
+        });
       }
 
       default:
