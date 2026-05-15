@@ -94,17 +94,18 @@ export const AppreciationRewardsView = () => {
           phone: phone,
           network: c.network || 'Unknown',
           total_spend: Number(c.total_spent || c.total_spend || 0),
+          weekly_spend: Number(c.weekly_spent ?? c.total_spent ?? 0), // Use weekly_spent if available, fallback to total for compatibility
           transaction_count: Number(c.transaction_count || 0),
           last_purchase: c.last_transaction || c.last_purchase || new Date().toISOString(),
           txs: []
         });
       });
 
-      // Show even small spenders to confirm connection
-      const eligible = Array.from(customersMap.values()).filter(c => c.total_spend > 0);
+      // STRICT ELIGIBILITY: At least GHS 25 in the last 7 days
+      const eligible = Array.from(customersMap.values()).filter(c => c.weekly_spend >= 25);
       
-      // Sort by spend
-      eligible.sort((a, b) => b.total_spend - a.total_spend);
+      // Sort by weekly spend
+      eligible.sort((a, b) => b.weekly_spend - a.weekly_spend);
       
       console.log(`✅ [Appreciation] Formatted ${eligible.length} eligible customers`);
       setEligibleCustomers(eligible);
@@ -383,7 +384,7 @@ export const AppreciationRewardsView = () => {
                   {eligibleCustomers.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
-                        No customers found with at least GHS 1.00 spend.
+                        No customers found with at least GHS 25.00 weekly spend.
                       </td>
                     </tr>
                   ) : (
@@ -395,7 +396,7 @@ export const AppreciationRewardsView = () => {
                             {c.network}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-emerald-600 font-bold">GHS {c.total_spend.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-emerald-600 font-bold">GHS {c.weekly_spend.toFixed(2)}</td>
                         <td className="px-6 py-4">{c.transaction_count}</td>
                         <td className="px-6 py-4 text-slate-500">{new Date(c.last_purchase).toLocaleString()}</td>
                         <td className="px-6 py-4 text-center">

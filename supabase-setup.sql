@@ -210,6 +210,7 @@ CREATE OR REPLACE FUNCTION public.get_customers_summary()
 RETURNS TABLE (
     recipient_phone TEXT,
     total_spent NUMERIC,
+    weekly_spent NUMERIC,
     transaction_count BIGINT,
     last_transaction TIMESTAMPTZ,
     network TEXT,
@@ -220,12 +221,14 @@ BEGIN
     SELECT 
         t.recipient_phone,
         SUM(t.amount) as total_spent,
+        SUM(CASE WHEN t.created_at >= NOW() - INTERVAL '7 days' THEN t.amount ELSE 0 END) as weekly_spent,
         COUNT(t.id) as transaction_count,
         MAX(t.created_at) as last_transaction,
         MAX(t.network) as network,
         t.user_id
     FROM public.transactions t
     WHERE t.recipient_phone IS NOT NULL
+      AND (t.status = 'success' OR t.status = 'fulfilled' OR t.status = 'paid') -- Only count successful transactions
     GROUP BY t.recipient_phone, t.user_id
     ORDER BY last_transaction DESC;
 END;

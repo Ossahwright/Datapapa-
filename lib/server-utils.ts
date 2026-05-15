@@ -197,11 +197,29 @@ export async function syncWalletSilently() {
     const { apiKey, baseUrl } = await getDataHubConfig();
 
     // 🌐 Call DataHubGH API
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/user`, {
+    const startTime = Date.now();
+    const endpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
+    
+    const response = await fetch(endpoint, {
       method: "GET",
       headers: {
         "X-API-Key": apiKey,
       },
+    });
+
+    const duration = Date.now() - startTime;
+    let result: any = null;
+    try {
+      result = await response.json();
+    } catch (e) {
+      result = { error: "Failed to parse JSON" };
+    }
+
+    await logDataHubApiCall({
+      endpoint: "/user (balance sync)",
+      httpStatus: response.status,
+      duration,
+      response: result
     });
 
     if (response.status === 404) {
@@ -209,7 +227,6 @@ export async function syncWalletSilently() {
       return;
     }
 
-    const result = await response.json();
     console.log("DATAHUB BALANCE RESPONSE:", result);
 
     const walletData = result?.data || result;
@@ -377,6 +394,42 @@ async function fetchWithRetry(endpoint: string, options: any, maxRetries = 3) {
 }
 
 /**
+ * 📊 DATAHUB API LOGGING HELPER
+ * Tracks endpoint usage, payloads, and performance metrics.
+ */
+export async function logDataHubApiCall({
+  endpoint,
+  payload,
+  response,
+  httpStatus,
+  duration,
+  errorMessage
+}: {
+  endpoint: string;
+  payload?: any;
+  response?: any;
+  httpStatus?: number;
+  duration?: number;
+  errorMessage?: string;
+}) {
+  try {
+    const status = (httpStatus && httpStatus >= 200 && httpStatus < 300) ? 'success' : 'failed';
+    await supabase.from("datahub_logs").insert({
+      endpoint,
+      status,
+      http_status: httpStatus,
+      response_time: duration,
+      payload,
+      response,
+      error_message: errorMessage,
+      created_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("[DataHub Log] Failed to log API call:", err);
+  }
+}
+
+/**
  * 🚀 STEP 1.1 — AUTHORITATIVE PROVIDER STATUS NORMALIZER
  * Responsibility: Classifies raw provider responses into deterministic lifecycle states.
  */
@@ -425,13 +478,24 @@ export async function checkProviderTransactionStatus(tx: any) {
   for (const endpoint of endpoints) {
     try {
       console.log(`🔍 [Reconciliation] Polling DataHub: ${endpoint}`);
+      const startTime = Date.now();
       const response = await fetchWithRetry(endpoint, {
         method: 'GET',
         headers: { "X-API-Key": apiKey, "Accept": "application/json" },
         timeout: 10000
       });
+      const duration = Date.now() - startTime;
 
       const result = response.data?.data || response.data;
+
+      await logDataHubApiCall({
+        endpoint: "transaction_status_poll",
+        payload: { endpoint, reference },
+        response: result,
+        httpStatus: response.status,
+        duration
+      });
+
       if (response.status === 200 && result) {
         const rawStatus = result.status || result.delivery_status || result.orderStatus || "";
         const normalized = normalizeProviderDeliveryStatus(rawStatus);
@@ -757,15 +821,26 @@ export async function purchaseData(transaction: any, source: string = "unknown")
     console.log(`📍 UUID: ${authoritativeId}`);
     console.log(`📍 Endpoint: ${endpoint}`);
     
+    const startTime = Date.now();
     const response = await fetchWithRetry(endpoint, {
       method: "POST",
       data: payload,
       headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "Accept": "application/json" },
       timeout: 30000
     });
+    const duration = Date.now() - startTime;
 
     console.log("=== DATAHUB RESPONSE RECEIVED ===");
     const result = response.data;
+
+    await logDataHubApiCall({
+      endpoint: "/data-purchase",
+      payload,
+      response: result,
+      httpStatus: response.status,
+      duration
+    });
+
     console.log(`📡 [${executionId}] Provider Response:`, response.status, JSON.stringify(result));
 
     // 🛡️ ATOMIC PERSISTENCE BLOCK

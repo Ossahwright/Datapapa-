@@ -6,6 +6,7 @@
 
 import axios from "axios";
 import { supabase } from "./supabase.js";
+import { logDataHubApiCall } from "./server-utils.js";
 
 import { NETWORKS } from "./networkConfig.js";
 
@@ -36,13 +37,29 @@ async function checkApiHealth(baseUrl: string, apiKey: string) {
   try {
     // Note: Some APIs use /status or /balance as a health check. 
     // We'll try a fast request to ensure connectivity.
+    const startTime = Date.now();
     const response = await axios.get(`${baseUrl.replace('/external', '')}/balance`, {
       headers: { "X-API-Key": apiKey },
-      timeout: 5000
+      timeout: 5000,
+      validateStatus: () => true
     });
+    const duration = Date.now() - startTime;
+
+    await logDataHubApiCall({
+      endpoint: "/balance (health check)",
+      httpStatus: response.status,
+      duration,
+      response: response.data
+    });
+
     return response.status === 200;
-  } catch (err) {
+  } catch (err: any) {
     console.warn("⚠️ [DataHub] Health check failed or endpoint not found. Proceeding with caution.");
+    await logDataHubApiCall({
+      endpoint: "/balance (health check)",
+      errorMessage: err.message,
+      status: "failed"
+    } as any);
     return true; // Don't block if balance check fails but API might be up
   }
 }
@@ -114,6 +131,7 @@ export async function callDataHub(payload: any) {
   console.log("=== DATAHUB REQUEST PAYLOAD ===");
   console.log(payload);
 
+  const startTime = Date.now();
   const response = await axios.post(endpoint, payload, {
     headers: {
       "Content-Type": "application/json",
@@ -123,6 +141,7 @@ export async function callDataHub(payload: any) {
     timeout: 15000,
     validateStatus: () => true
   });
+  const duration = Date.now() - startTime;
 
   const data = response.data;
   
@@ -130,6 +149,16 @@ export async function callDataHub(payload: any) {
   if (typeof data === 'string' && data.includes('<!DOCTYPE html>')) {
     console.error("=== DATAHUB HTML ERROR DETECTED ===");
     console.error(`Status ${response.status} from ${endpoint}`);
+    
+    await logDataHubApiCall({
+      endpoint: "/data-purchase (legacy)",
+      payload,
+      response: { html_error: true, snippet: data.slice(0, 500) },
+      httpStatus: response.status,
+      duration,
+      errorMessage: "Provider returned HTML instead of JSON"
+    });
+
     throw new Error(`HTTP ${response.status}: Provider returned HTML (Malformed URL: ${endpoint})`);
   }
 
@@ -139,13 +168,13 @@ export async function callDataHub(payload: any) {
     data: data
   });
 
-  // Log to database
-  await supabase.from("datahub_logs").insert({
+  // Log to database using standardized helper
+  await logDataHubApiCall({
+    endpoint: "/data-purchase (legacy)",
     payload,
     response: data,
-    status: (response.status >= 200 && response.status < 300) ? "success" : "failed",
-    http_status: response.status,
-    created_at: new Date().toISOString()
+    httpStatus: response.status,
+    duration
   });
 
   const isSuccess = (response.status >= 200 && response.status < 300) && (
@@ -176,6 +205,7 @@ export async function queryDataHubStatus(reference: string) {
 
   // Many DataHub APIs use GET /data-purchase/{reference} or similar
   // We will try to find the status using the common pattern
+  const startTime = Date.now();
   const response = await axios.get(`${endpoint}/${reference}`, {
     headers: {
       "X-API-Key": apiKey,
@@ -184,14 +214,34 @@ export async function queryDataHubStatus(reference: string) {
     timeout: 10000,
     validateStatus: () => true
   });
+  const duration = Date.now() - startTime;
+
+  await logDataHubApiCall({
+    endpoint: "/data-purchase (status check legacy)",
+    payload: { reference, method: "GET" },
+    response: response.data,
+    httpStatus: response.status,
+    duration
+  });
 
   // If that doesn't work, we try the query param approach which is also common
   if (response.status === 404 || response.status === 405) {
+    const altStartTime = Date.now();
     const altResponse = await axios.get(`${endpoint}?reference=${reference}`, {
       headers: { "X-API-Key": apiKey },
       timeout: 10000,
       validateStatus: () => true
     });
+    const altDuration = Date.now() - altStartTime;
+
+    await logDataHubApiCall({
+      endpoint: "/data-purchase (status check legacy - alternative)",
+      payload: { reference, method: "GET_PARAM" },
+      response: altResponse.data,
+      httpStatus: altResponse.status,
+      duration: altDuration
+    });
+
     if (altResponse.status === 200) return altResponse.data;
   }
 

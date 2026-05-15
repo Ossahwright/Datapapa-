@@ -160,14 +160,14 @@ export default function Receipt() {
         message: 'Bundle Delivered!',
         subMessage: 'Your transaction was successful and the data bundle has been credited to the recipient.',
         color: 'emerald',
-        icon: <div className="relative">
-                <CheckCircle2 className="w-20 h-20 text-emerald-500" />
+        icon: <div className="relative flex items-center justify-center w-12 h-12">
                 <motion.div 
                   initial={{ scale: 0 }}
-                  animate={{ scale: [1, 1.5, 1], opacity: [1, 0] }}
-                  transition={{ duration: 1, repeat: Infinity }}
+                  animate={{ scale: [1, 2, 1], opacity: [0.3, 0, 0] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
                   className="absolute inset-0 bg-emerald-400 rounded-full"
                 />
+                <CheckCircle2 className="w-full h-full text-emerald-500 relative z-10" />
               </div>
       };
     }
@@ -179,7 +179,7 @@ export default function Receipt() {
         message: 'Payment Received',
         subMessage: 'We received your payment but delivery failed. Our automated system is retrying or alerting an agent.',
         color: 'rose',
-        icon: <XCircle className="w-20 h-20 text-rose-500" />
+        icon: <XCircle className="w-12 h-12 text-rose-500" />
       };
     }
 
@@ -190,13 +190,13 @@ export default function Receipt() {
         message: 'Order Processing',
         subMessage: 'Successful payment! We are now sending the data to the recipient. This usually takes 10-30 seconds.',
         color: 'indigo',
-        icon: <div className="relative">
-                <CheckCircle2 className="w-20 h-20 text-indigo-500" />
+        icon: <div className="relative flex items-center justify-center w-12 h-12">
                 <motion.div 
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  className="absolute inset-[-8px] border-2 border-dashed border-indigo-200 rounded-full"
+                  transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
+                  className="absolute inset-[-6px] border-2 border-dashed border-indigo-200 rounded-full"
                 />
+                <CheckCircle2 className="w-full h-full text-indigo-500 relative z-10" />
               </div>
       };
     }
@@ -207,7 +207,7 @@ export default function Receipt() {
       message: 'Checking status...',
       subMessage: 'We are waiting for a final confirmation from the payment provider.',
       color: 'amber',
-      icon: <Loader2 className="w-16 h-16 text-amber-500 animate-spin" />
+      icon: <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
     };
   };
 
@@ -269,24 +269,24 @@ export default function Receipt() {
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-[320px] z-10 px-2"
+        className="w-full max-w-[360px] z-10 px-2"
       >
-        <div className="text-center mb-4">
-            <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">{settings?.app_name || 'DATAPAPA'}</h2>
+        <div className="text-center mb-6">
+            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.4em]">{settings?.app_name || 'DATAPAPA'}</h2>
         </div>
 
         {/* Main Card */}
-        <div className="bg-white rounded-[1.5rem] shadow-[0_15px_40px_-12px_rgba(0,0,0,0.08)] border border-slate-100 overflow-hidden relative">
+        <div className="bg-white rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.12)] border border-slate-100 overflow-hidden relative">
           {/* Status Banner */}
-          <div className={`py-6 flex flex-col items-center text-center px-4 bg-gradient-to-b from-${statusInfo.color === 'emerald' ? 'emerald' : statusInfo.color}-50/50 to-white`}>
+          <div className={`py-10 flex flex-col items-center text-center px-6 bg-gradient-to-b from-${statusInfo.color}-50/50 to-white`}>
             
             <motion.div
               initial={{ scale: 0.5, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: 0.1, type: 'spring', damping: 15 }}
-              className={`w-14 h-14 rounded-full bg-white shadow-md shadow-${statusInfo.color}-100 flex items-center justify-center mb-3 border border-${statusInfo.color}-50 relative z-10`}
+              className={`w-20 h-20 rounded-full bg-white shadow-xl shadow-${statusInfo.color}-100 flex items-center justify-center mb-5 border border-${statusInfo.color}-50 relative z-10`}
             >
-              {React.cloneElement(statusInfo.icon as React.ReactElement, { className: 'w-8 h-8' })}
+              {statusInfo.icon}
             </motion.div>
             
             <h1 className={`text-xl font-black tracking-tighter mb-0.5 ${

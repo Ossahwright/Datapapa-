@@ -3,7 +3,8 @@ import {
   validateEnv, 
   isAdminAuth, 
   getDataHubConfig,
-  apiClient 
+  apiClient,
+  logDataHubApiCall
 } from '../lib/server-utils.js';
 import axios from 'axios';
 import { LOG_MARKERS, PROVIDER_HEALTH } from '../lib/constants.js';
@@ -38,19 +39,45 @@ export default async function handler(req: any, res: any) {
         const { apiKey, baseUrl } = await getDataHubConfig();
         if (apiKey) {
           const statusEndpoint = `${baseUrl.replace(/\/+$/, "")}/status`;
-          const dhRes = await axios.get(statusEndpoint, { timeout: 5000 });
+          const sStartTime = Date.now();
+          const dhRes = await axios.get(statusEndpoint, { timeout: 5000, validateStatus: () => true });
+          const sDuration = Date.now() - sStartTime;
+
+          await logDataHubApiCall({
+            endpoint: "/status (system-health)",
+            httpStatus: dhRes.status,
+            duration: sDuration,
+            response: dhRes.data
+          });
+
           healthData.services.datahub.status = dhRes.status === 200 ? "online" : "degraded";
 
           const walletEndpoint = `${baseUrl.replace(/\/+$/, "")}/user`;
+          const wStartTime = Date.now();
           const walletRes = await axios.get(walletEndpoint, {
             headers: { "X-API-Key": apiKey },
-            timeout: 5000
+            timeout: 5000,
+            validateStatus: () => true
           });
+          const wDuration = Date.now() - wStartTime;
+
           const walletData = walletRes.data?.data || walletRes.data;
+
+          await logDataHubApiCall({
+            endpoint: "/user (system-health)",
+            httpStatus: walletRes.status,
+            duration: wDuration,
+            response: walletData
+          });
+
           healthData.services.datahub.balance = walletData?.wallet_balance || walletData?.balance || 0;
         }
-      } catch (e) {
+      } catch (e: any) {
         healthData.services.datahub.status = "error";
+        await logDataHubApiCall({
+          endpoint: "system-health-check-failed",
+          errorMessage: e.message
+        });
       }
 
       const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
@@ -101,6 +128,13 @@ export default async function handler(req: any, res: any) {
       stats.provider_response_time_ms = Date.now() - startTime;
       stats.latency = stats.provider_response_time_ms;
 
+      await logDataHubApiCall({
+        endpoint: "provider-health-check",
+        httpStatus: response.status,
+        duration: stats.provider_response_time_ms,
+        response: response.ok ? await response.clone().json().catch(() => ({})) : null
+      });
+
       if (!response.ok) {
         const errorText = await response.text();
         stats.status = PROVIDER_HEALTH.DEGRADED;
@@ -141,12 +175,20 @@ export default async function handler(req: any, res: any) {
         method: "GET",
         headers: { "X-API-Key": apiKey || "", "Content-Type": "application/json" }
       });
+      const responseTime = Date.now() - startTime;
       const text = await response.text();
+
+      await logDataHubApiCall({
+        endpoint: "/status (datahub-detail-check)",
+        httpStatus: response.status,
+        duration: responseTime,
+        response: text.includes('<!DOCTYPE html>') ? "HTML ERROR" : text
+      });
+
       if (text.includes('<!DOCTYPE html>')) return res.status(500).json({ success: false, error: "Provider returned HTML", status: "down" });
 
       let data;
       try { data = JSON.parse(text); } catch { data = null; }
-      const responseTime = Date.now() - startTime;
       const isAuthAccepted = response.ok || (data?.error && (data.error.toLowerCase().includes("required") || data.error.toLowerCase().includes("networkkey")));
       
       if (data?.error === 'Invalid or inactive API key') return res.status(401).json({ success: false, status: "down", online: false, providerStatus: response.status, responseTime, error: "Invalid or inactive API key" });

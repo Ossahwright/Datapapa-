@@ -1,4 +1,4 @@
-import { supabase, getDataHubConfig } from './server-utils.js';
+import { supabase, getDataHubConfig, logDataHubApiCall } from './server-utils.js';
 
 /**
  * Standardized DataHub API Client
@@ -24,7 +24,8 @@ export async function callDataHubAPI(endpoint: string, options: any = {}, maxRet
     if (base.toLowerCase().endsWith(cleanEndpoint.toLowerCase())) {
        url = base; 
     }
-
+    
+    const startTime = Date.now();
     try {
       const response = await fetch(url, {
         method: options.method || "POST",
@@ -61,18 +62,15 @@ export async function callDataHubAPI(endpoint: string, options: any = {}, maxRet
         data = { raw: isHtml ? "HTML ERROR PAGE" : text };
       }
 
-      // 📝 Log to api_logs
-      try {
-        await supabase.from("api_logs").insert({
-          endpoint: cleanEndpoint,
-          request: options.body,
-          response: data,
-          status: response.ok ? "success" : "failed",
-          created_at: new Date().toISOString()
-        });
-      } catch (logErr) {
-        console.error("Log error:", logErr);
-      }
+      // 📝 Log to DataHub Logs using standardized helper
+      await logDataHubApiCall({
+        endpoint: cleanEndpoint,
+        payload: options.body,
+        response: data,
+        httpStatus: response.status,
+        duration: Date.now() - startTime,
+        errorMessage: response.ok ? undefined : (isHtml ? "Provider returned HTML" : "API Error")
+      });
 
       if (!response.ok) {
         const errorMsg = data?.message || (isHtml ? `Service Unavailable (HTML ${response.status})` : text);
@@ -83,6 +81,16 @@ export async function callDataHubAPI(endpoint: string, options: any = {}, maxRet
       return { success: true, data };
 
     } catch (error: any) {
+      const duration = Date.now() - startTime;
+      
+      // Log failure to DataHub logs
+      await logDataHubApiCall({
+        endpoint: cleanEndpoint,
+        payload: options.body,
+        errorMessage: error.message,
+        duration
+      });
+
       if (attempt < maxRetries - 1 && (error.name === 'AbortError' || error.message.includes('429'))) {
         attempt++;
         const wait = Math.pow(2, attempt) * 1000;
