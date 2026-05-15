@@ -71,16 +71,33 @@ export function ReportsView() {
     // Set up realtime subscriptions
     const transactionsChannel = supabase
       .channel('reports-tx-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
-        fetchData();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+        setData((currentData) => {
+          if (payload.eventType === 'INSERT') {
+            return [payload.new, ...currentData];
+          } else if (payload.eventType === 'UPDATE') {
+            return currentData.map(tx => tx.id === payload.new.id ? { ...tx, ...payload.new } : tx);
+          } else if (payload.eventType === 'DELETE') {
+            return currentData.filter(tx => tx.id !== payload.old.id);
+          }
+          return currentData;
+        });
       })
       .subscribe();
 
     const logsChannel = supabase
       .channel('reports-logs-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'datahub_logs' }, () => {
-        // Debounce or directly fetch, let's just fetchData for now.
-        fetchData();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'datahub_logs' }, (payload) => {
+        setLogs((currentLogs) => {
+          if (payload.eventType === 'INSERT') {
+            return [payload.new, ...currentLogs];
+          } else if (payload.eventType === 'UPDATE') {
+            return currentLogs.map(log => log.id === payload.new.id ? { ...log, ...payload.new } : log);
+          } else if (payload.eventType === 'DELETE') {
+            return currentLogs.filter(log => log.id !== payload.old.id);
+          }
+          return currentLogs;
+        });
       })
       .subscribe();
 
@@ -120,12 +137,12 @@ export function ReportsView() {
 
     data.forEach(tx => {
       const amount = Number(tx.amount || 0);
-      const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.payment_status === 'success';
-      const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'success' || tx.delivery_status === 'delivered';
+      const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'payment_success' || tx.payment_status === 'success';
+      const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'fulfilled' || tx.vtu_status === 'success' || tx.status === 'fulfilled' || tx.status === 'delivered' || tx.delivery_status === 'delivered';
       
-      const isSuccess = isPaid || isDelivered; // Consider it a successful transaction order if it was paid or delivered.
-      const isFailed = tx.status === 'failed' || tx.payment_status === 'failed' || tx.vtu_status === 'failed' || tx.delivery_status === 'failed';
-      const isPending = tx.status === 'pending' || tx.status === 'initialized' || tx.status === 'fulfillment_processing';
+      const isSuccess = isPaid || isDelivered;
+      const isFailed = tx.status === 'failed' || tx.payment_status === 'failed' || tx.vtu_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.delivery_status === 'failed';
+      const isPending = tx.status === 'pending' || tx.status === 'initialized' || tx.status === 'payment_pending' || tx.vtu_status === 'pending' || tx.vtu_status === 'processing' || tx.vtu_status === 'provider_accepted' || tx.status === 'fulfillment_processing';
 
       if (isSuccess) {
         kpi.totalRevenue += amount;
@@ -169,7 +186,11 @@ export function ReportsView() {
     });
 
     // We compute paid transaction count for average order value
-    const paidTxsCount = data.filter(tx => tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.payment_status === 'success' || tx.vtu_status === 'delivered' || tx.vtu_status === 'success' || tx.delivery_status === 'delivered').length;
+    const paidTxsCount = data.filter(tx => {
+      const isPaid = tx.status === 'success' || tx.status === 'completed' || tx.status === 'paid' || tx.status === 'payment_verified' || tx.status === 'payment_success' || tx.payment_status === 'success';
+      const isDelivered = tx.vtu_status === 'delivered' || tx.vtu_status === 'fulfilled' || tx.vtu_status === 'success' || tx.status === 'fulfilled' || tx.status === 'delivered' || tx.delivery_status === 'delivered';
+      return isPaid || isDelivered;
+    }).length;
     
     kpi.avgOrderValue = paidTxsCount > 0 ? kpi.totalRevenue / paidTxsCount : 0;
 

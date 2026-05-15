@@ -313,7 +313,8 @@ ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS provider_reference TEXT,
   ADD COLUMN IF NOT EXISTS provider_payload JSONB,
   ADD COLUMN IF NOT EXISTS provider_accepted_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS reconciliation_state TEXT;
+  ADD COLUMN IF NOT EXISTS reconciliation_state TEXT,
+  ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0;
 
 -- 📊 NEW TELEMETRY COLUMNS MIGRATION
 ALTER TABLE public.transactions

@@ -220,6 +220,11 @@ export default async function handler(req: any, res: any) {
         const retryObject = { ...tx, status: "payment_success", payment_status: "success" };
         delete retryObject.external_reference;
 
+        // Increment retry_count
+        await supabase.from('transactions').update({
+          retry_count: (tx.retry_count || 0) + 1
+        }).eq('id', transactionId);
+
         const result = await purchaseData(retryObject, "manual_retry");
         syncWalletSilently().catch(console.error);
         return res.status(200).json(result);
