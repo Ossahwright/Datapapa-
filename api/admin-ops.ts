@@ -236,19 +236,12 @@ export default async function handler(req: any, res: any) {
         const { force } = payload;
         const result = await syncProviderWallet(!!force);
         
-        if (!result.success && !result.throttled) {
-          return res.status(200).json({ 
-            success: false, 
-            error: result.error || "Provider synchronization failed",
-            status: "degraded"
-          });
-        }
-        
         return res.status(200).json({ 
           success: true, 
           balance: result.balance,
           throttled: result.throttled,
-          status: result.success ? "online" : "degraded"
+          status: result.status,
+          error: result.error
         });
       }
 

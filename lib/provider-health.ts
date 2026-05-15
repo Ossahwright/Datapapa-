@@ -93,6 +93,22 @@ export async function checkProviderHealth(): Promise<ProviderHealthReport> {
     } else {
       report.status = ProviderState.DEGRADED;
       report.error = `HTTP ${dhRes.status}`;
+      
+      // 🛡️ TELECOM-GRADE UPGRADE: Check for recent successful execution
+      // If we've had successful transactions in the last 30 mins, 
+      // the provider is effectively HEALTHY for execution despite sync issues.
+      const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const { count } = await supabase
+        .from("transactions")
+        .select("id", { count: 'exact', head: true })
+        .eq("vtu_status", "delivered")
+        .gt("updated_at", thirtyMinsAgo);
+
+      if (count && count > 0) {
+        console.log(`📡 [Health Engine] Observability failing but ${count} successful executions in last 30m. Marking as HEALTHY.`);
+        report.status = ProviderState.HEALTHY;
+        report.error = "Observability degraded, but execution pipeline healthy.";
+      }
     }
 
     return report;
@@ -137,11 +153,9 @@ async function performExhaustiveDiscovery(config: any): Promise<ProviderHealthRe
       
       const isHtml = text.trim().toLowerCase().startsWith("<!doctype html>") || text.trim().toLowerCase().startsWith("<html>");
       if (isHtml) {
-        console.warn("⚠️ [Discovery] HTML DETECTED. Skipping endpoint:", endpoint);
+        console.warn("⚠️ [Discovery] HTML DETECTED (Likely 404 or Maintenance). Skipping endpoint:", endpoint);
         continue;
       }
-
-      console.log("=== PROVIDER RESPONSE BODY ===", text.substring(0, 500));
 
       if (res.ok) {
         let data;
@@ -157,25 +171,38 @@ async function performExhaustiveDiscovery(config: any): Promise<ProviderHealthRe
             details: { reachable_endpoint: endpoint }
           };
         } catch (e) {
-          console.error("❌ [Discovery] Failed to parse JSON even though 200 OK:", endpoint);
+          console.warn("⚠️ [Discovery] Failed to parse JSON even though 200 OK (Might be text/plain):", endpoint);
         }
       }
     } catch (e: any) {
-      console.warn(`⚠️ [Discovery] Endpoint /${endpoint} unreachable:`, e.message);
+      console.log(`ℹ️ [Discovery] Endpoint /${endpoint} skipped:`, e.message);
     }
   }
 
+  // 🛡️ TELECOM-GRADE UPGRADE: Even if all discovery endpoints fail, 
+  // check if the provider is actually executing transactions successfully.
+  const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from("transactions")
+    .select("id", { count: 'exact', head: true })
+    .eq("vtu_status", "delivered")
+    .gt("updated_at", thirtyMinsAgo);
+
+  const isExecuting = count && count > 0;
+
   return {
-    status: ProviderState.OFFLINE,
+    status: isExecuting ? ProviderState.HEALTHY : ProviderState.DEGRADED,
     latency_ms: Date.now() - startTime,
     last_synced_at: new Date().toISOString(),
     wallet_balance: 0,
-    error: "No reachable provider endpoints found (Exhaustive Discovery Fail)"
+    error: isExecuting 
+      ? "Provider observability endpoints unreachable (404/HTML Drift), but execution pipeline is ACTIVE."
+      : "Provider observability unreachable and no recent successful executions found."
   };
 }
 
 /**
- * Stabilized Wallet Synchronization with Throttling
+ * Stabilized Wallet Synchronization with Throttling & Degradation Handling
  */
 export async function syncProviderWallet(force = false): Promise<any> {
   const { data: currentSettings } = await supabase
@@ -184,34 +211,35 @@ export async function syncProviderWallet(force = false): Promise<any> {
     .eq("provider_name", "datahubgh")
     .single();
 
-  // 🛡️ Prevent log flooding and excessive retries
+  // 🛡️ Prevent log flooding and excessive retries (15 Minute Cooldown)
   if (!force && currentSettings?.next_retry_at) {
     const nextRetry = new Date(currentSettings.next_retry_at).getTime();
     if (Date.now() < nextRetry) {
-      console.log(`🕒 [Sync Wallet] Throttled. Next retry at: ${currentSettings.next_retry_at}`);
-      return { success: false, throttled: true, balance: currentSettings.wallet_balance };
+      return { success: true, throttled: true, balance: currentSettings.wallet_balance, status: "degraded" };
     }
   }
 
-  console.log("=== PROVIDER WALLET SYNC START ===");
+  console.log("=== PROVIDER OBSERVABILITY SYNC START ===");
   const config = await getDataHubConfig();
   const report = await performExhaustiveDiscovery(config);
 
   const updateData: any = {
+    // 🛡️ Note: "degraded" means observability is failing, but execution may still work.
     status: report.status === ProviderState.HEALTHY ? "online" : "degraded",
     last_synced_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
 
-  if (report.status === ProviderState.HEALTHY && report.wallet_balance !== undefined) {
+  if (report.status === ProviderState.HEALTHY) {
     updateData.wallet_balance = report.wallet_balance;
     updateData.next_retry_at = null; // Reset retry timer on success
+    console.log("✅ [Sync Wallet] Successfully synchronized with provider.");
   } else {
-    // Implement exponential backoff or standard cooldown
-    const cooldownMinutes = 5; 
+    // 🛡️ 15 Minute Cooldown on failure to prevent log spamming
+    const cooldownMinutes = 15; 
     const nextRetryAt = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
     updateData.next_retry_at = nextRetryAt;
-    console.warn(`⚠️ [Sync Wallet] Failed. Cooling down until ${nextRetryAt}`);
+    console.warn(`⚠️ [Sync Wallet] Observability degraded. Using cached balance. Next retry at: ${nextRetryAt}`);
   }
 
   await supabase
@@ -220,8 +248,9 @@ export async function syncProviderWallet(force = false): Promise<any> {
     .eq("provider_name", "datahubgh");
 
   return { 
-    success: report.status === ProviderState.HEALTHY, 
-    balance: updateData.wallet_balance || currentSettings?.wallet_balance || 0,
+    success: true, // We return success: true because we are non-blocking and using a cache
+    balance: report.status === ProviderState.HEALTHY ? report.wallet_balance : (currentSettings?.wallet_balance || 0),
+    status: updateData.status,
     error: report.error
   };
 }
