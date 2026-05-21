@@ -201,7 +201,7 @@ WITH CHECK (public.is_admin());
 INSERT INTO public.settings (key, value)
 VALUES (
     'general',
-    '{"app_name": "Datapapa", "currency": "GHS", "support_email": "support@datapapa.com", "maintenance_mode": false}'::jsonb
+    '{"app_name": "Datapapa", "currency": "GHS", "support_email": "support@datapapa.site", "maintenance_mode": false}'::jsonb
 )
 ON CONFLICT (key) DO NOTHING;
 
