@@ -163,6 +163,7 @@ export const PdfPreviewModal = ({
                 </PDFDownloadLink>
               </div>
             </div>
+          </div>
           {/* PDF Viewer Body */}
           <div className="flex-1 bg-slate-100 p-4">
             <PDFViewer width="100%" height="100%" className="rounded-xl border border-slate-200 shadow-sm">
