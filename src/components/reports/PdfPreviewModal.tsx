@@ -102,17 +102,12 @@ export const PdfPreviewModal = ({
               >
                 {({ loading }) => (
                   loading ? 'Preparing...' : <><Download size={16} /> Download <span className="hidden xs:inline">PDF</span></>
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 transition-colors flex items-center gap-2"
-              >
-                {({ loading }) => (
-                  loading ? 'Preparing Document...' : <><Download size={16} /> Download PDF</>
                 )}
               </PDFDownloadLink>
 
               <button 
                 onClick={onClose}
                 className="hidden sm:block p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500 ml-2"
-                className="p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500 ml-2"
                 title="Close Preview"
               >
                 <X size={20} />
