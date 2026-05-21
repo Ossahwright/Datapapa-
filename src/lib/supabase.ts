@@ -21,14 +21,22 @@ export const getSafeSession = async () => {
   try {
     const { data, error } = await supabase.auth.getSession();
     if (error) {
-      if (error.message?.includes('Refresh Token Not Found') || error.message?.includes('Auth session missing') || error.status === 400) {
+      const errMsg = (error.message || '').toLowerCase();
+      if (
+        errMsg.includes('refresh token') ||
+        errMsg.includes('session missing') ||
+        errMsg.includes('invalid_grant') ||
+        error.status === 400 ||
+        error.status === 401
+      ) {
         console.warn('Stale session detected, signing out...');
-        await supabase.auth.signOut();
+        localStorage.removeItem('datapapa-auth-token');
+        await supabase.auth.signOut().catch(() => {});
         return { session: null, error: null };
       }
       return { session: null, error };
     }
-    return { session: data.session, error: null };
+    return { session: data?.session || null, error: null };
   } catch (err) {
     console.error('Session retrieval failed:', err);
     return { session: null, error: err };

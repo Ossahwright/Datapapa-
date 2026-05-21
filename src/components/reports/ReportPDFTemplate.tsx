@@ -102,7 +102,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     padding: 10,
     borderRadius: 4,
-    border: '1 solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
   },
   metadataItem: {
     width: '33%',
@@ -132,7 +134,9 @@ const styles = StyleSheet.create({
     width: '24%',
     padding: 10,
     backgroundColor: '#ffffff',
-    border: '1 solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 4,
   },
   kpiLabel: {
@@ -159,7 +163,9 @@ const styles = StyleSheet.create({
   },
   intelTable: {
     width: '100%',
-    border: '1 solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 4,
     overflow: 'hidden',
   },
@@ -175,7 +181,9 @@ const styles = StyleSheet.create({
   },
   intelRowItem: {
     flexDirection: 'row',
-    borderBottom: '1 solid #f1f5f9',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    borderBottomStyle: 'solid',
     padding: 6,
   },
   intelCellText: {
@@ -191,7 +199,9 @@ const styles = StyleSheet.create({
   tableHeader: {
     flexDirection: 'row',
     backgroundColor: '#f1f5f9',
-    borderBottom: '1.5 solid #0f172a',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#0f172a',
+    borderBottomStyle: 'solid',
     padding: 8,
   },
   tableHeaderCell: {
@@ -202,7 +212,9 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: 'row',
-    borderBottom: '1 solid #f1f5f9',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    borderBottomStyle: 'solid',
     padding: 8,
   },
   tableCell: {
@@ -212,7 +224,9 @@ const styles = StyleSheet.create({
   groupHeader: {
     backgroundColor: '#f8fafc',
     padding: 6,
-    borderLeft: '3 solid #indigo-600',
+    borderLeftWidth: 3,
+    borderLeftColor: '#4f46e5',
+    borderLeftStyle: 'solid',
     marginTop: 5,
   },
   groupHeaderText: {
@@ -248,7 +262,9 @@ const styles = StyleSheet.create({
     bottom: 20,
     left: 30,
     right: 30,
-    borderTop: '1 solid #e2e8f0',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    borderTopStyle: 'solid',
     paddingTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',

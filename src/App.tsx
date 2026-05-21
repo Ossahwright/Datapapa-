@@ -65,12 +65,17 @@ export default function App() {
         
         if (error) {
           // If refresh token is missing or invalid, clear everything
+          const errMsg = (error.message || '').toLowerCase();
           if (
-            error.message?.includes('Refresh Token Not Found') ||
-            error.message?.includes('Auth session missing')
+            errMsg.includes('refresh token') ||
+            errMsg.includes('session missing') ||
+            errMsg.includes('invalid_grant') ||
+            error.status === 400 ||
+            error.status === 401
           ) {
             console.warn('Auth issue detected in App.tsx, signing out...');
-            await supabase.auth.signOut();
+            localStorage.removeItem('datapapa-auth-token');
+            await supabase.auth.signOut().catch(() => {});
             setUserRole(null);
             return;
           }
