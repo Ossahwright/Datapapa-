@@ -2711,7 +2711,6 @@ export default function AdminDashboard() {
                                   : tx.status === "fulfillment_processing" 
                                     ? "Processing"
                                     : tx.status === "initialized" ? ((Date.now() - new Date(tx.created_at).getTime()) > 3600000 ? "Abandoned" : "Initialized") : tx.status || "N/A"}
-                                    : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -4299,7 +4298,6 @@ export default function AdminDashboard() {
                               }`}
                             >
                               {tx.status === "success" || tx.status === "paid" ? "Success" : tx.status === "initialized" ? ((Date.now() - new Date(tx.created_at).getTime()) > 3600000 ? "Abandoned" : "Initialized") : tx.status || "N/A"}
-                              {tx.status === "success" || tx.status === "paid" ? "Success" : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
                             </span>
                           </div>
                         </div>
