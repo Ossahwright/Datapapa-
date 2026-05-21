@@ -76,6 +76,7 @@ export default function App() {
             console.warn('Auth issue detected in App.tsx, signing out...');
             localStorage.removeItem('datapapa-auth-token');
             await supabase.auth.signOut().catch(() => {});
+            }
           if (
             error.message?.includes('Refresh Token Not Found') ||
             error.message?.includes('Auth session missing')
