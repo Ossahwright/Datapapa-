@@ -110,7 +110,6 @@ export function ReportsView() {
         const newTx = payload.new as any;
         const oldTx = payload.old as any;
         const createdDate = new Date(newTx?.created_at || oldTx?.created_at);
-        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
         if (createdDate >= startDate && createdDate <= endDate) {
           setData((currentData) => {
             if (payload.eventType === 'INSERT') {
@@ -132,7 +131,6 @@ export function ReportsView() {
         const newLog = payload.new as any;
         const oldLog = payload.old as any;
         const createdDate = new Date(newLog?.created_at || oldLog?.created_at);
-        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
         if (createdDate >= startDate && createdDate <= endDate) {
           setLogs((currentLogs) => {
             if (payload.eventType === 'INSERT') {
