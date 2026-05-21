@@ -104,61 +104,9 @@ export const PdfPreviewModal = ({
                 <X size={20} />
               </button>
             </div>
-          </div>
-
-          {/* PDF Viewer Body - Responsive Handling */}
-          <div className="flex-1 bg-slate-100 p-2 sm:p-4 overflow-auto">
-            {/* Desktop Experience: Full PDF Viewer */}
-            <div className="hidden sm:block h-full w-full">
-              <PDFViewer width="100%" height="100%" className="rounded-xl border border-slate-200 shadow-sm bg-white">
-                {pdfDoc}
-              </PDFViewer>
-            </div>
-
-            {/* Mobile Experience: Mobile Intelligence Deck (Fallback since PDFViewer fails on mobile) */}
-            <div className="sm:hidden flex flex-col items-center justify-center h-full text-center space-y-6 px-4 py-8">
-              <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 animate-pulse">
-                <FileText size={40} />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Intelligence Ready</h3>
-                <p className="text-slate-500 text-sm font-medium max-w-xs mx-auto leading-relaxed">
-                  The high-fidelity enterprise ledger has been synthesized. Mobile browsers require manual download for full intelligence review.
-                </p>
-              </div>
-              
-              <div className="w-full max-w-xs bg-white rounded-2xl border border-slate-200 p-4 shadow-sm text-left space-y-3">
-                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase">Transactions</span>
-                  <span className="text-sm font-bold text-slate-900">{kpi.totalTransactions}</span>
-                </div>
-                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase">Revenue</span>
-                  <span className="text-sm font-bold text-emerald-600">₵{Number(kpi.totalRevenue).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase">Status</span>
-                  <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase">Encrypted LEDGER</span>
-                </div>
-              </div>
-
-              <div className="w-full pt-4">
-                <PDFDownloadLink
-                  document={pdfDoc}
-                  fileName={`Datapapa_Report_${dateRangeLabel.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
-                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm hover:bg-indigo-700 transition-all flex items-center justify-center gap-3 shadow-xl shadow-indigo-100"
-                >
-                  {({ loading }) => (
-                    loading ? 'Processing...' : <><Download size={18} /> OPEN FULL INTELLIGENCE REPORT</>
-                  )}
-                </PDFDownloadLink>
-              </div>
-            </div>
-          </div>
-
-        </div>
       </div>
       
+        </div>
       {/* Hidden layout only visible during window.print() */}
       <PrintReportLayout 
         data={data} 
