@@ -1272,16 +1272,13 @@ export default function AdminDashboard() {
     }
 
     if (vtu === 'initialized' || tx.status === 'initialized') {
-<<<<<<< HEAD
       const isStale = (Date.now() - new Date(tx.created_at).getTime()) > 3600000;
       return { 
         label: isStale ? 'Abandoned' : 'Initialized', 
         color: isStale ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-100 text-slate-700 border-slate-200', 
-=======
       return { 
         label: 'Initialized', 
         color: 'bg-slate-100 text-slate-700 border-slate-200', 
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         icon: <Clock size={10} className="mr-1" /> 
       };
     }
@@ -2716,11 +2713,8 @@ export default function AdminDashboard() {
                                   ? "Success"
                                   : tx.status === "fulfillment_processing" 
                                     ? "Processing"
-<<<<<<< HEAD
                                     : tx.status === "initialized" ? ((Date.now() - new Date(tx.created_at).getTime()) > 3600000 ? "Abandoned" : "Initialized") : tx.status || "N/A"}
-=======
                                     : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -4307,11 +4301,8 @@ export default function AdminDashboard() {
                                       : "bg-slate-100 text-slate-700"
                               }`}
                             >
-<<<<<<< HEAD
                               {tx.status === "success" || tx.status === "paid" ? "Success" : tx.status === "initialized" ? ((Date.now() - new Date(tx.created_at).getTime()) > 3600000 ? "Abandoned" : "Initialized") : tx.status || "N/A"}
-=======
                               {tx.status === "success" || tx.status === "paid" ? "Success" : tx.status === "initialized" ? "Initialized" : tx.status || "N/A"}
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
                             </span>
                           </div>
                         </div>

@@ -8,10 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-<<<<<<< HEAD
   console.log("🛠️ Initializing Express app...");
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
   const app = express();
   const PORT = 3000;
 
@@ -19,7 +16,6 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-<<<<<<< HEAD
   // Add a hardcoded health check to verify the server is alive
   app.get("/api/health-check", (req, res) => {
     res.json({ status: "alive", timestamp: new Date().toISOString() });
@@ -32,17 +28,14 @@ async function startServer() {
   console.log("🌐 Registering API Bridge...");
   // API Bridge: Dynamically handle scripts in /api folder
   app.all("/api/*any", async (req, res, next) => {
-=======
   // API Bridge: Dynamically handle scripts in /api folder
   app.all("/api/*", async (req, res, next) => {
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     const apiPath = req.path; // e.g. /api/admin-ops
     const relativeFilePath = apiPath.slice(1) + ".ts"; // e.g. api/admin-ops.ts
     const filePath = path.resolve(process.cwd(), relativeFilePath);
 
     if (fs.existsSync(filePath)) {
       try {
-<<<<<<< HEAD
         const resProxy = res as any;
         if (!resProxy.status) {
           resProxy.status = (code: number) => {
@@ -60,46 +53,35 @@ async function startServer() {
 
         let handler;
         if (process.env.NODE_ENV !== "production") {
-=======
         let handler;
         if (process.env.NODE_ENV !== "production") {
           // In dev, use Vite's ssrLoadModule for HMR
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
           const vite = (app as any).vite;
           if (vite) {
             const module = await vite.ssrLoadModule(filePath);
             handler = module.default;
           }
         } else {
-<<<<<<< HEAD
-=======
           // In production, we might need a different way if we aren't bundling API files.
           // However, the instructions say to bundle server.ts.
           // For simplicity in this bridge, we'll try to import directly or use a pre-bundled map.
           // But since we are using esbuild for server.ts, we should probably just import it.
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
           const module = await import(filePath);
           handler = module.default;
         }
 
         if (typeof handler === "function") {
-<<<<<<< HEAD
           return await handler(req, resProxy);
-=======
           return await handler(req, res);
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         } else {
           return res.status(500).json({ error: `No default export found in ${relativeFilePath}` });
         }
       } catch (e: any) {
         console.error(`[Server] API Error in ${apiPath}:`, e);
-<<<<<<< HEAD
         if (!res.headersSent) {
           return res.status(500).json({ error: e.message, stack: e.stack });
         }
-=======
         return res.status(500).json({ error: e.message });
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
       }
     }
     next();
@@ -107,15 +89,11 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-<<<<<<< HEAD
     console.log("⚡ Starting Vite in middleware mode...");
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
-<<<<<<< HEAD
     console.log("✅ Vite middleware initialized.");
     (app as any).vite = vite;
     app.use(vite.middlewares);
@@ -124,19 +102,16 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*any", (req, res) => {
-=======
     (app as any).vite = vite;
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-<<<<<<< HEAD
   console.log(`📡 Attempting to listen on port ${PORT}...`);
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server fully operational at http://localhost:${PORT}`);
@@ -149,11 +124,9 @@ console.log("🚀 Starting Datapapa Production Server...");
 startServer().catch((err) => {
   console.error("💥 CRITICAL STARTUP ERROR:", err);
 });
-=======
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
   });
 }
 
 startServer().catch(console.error);
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b

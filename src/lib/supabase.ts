@@ -21,7 +21,6 @@ export const getSafeSession = async () => {
   try {
     const { data, error } = await supabase.auth.getSession();
     if (error) {
-<<<<<<< HEAD
       const errMsg = (error.message || '').toLowerCase();
       if (
         errMsg.includes('refresh token') ||
@@ -33,20 +32,15 @@ export const getSafeSession = async () => {
         console.warn('Stale session detected, signing out...');
         localStorage.removeItem('datapapa-auth-token');
         await supabase.auth.signOut().catch(() => {});
-=======
       if (error.message?.includes('Refresh Token Not Found') || error.message?.includes('Auth session missing') || error.status === 400) {
         console.warn('Stale session detected, signing out...');
         await supabase.auth.signOut();
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         return { session: null, error: null };
       }
       return { session: null, error };
     }
-<<<<<<< HEAD
     return { session: data?.session || null, error: null };
-=======
     return { session: data.session, error: null };
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
   } catch (err) {
     console.error('Session retrieval failed:', err);
     return { session: null, error: err };

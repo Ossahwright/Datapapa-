@@ -185,12 +185,9 @@ export default function Receipt() {
       };
     }
 
-<<<<<<< HEAD
     const age = Date.now() - new Date(tx.created_at).getTime();
     const isStale = age > 3600000;
 
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     if (isPaid) {
       return {
         status: 'Processing',
@@ -212,7 +209,6 @@ export default function Receipt() {
     }
 
     return {
-<<<<<<< HEAD
       status: isStale ? 'Expired' : 'Awaiting',
       title: isStale ? 'SESSION EXPIRED' : 'PAYMENT PENDING',
       message: isStale ? 'Payment Timed Out' : 'Checking status...',
@@ -221,14 +217,12 @@ export default function Receipt() {
         : 'We are waiting for a final confirmation from the payment provider.',
       color: isStale ? 'slate' : 'amber',
       icon: isStale ? <XCircle className="w-10 h-10 text-slate-400" /> : <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
-=======
       status: 'Awaiting',
       title: 'PAYMENT PENDING',
       message: 'Checking status...',
       subMessage: 'We are waiting for a final confirmation from the payment provider.',
       color: 'amber',
       icon: <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     };
   };
 

@@ -163,7 +163,6 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'bulk_reconcile': {
-<<<<<<< HEAD
         // 🛡️ PART 1: Cleanup stale "initialized" transactions (> 1 hour old)
         const hourAgo = new Date(Date.now() - 3600000).toISOString();
         const { data: staleTxs } = await supabase
@@ -188,8 +187,6 @@ export default async function handler(req: any, res: any) {
         }
 
         // 🔄 PART 2: Reconcile processing transactions
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         const { data: txs } = await supabase.from("transactions").select("id").in("vtu_status", [
           'processing', 'provider_execution_started', 'provider_accepted', 
           'awaiting_provider_confirmation', 'reconciliation_pending', 'delayed_provider_processing'

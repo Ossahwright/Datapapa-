@@ -14,8 +14,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(), 
       tailwindcss(),
-<<<<<<< HEAD
-=======
+
       {
         name: 'vercel-api-bridge',
         configureServer(server) {
@@ -106,7 +105,7 @@ export default defineConfig(({ mode }) => {
           });
         }
       }
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
+ e6fd22d669f549986d7f8c754e04fcae1247078b
     ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),

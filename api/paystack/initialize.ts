@@ -85,7 +85,6 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Failed to create payment intent in database." });
     }
 
-<<<<<<< HEAD
     // 🚀 STAGE EXPLICIT PAYER IDENTITY FOR COMPLIANCE (using payer_phone_number)
     const rawPayerPhone = payerPhone || phone;
     
@@ -111,8 +110,6 @@ export default async function handler(req: any, res: any) {
     console.log("=== PAYER PHONE ===", payerPhoneNumber);
     console.log("=== PAYSTACK EMAIL ===", paystackEmail);
 
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
     // We update the record to ensure identity convergence across ALL reference fields.
     await supabase.from("transactions").update({ 
@@ -122,7 +119,6 @@ export default async function handler(req: any, res: any) {
       reference: transaction.id           // Converging back to UUID
     }).eq("id", transaction.id);
 
-<<<<<<< HEAD
     // Step 5: Defensive Transaction Column Persistence (fails gracefully if schema hasn't run yet)
     try {
       const { error: dbColErr } = await supabase.from("transactions").update({
@@ -137,8 +133,6 @@ export default async function handler(req: any, res: any) {
       console.warn("⚠️ Database column customer_payment_email might not exist yet, defaulting to metadata-only storage:", colErr.message || colErr);
     }
 
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
     console.log("📍 UUID (ID):", transaction.id);
 
@@ -148,20 +142,14 @@ export default async function handler(req: any, res: any) {
       config: {
         reference: transaction.id, // 🚀 AUTHORITATIVE REFERENCE = UUID
         amount: Math.round(authoritativeAmount * 100),
-<<<<<<< HEAD
         email: paystackEmail,
-=======
         email: 'customer@datapapa.com',
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         transaction_id: transaction.id,
         metadata: {
           transaction_id: transaction.id, // 🚀 METADATA SYNC
           phone,
-<<<<<<< HEAD
           customer_payment_email: paystackEmail, // Step 5: Metadata persistence
           payer_phone: payerPhoneNumber,
-=======
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
           network: bundle.network,
           bundle: bundle.capacity,
           platform

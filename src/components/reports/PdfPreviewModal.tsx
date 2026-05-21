@@ -45,7 +45,6 @@ export const PdfPreviewModal = ({
 
   return (
     <>
-<<<<<<< HEAD
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-slate-900/90 backdrop-blur-sm print:hidden">
         <div className="bg-white w-full h-full sm:h-[90vh] sm:max-w-6xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
           
@@ -73,7 +72,6 @@ export const PdfPreviewModal = ({
                 className="flex-1 sm:flex-none px-3 py-2.5 sm:px-4 sm:py-2 bg-white text-slate-700 border border-slate-200 rounded-xl sm:rounded-lg font-bold text-xs sm:text-sm hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
               >
                 <Printer size={16} /> <span className="hidden xs:inline">Print</span><span className="xs:hidden">Print</span>
-=======
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm print:hidden">
         <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
           
@@ -95,33 +93,26 @@ export const PdfPreviewModal = ({
                 className="px-4 py-2 bg-white text-slate-700 border border-slate-200 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors flex items-center gap-2"
               >
                 <Printer size={16} /> Print Report
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
               </button>
 
               <PDFDownloadLink
                 document={pdfDoc}
                 fileName={`Datapapa_Report_${dateRangeLabel.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
-<<<<<<< HEAD
                 className="flex-[2] sm:flex-none px-3 py-2.5 sm:px-4 sm:py-2 bg-indigo-600 text-white rounded-xl sm:rounded-lg font-bold text-xs sm:text-sm hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
               >
                 {({ loading }) => (
                   loading ? 'Preparing...' : <><Download size={16} /> Download <span className="hidden xs:inline">PDF</span></>
-=======
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 transition-colors flex items-center gap-2"
               >
                 {({ loading }) => (
                   loading ? 'Preparing Document...' : <><Download size={16} /> Download PDF</>
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
                 )}
               </PDFDownloadLink>
 
               <button 
                 onClick={onClose}
-<<<<<<< HEAD
                 className="hidden sm:block p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500 ml-2"
-=======
                 className="p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500 ml-2"
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
                 title="Close Preview"
               >
                 <X size={20} />
@@ -129,7 +120,6 @@ export const PdfPreviewModal = ({
             </div>
           </div>
 
-<<<<<<< HEAD
           {/* PDF Viewer Body - Responsive Handling */}
           <div className="flex-1 bg-slate-100 p-2 sm:p-4 overflow-auto">
             {/* Desktop Experience: Full PDF Viewer */}
@@ -178,13 +168,11 @@ export const PdfPreviewModal = ({
                 </PDFDownloadLink>
               </div>
             </div>
-=======
           {/* PDF Viewer Body */}
           <div className="flex-1 bg-slate-100 p-4">
             <PDFViewer width="100%" height="100%" className="rounded-xl border border-slate-200 shadow-sm">
               {pdfDoc}
             </PDFViewer>
->>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
           </div>
 
         </div>
