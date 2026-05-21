@@ -216,13 +216,7 @@ export default function Receipt() {
         ? 'This transaction session has expired as no payment was confirmed within 1 hour.' 
         : 'We are waiting for a final confirmation from the payment provider.',
       color: isStale ? 'slate' : 'amber',
-      icon: isStale ? <XCircle className="w-10 h-10 text-slate-400" /> : <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
-      status: 'Awaiting',
-      title: 'PAYMENT PENDING',
-      message: 'Checking status...',
-      subMessage: 'We are waiting for a final confirmation from the payment provider.',
-      color: 'amber',
-      icon: <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
+      icon: isStale ? <XCircle className="w-10 h-10 text-slate-400" /> : <Loader2 className="w-10 h-10 text-amber-500 animate-spin" /> ,
     };
   };
 
