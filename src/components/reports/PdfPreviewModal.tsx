@@ -66,47 +66,10 @@ export const PdfPreviewModal = ({
               </button>
             </div>
             
-        <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50/50">
-            <div className="flex items-center gap-3 text-slate-800">
-              <div className="p-2 bg-indigo-100 text-indigo-700 rounded-lg">
-                <FileText size={20} />
-              </div>
-              <div>
-                <h2 className="font-bold text-lg leading-tight">Executive Report Preview</h2>
-                <p className="text-xs text-slate-500 font-medium">Datapapa Intelligence Ledger</p>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handlePrint}
-                className="px-4 py-2 bg-white text-slate-700 border border-slate-200 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors flex items-center gap-2"
-              >
-                <Printer size={16} /> Print Report
-              </button>
-
-              <PDFDownloadLink
-                document={pdfDoc}
-                fileName={`Datapapa_Report_${dateRangeLabel.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
-                className="flex-[2] sm:flex-none px-3 py-2.5 sm:px-4 sm:py-2 bg-indigo-600 text-white rounded-xl sm:rounded-lg font-bold text-xs sm:text-sm hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
-              >
-                {({ loading }) => (
-                  loading ? 'Preparing...' : <><Download size={16} /> Download <span className="hidden xs:inline">PDF</span></>
-                )}
-              </PDFDownloadLink>
-
-              <button 
-                onClick={onClose}
-                className="hidden sm:block p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-500 ml-2"
-                title="Close Preview"
-              >
-                <X size={20} />
-              </button>
-            </div>
-      </div>
       
         </div>
+        </div>
+      </div>
       {/* Hidden layout only visible during window.print() */}
       <PrintReportLayout 
         data={data} 
