@@ -7,7 +7,10 @@ ADD COLUMN IF NOT EXISTS payer_phone_number TEXT,
 ADD COLUMN IF NOT EXISTS datahub_network_key TEXT,
 ADD COLUMN IF NOT EXISTS datahub_capacity TEXT,
 ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0,
+<<<<<<< HEAD
 ADD COLUMN IF NOT EXISTS customer_payment_email TEXT,
+=======
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
 ADD COLUMN IF NOT EXISTS error_message TEXT;
 
 -- 2. Rename or Create datahub_logs table

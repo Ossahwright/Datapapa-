@@ -107,9 +107,13 @@ export function ReportsView() {
       .channel('reports-tx-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
         // Only accept if within current date range
+<<<<<<< HEAD
         const newTx = payload.new as any;
         const oldTx = payload.old as any;
         const createdDate = new Date(newTx?.created_at || oldTx?.created_at);
+=======
+        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         if (createdDate >= startDate && createdDate <= endDate) {
           setData((currentData) => {
             if (payload.eventType === 'INSERT') {
@@ -128,9 +132,13 @@ export function ReportsView() {
     const logsChannel = supabase
       .channel('reports-logs-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'datahub_logs' }, (payload) => {
+<<<<<<< HEAD
         const newLog = payload.new as any;
         const oldLog = payload.old as any;
         const createdDate = new Date(newLog?.created_at || oldLog?.created_at);
+=======
+        const createdDate = new Date(payload.new?.created_at || payload.old?.created_at);
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
         if (createdDate >= startDate && createdDate <= endDate) {
           setLogs((currentLogs) => {
             if (payload.eventType === 'INSERT') {

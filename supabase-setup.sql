@@ -51,7 +51,10 @@ CREATE TABLE public.transactions (
     error_message TEXT,
     api_response JSONB,
     profit NUMERIC,
+<<<<<<< HEAD
     customer_payment_email TEXT,
+=======
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );

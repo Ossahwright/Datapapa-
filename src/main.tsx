@@ -2,6 +2,7 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
+<<<<<<< HEAD
 // Global error handlers to capture stale/invalid Supabase refresh tokens
 const cleanStaleAuthSession = (message: string) => {
   const normMsg = message.toLowerCase();
@@ -36,6 +37,8 @@ window.addEventListener('error', (event) => {
   }
 });
 
+=======
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
 createRoot(document.getElementById('root')!).render(
   <App />
 );

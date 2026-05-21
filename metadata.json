@@ -2,5 +2,9 @@
   "name": "Datapapa",
   "description": "Premium internet data reselling platform for instant mobile data bundles.",
   "requestFramePermissions": [],
+<<<<<<< HEAD
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+=======
+  "majorCapabilities": []
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
 }

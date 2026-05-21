@@ -1,6 +1,9 @@
 import React from 'react';
 import { Document, Page, Text, View, StyleSheet, Image, Font } from '@react-pdf/renderer';
+<<<<<<< HEAD
 import { format } from 'date-fns';
+=======
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
 
 // Register fonts if needed, or use default Helvetica
 Font.register({
@@ -102,9 +105,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     padding: 10,
     borderRadius: 4,
+<<<<<<< HEAD
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#e2e8f0',
+=======
+    border: '1 solid #e2e8f0',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
   },
   metadataItem: {
     width: '33%',
@@ -134,9 +141,13 @@ const styles = StyleSheet.create({
     width: '24%',
     padding: 10,
     backgroundColor: '#ffffff',
+<<<<<<< HEAD
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#e2e8f0',
+=======
+    border: '1 solid #e2e8f0',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     borderRadius: 4,
   },
   kpiLabel: {
@@ -163,9 +174,13 @@ const styles = StyleSheet.create({
   },
   intelTable: {
     width: '100%',
+<<<<<<< HEAD
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#e2e8f0',
+=======
+    border: '1 solid #e2e8f0',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     borderRadius: 4,
     overflow: 'hidden',
   },
@@ -181,9 +196,13 @@ const styles = StyleSheet.create({
   },
   intelRowItem: {
     flexDirection: 'row',
+<<<<<<< HEAD
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
     borderBottomStyle: 'solid',
+=======
+    borderBottom: '1 solid #f1f5f9',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     padding: 6,
   },
   intelCellText: {
@@ -199,9 +218,13 @@ const styles = StyleSheet.create({
   tableHeader: {
     flexDirection: 'row',
     backgroundColor: '#f1f5f9',
+<<<<<<< HEAD
     borderBottomWidth: 1.5,
     borderBottomColor: '#0f172a',
     borderBottomStyle: 'solid',
+=======
+    borderBottom: '1.5 solid #0f172a',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     padding: 8,
   },
   tableHeaderCell: {
@@ -212,9 +235,13 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: 'row',
+<<<<<<< HEAD
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
     borderBottomStyle: 'solid',
+=======
+    borderBottom: '1 solid #f1f5f9',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     padding: 8,
   },
   tableCell: {
@@ -224,9 +251,13 @@ const styles = StyleSheet.create({
   groupHeader: {
     backgroundColor: '#f8fafc',
     padding: 6,
+<<<<<<< HEAD
     borderLeftWidth: 3,
     borderLeftColor: '#4f46e5',
     borderLeftStyle: 'solid',
+=======
+    borderLeft: '3 solid #indigo-600',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     marginTop: 5,
   },
   groupHeaderText: {
@@ -262,9 +293,13 @@ const styles = StyleSheet.create({
     bottom: 20,
     left: 30,
     right: 30,
+<<<<<<< HEAD
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
     borderTopStyle: 'solid',
+=======
+    borderTop: '1 solid #e2e8f0',
+>>>>>>> e6fd22d669f549986d7f8c754e04fcae1247078b
     paddingTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
