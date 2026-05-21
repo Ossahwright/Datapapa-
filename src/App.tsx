@@ -45,7 +45,7 @@ export default function App() {
       setSettings({
         app_name: 'Datapapa',
         currency: 'GHS',
-        support_email: 'support@datapapa.com',
+        support_email: 'support@datapapa.site',
         maintenance_mode: false,
       });
     }

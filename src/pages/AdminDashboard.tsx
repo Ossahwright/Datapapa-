@@ -150,7 +150,7 @@ export default function AdminDashboard() {
   const [appSettings, setAppSettings] = useState({
     app_name: "Datapapa",
     currency: "GHS",
-    support_email: "support@datapapa.com",
+    support_email: "support@datapapa.site",
     maintenance_mode: false,
   });
   const [secureSettings, setSecureSettings] = useState({

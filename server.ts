@@ -4,8 +4,44 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
 
+import apiAdminOps from "./api/admin-ops.ts";
+import apiAdminRewards from "./api/admin-rewards.ts";
+import apiDatahubWebhook from "./api/datahub-webhook.ts";
+import apiPaystackInitialize from "./api/paystack/initialize.ts";
+import apiPaystackWebhook from "./api/paystack-webhook.ts";
+import apiPurchaseData from "./api/purchase-data.ts";
+import apiReceipt from "./api/receipt.ts";
+import apiSystemStatus from "./api/system-status.ts";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function routeHandler(handler: any) {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const resProxy = res as any;
+      if (!resProxy.status) {
+        resProxy.status = (code: number) => {
+          res.statusCode = code;
+          return resProxy;
+        };
+      }
+      if (!resProxy.json) {
+        resProxy.json = (data: any) => {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(data));
+          return resProxy;
+        };
+      }
+      return await handler(req, resProxy);
+    } catch (e: any) {
+      console.error(`[Server] API Error in ${req.path}:`, e);
+      if (!res.headersSent) {
+        return res.status(500).json({ error: e.message, stack: e.stack });
+      }
+    }
+  };
+}
 
 async function startServer() {
   console.log("🛠️ Initializing Express app...");
@@ -26,55 +62,14 @@ async function startServer() {
   });
 
   console.log("🌐 Registering API Bridge...");
-  // API Bridge: Dynamically handle scripts in /api folder
-  app.all("/api/*", async (req, res, next) => {
-    const apiPath = req.path; // e.g. /api/admin-ops
-    const relativeFilePath = apiPath.slice(1) + ".ts"; // e.g. api/admin-ops.ts
-    const filePath = path.resolve(process.cwd(), relativeFilePath);
-
-    if (fs.existsSync(filePath)) {
-      try {
-        const resProxy = res as any;
-        if (!resProxy.status) {
-          resProxy.status = (code: number) => {
-            res.statusCode = code;
-            return resProxy;
-          };
-        }
-        if (!resProxy.json) {
-          resProxy.json = (data: any) => {
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify(data));
-            return resProxy;
-          };
-        }
-
-        let handler;
-        if (process.env.NODE_ENV !== "production") {
-          const vite = (app as any).vite;
-          if (vite) {
-            const module = await vite.ssrLoadModule(filePath);
-            handler = module.default;
-          }
-        } else {
-          const module = await import(filePath);
-          handler = module.default;
-        }
-
-        if (typeof handler === "function") {
-          return await handler(req, resProxy);
-        } else {
-          return res.status(500).json({ error: `No default export found in ${relativeFilePath}` });
-        }
-      } catch (e: any) {
-        console.error(`[Server] API Error in ${apiPath}:`, e);
-        if (!res.headersSent) {
-          return res.status(500).json({ error: e.message, stack: e.stack });
-        }
-      }
-    }
-    next();
-  });
+  app.all('/api/admin-ops', routeHandler(apiAdminOps));
+  app.all('/api/admin-rewards', routeHandler(apiAdminRewards));
+  app.all('/api/datahub-webhook', routeHandler(apiDatahubWebhook));
+  app.all('/api/paystack/initialize', routeHandler(apiPaystackInitialize));
+  app.all('/api/paystack-webhook', routeHandler(apiPaystackWebhook));
+  app.all('/api/purchase-data', routeHandler(apiPurchaseData));
+  app.all('/api/receipt', routeHandler(apiReceipt));
+  app.all('/api/system-status', routeHandler(apiSystemStatus));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -90,7 +85,7 @@ async function startServer() {
     console.log("📦 Serving production build from dist/ folder...");
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*any", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

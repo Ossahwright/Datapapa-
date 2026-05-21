@@ -197,7 +197,7 @@ export default function AdminAuth() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="block w-full pl-10 pr-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-transparent transition-all outline-none"
-                placeholder="admin@datapapa.com"
+                placeholder="admin@datapapa.site"
               />
             </div>
           </div>

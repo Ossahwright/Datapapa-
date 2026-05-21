@@ -85,6 +85,26 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: "Failed to create payment intent in database." });
     }
 
+    // 🚀 STAGE EXPLICIT PAYER IDENTITY FOR COMPLIANCE (using payer_phone_number)
+    const rawPayerPhone = payerPhone || phone;
+    
+    // STEP 6: Defensive Sanitization of phone string
+    const payerPhoneNumber = (rawPayerPhone || "").toString().trim();
+    
+    // Generate deterministic customer email using payer phone number:
+    const normalizedPhone = payerPhoneNumber.replace(/\D/g, '').trim();
+
+    const customerEmail =
+      normalizedPhone.length > 0
+        ? `${normalizedPhone}@datapapa.site`
+        : `guest_${Date.now()}@datapapa.site`;
+
+    // STEP 7: Forensic Payment Logging & Verification
+    console.log("FINAL PAYSTACK CUSTOMER EMAIL:", customerEmail);
+    console.log("=== PAYSTACK CUSTOMER EMAIL GENERATED ===");
+    console.log("=== PAYER PHONE ===", normalizedPhone);
+    console.log("=== PAYSTACK EMAIL ===", customerEmail);
+
     // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
     // We update the record to ensure identity convergence across ALL reference fields.
     await supabase.from("transactions").update({ 
@@ -93,6 +113,20 @@ export default async function handler(req: any, res: any) {
       internal_reference: transaction.id, // Converging all back to UUID
       reference: transaction.id           // Converging back to UUID
     }).eq("id", transaction.id);
+
+    // Step 5: Defensive Transaction Column Persistence (fails gracefully if schema hasn't run yet)
+    try {
+      const { error: dbColErr } = await supabase.from("transactions").update({
+        customer_payment_email: customerEmail
+      }).eq("id", transaction.id);
+      
+      if (dbColErr) {
+        throw dbColErr;
+      }
+      console.log("💾 Compliance email successfully saved to transaction database column.");
+    } catch (colErr: any) {
+      console.warn("⚠️ Database column customer_payment_email might not exist yet, defaulting to metadata-only storage:", colErr.message || colErr);
+    }
 
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
     console.log("📍 UUID (ID):", transaction.id);
@@ -103,11 +137,13 @@ export default async function handler(req: any, res: any) {
       config: {
         reference: transaction.id, // 🚀 AUTHORITATIVE REFERENCE = UUID
         amount: Math.round(authoritativeAmount * 100),
-        email: 'customer@datapapa.com',
+        email: customerEmail,
         transaction_id: transaction.id,
         metadata: {
           transaction_id: transaction.id, // 🚀 METADATA SYNC
           phone,
+          customer_payment_email: customerEmail, // Step 5: Metadata persistence
+          payer_phone: normalizedPhone,
           network: bundle.network,
           bundle: bundle.capacity,
           platform

@@ -43,7 +43,7 @@ export default function BuyDataForm({ settings }: BuyDataFormProps) {
 
   const appName = settings?.app_name || "Datapapa";
   const currency = settings?.currency || "GHS";
-  const supportEmail = settings?.support_email || "support@datapapa.com";
+  const supportEmail = settings?.support_email || "support@datapapa.site";
 
   const fetchBundles = async (retryCount = 0) => {
     if (supabaseReady) {
