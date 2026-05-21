@@ -66,16 +66,7 @@ export const PdfPreviewModal = ({
               </button>
             </div>
             
-            <div className="flex items-center gap-2 sm:gap-3">
-              <button
-                onClick={handlePrint}
-                className="flex-1 sm:flex-none px-3 py-2.5 sm:px-4 sm:py-2 bg-white text-slate-700 border border-slate-200 rounded-xl sm:rounded-lg font-bold text-xs sm:text-sm hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
-              >
-                <Printer size={16} /> <span className="hidden xs:inline">Print</span><span className="xs:hidden">Print</span>
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm print:hidden">
         <div className="bg-white w-full max-w-6xl h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          
-          {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50/50">
             <div className="flex items-center gap-3 text-slate-800">
               <div className="p-2 bg-indigo-100 text-indigo-700 rounded-lg">
