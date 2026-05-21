@@ -32,10 +32,13 @@ export const getSafeSession = async () => {
         console.warn('Stale session detected, signing out...');
         localStorage.removeItem('datapapa-auth-token');
         await supabase.auth.signOut().catch(() => {});
-     
+        return { session: null, error: null };
+      }
+
+      return { session: null, error };
     }
+     
     return { session: data?.session || null, error: null };
-    return { session: data.session, error: null };
   } catch (err) {
     console.error('Session retrieval failed:', err);
     return { session: null, error: err };
