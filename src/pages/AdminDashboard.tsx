@@ -1276,10 +1276,7 @@ export default function AdminDashboard() {
       return { 
         label: isStale ? 'Abandoned' : 'Initialized', 
         color: isStale ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-100 text-slate-700 border-slate-200', 
-      return { 
-        label: 'Initialized', 
-        color: 'bg-slate-100 text-slate-700 border-slate-200', 
-        icon: <Clock size={10} className="mr-1" /> 
+        icon: <Clock size={10} className="mr-1" />
       };
     }
 
