@@ -67,18 +67,31 @@ export default function Receipt() {
           headers: { 'Content-Type': 'application/json' }
         });
         
+        const contentType = response.headers.get('content-type') || '';
         const text = await response.text();
-        let result;
-        try { result = JSON.parse(text); } 
-        catch (e) { throw new Error('Invalid JSON response from server'); }
 
         if (!response.ok) {
-          setError(result.error || 'Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.');
+          let errorMsg = 'Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.';
+          if (contentType.includes('application/json')) {
+            try {
+              const result = JSON.parse(text);
+              errorMsg = result.error || errorMsg;
+            } catch (e) {}
+          }
+          setError(errorMsg);
           return;
         }
+
+        let result;
+        try {
+          result = JSON.parse(text);
+        } catch (e) {
+          throw new Error('Incorrect response format received from the server. If this is a very new transaction, please wait a moment for payment synchronization.');
+        }
         
-        if (result.success && result.transaction) {
+        if (result && result.success && result.transaction) {
           setTransaction(result.transaction);
+          setError(null);
         } else {
           setError('Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.');
         }
