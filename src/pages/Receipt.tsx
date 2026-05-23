@@ -52,10 +52,7 @@ export default function Receipt() {
     }
 
     const fetchTransaction = async () => {
-      // 🚀 CRITICAL FIX: explicit await for session to ensure it's hydrated before RLS query
-      await supabase.auth.getSession();
-      
-      console.log("📍 Receipt Route Params - Raw ID:", id);
+      // console.log("📍 Receipt Route Params - Raw ID:", id);
       const cleanId = (id || '').trim();
       
       if (!cleanId) {
@@ -64,64 +61,57 @@ export default function Receipt() {
         return;
       }
 
-      const isValidUUID = isUUID(cleanId);
-      console.log("📍 UUID Validation:", isValidUUID);
-
       try {
-        let query = supabase.from('transactions').select('*');
+        const response = await fetch(`/api/receipt?id=${encodeURIComponent(cleanId)}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const text = await response.text();
+        let result;
+        try { result = JSON.parse(text); } 
+        catch (e) { throw new Error('Invalid JSON response from server'); }
 
-        if (isValidUUID) {
-          // If it's a UUID, we can safely query the 'id' column (which is a PK UUID)
-          console.log("📍 querying by UUID primary key...");
-          query = query.eq('id', cleanId);
-        } else {
-          // If it's NOT a UUID, querying the 'id' column directly will cause a Postgres 22P02 error.
-          // Instead, we query all valid TEXT-based reference columns.
-          console.log("📍 Querying by text reference fields...");
-          query = query.or(`paystack_receipt.eq.${cleanId},internal_reference.eq.${cleanId},external_reference.eq.${cleanId},provider_reference.eq.${cleanId},reference.eq.${cleanId}`);
-        }
-
-        const { data, error: fetchError } = await query.maybeSingle();
-
-        if (fetchError) {
-          console.error("📍 Supabase Fetch Error:", fetchError);
-          // 22P02 is specifically 'invalid input syntax for type uuid'
-          // This should be unreachable now due to the check above, but we keep it for safety.
-          if (fetchError.code === '22P02') {
-            setError('Invalid receipt identifier format.');
-          } else {
-            setError(`Unable to load receipt: ${fetchError.message || 'Database error'}`);
-          }
+        if (!response.ok) {
+          setError(result.error || 'Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.');
           return;
         }
         
-        if (data) {
-          console.log("✅ Receipt Found:", data.id);
-          setTransaction(data);
+        if (result.success && result.transaction) {
+          setTransaction(result.transaction);
         } else {
-          console.warn("📍 No transaction found for identifier:", cleanId);
           setError('Receipt not found. If you just paid, it might still be initializing. Please check again in a moment.');
         }
       } catch (err: any) {
-        console.error('📍 Critical Error in Receipt Fetch:', err);
-        setError(err.message || 'An unexpected error occurred while loading your receipt.');
+        if (!transaction) setError(err.message || 'An unexpected error occurred while loading your receipt.');
       } finally {
         setLoading(false);
       }
     };
 
     fetchTransaction();
+    
+    // Fallback polling every 5 seconds if not yet processed
+    const interval = setInterval(() => {
+      fetchTransaction();
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [id]);
 
-    // Subscribe to realtime updates
+  useEffect(() => {
+    if (!transaction?.id || !isUUID(transaction.id)) return;
+
+    console.log("📍 Initializing Realtime channel for UUID:", transaction.id);
     const channel = supabase
-      .channel(`receipt-realtime-${id}`)
+      .channel(`receipt-realtime-${transaction.id}`)
       .on(
         'postgres_changes',
         { 
           event: 'UPDATE', 
           schema: 'public', 
           table: 'transactions', 
-          filter: `id=eq.${id}` 
+          filter: `id=eq.${transaction.id}` 
         },
         (payload) => {
           console.log('🔄 Realtime Receipt Update Received:', payload.new);
@@ -133,7 +123,7 @@ export default function Receipt() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [id]);
+  }, [transaction?.id]);
 
   const displayReference = transaction?.reference || transaction?.paystack_receipt || transaction?.internal_reference || 'N/A';
 
@@ -216,7 +206,7 @@ export default function Receipt() {
         ? 'This transaction session has expired as no payment was confirmed within 1 hour.' 
         : 'We are waiting for a final confirmation from the payment provider.',
       color: isStale ? 'slate' : 'amber',
-      icon: isStale ? <XCircle className="w-10 h-10 text-slate-400" /> : <Loader2 className="w-10 h-10 text-amber-500 animate-spin" /> ,
+      icon: isStale ? <XCircle className="w-10 h-10 text-slate-400" /> : <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />
     };
   };
 

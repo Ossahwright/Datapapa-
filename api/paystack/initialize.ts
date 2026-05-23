@@ -7,6 +7,7 @@ import { supabase } from '../../lib/server-utils.js';
  */
 export default async function handler(req: any, res: any) {
   console.log("=== PAYSTACK V2 INITIALIZATION START ===");
+  console.log("PAYSTACK INITIALIZE BODY:", req.body);
   
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -89,26 +90,21 @@ export default async function handler(req: any, res: any) {
     const rawPayerPhone = payerPhone || phone;
     
     // STEP 6: Defensive Sanitization of phone string
-    let payerPhoneNumber = (rawPayerPhone || "").toString().trim();
-    payerPhoneNumber = payerPhoneNumber.replace(/[^0-9]/g, ''); // Strictly numeric format safe
+    const payerPhoneNumber = (rawPayerPhone || "").toString().trim();
     
-    // Limit to safe international phone standards (standard ITU-T E.164 allows up to 15 digits)
-    if (payerPhoneNumber.length > 15) {
-      payerPhoneNumber = payerPhoneNumber.slice(0, 15);
-    }
+    // Generate deterministic customer email using payer phone number:
+    const normalizedPhone = payerPhoneNumber.replace(/\D/g, '').trim();
 
-    // Strict default fallback ensuring a phone construct is always valid
-    if (!payerPhoneNumber) {
-      payerPhoneNumber = "0000000000";
-    }
+    const customerEmail =
+      normalizedPhone.length > 0
+        ? `${normalizedPhone}@datapapa.site`
+        : `guest_${Date.now()}@datapapa.site`;
 
-    // Step 2 & 3: Authoritative server-side customer email generation
-    const paystackEmail = `${payerPhoneNumber}@datapapa.site`;
-
-    // STEP 7: Forensic Payment Logging
+    // STEP 7: Forensic Payment Logging & Verification
+    console.log("FINAL PAYSTACK CUSTOMER EMAIL:", customerEmail);
     console.log("=== PAYSTACK CUSTOMER EMAIL GENERATED ===");
-    console.log("=== PAYER PHONE ===", payerPhoneNumber);
-    console.log("=== PAYSTACK EMAIL ===", paystackEmail);
+    console.log("=== PAYER PHONE ===", normalizedPhone);
+    console.log("=== PAYSTACK EMAIL ===", customerEmail);
 
     // 🚀 STEP 1, 2, 3 - AUTHORITATIVE IDENTITY CONVERGENCE
     // We update the record to ensure identity convergence across ALL reference fields.
@@ -122,7 +118,7 @@ export default async function handler(req: any, res: any) {
     // Step 5: Defensive Transaction Column Persistence (fails gracefully if schema hasn't run yet)
     try {
       const { error: dbColErr } = await supabase.from("transactions").update({
-        customer_payment_email: paystackEmail
+        customer_payment_email: customerEmail
       }).eq("id", transaction.id);
       
       if (dbColErr) {
@@ -135,27 +131,31 @@ export default async function handler(req: any, res: any) {
 
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
     console.log("📍 UUID (ID):", transaction.id);
+    console.log("FINAL GENERATED EMAIL:", customerEmail);
 
-    // 5. RETURN CLEAN CONFIG (Strictly using transaction.id as the reference)
-    return res.status(200).json({
+    const initializePayload = {
       success: true,
       config: {
         reference: transaction.id, // 🚀 AUTHORITATIVE REFERENCE = UUID
         amount: Math.round(authoritativeAmount * 100),
-        email: paystackEmail,
-        email: 'customer@datapapa.com',
+        email: customerEmail,
         transaction_id: transaction.id,
         metadata: {
           transaction_id: transaction.id, // 🚀 METADATA SYNC
           phone,
-          customer_payment_email: paystackEmail, // Step 5: Metadata persistence
-          payer_phone: payerPhoneNumber,
+          customer_payment_email: customerEmail, // Step 5: Metadata persistence
+          payer_phone: normalizedPhone,
           network: bundle.network,
           bundle: bundle.capacity,
           platform
         }
       }
-    });
+    };
+    
+    console.log("PAYSTACK PAYLOAD SENT:", initializePayload);
+
+    // 5. RETURN CLEAN CONFIG (Strictly using transaction.id as the reference)
+    return res.status(200).json(initializePayload);
 
   } catch (error: any) {
     console.error("❌ UNEXPECTED INITIALIZATION ERROR:", error);

@@ -4,8 +4,44 @@ import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
 
+import apiAdminOps from "./api/admin-ops.ts";
+import apiAdminRewards from "./api/admin-rewards.ts";
+import apiDatahubWebhook from "./api/datahub-webhook.ts";
+import apiPaystackInitialize from "./api/paystack/initialize.ts";
+import apiPaystackWebhook from "./api/paystack-webhook.ts";
+import apiPurchaseData from "./api/purchase-data.ts";
+import apiReceipt from "./api/receipt.ts";
+import apiSystemStatus from "./api/system-status.ts";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function routeHandler(handler: any) {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const resProxy = res as any;
+      if (!resProxy.status) {
+        resProxy.status = (code: number) => {
+          res.statusCode = code;
+          return resProxy;
+        };
+      }
+      if (!resProxy.json) {
+        resProxy.json = (data: any) => {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(data));
+          return resProxy;
+        };
+      }
+      return await handler(req, resProxy);
+    } catch (e: any) {
+      console.error(`[Server] API Error in ${req.path}:`, e);
+      if (!res.headersSent) {
+        return res.status(500).json({ error: e.message, stack: e.stack });
+      }
+    }
+  };
+}
 
 async function startServer() {
   console.log("🛠️ Initializing Express app...");
@@ -26,66 +62,14 @@ async function startServer() {
   });
 
   console.log("🌐 Registering API Bridge...");
-  // API Bridge: Dynamically handle scripts in /api folder
-  app.all("/api/*any", async (req, res, next) => {
-  // API Bridge: Dynamically handle scripts in /api folder
-  app.all("/api/*", async (req, res, next) => {
-    const apiPath = req.path; // e.g. /api/admin-ops
-    const relativeFilePath = apiPath.slice(1) + ".ts"; // e.g. api/admin-ops.ts
-    const filePath = path.resolve(process.cwd(), relativeFilePath);
-
-    if (fs.existsSync(filePath)) {
-      try {
-        const resProxy = res as any;
-        if (!resProxy.status) {
-          resProxy.status = (code: number) => {
-            res.statusCode = code;
-            return resProxy;
-          };
-        }
-        if (!resProxy.json) {
-          resProxy.json = (data: any) => {
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify(data));
-            return resProxy;
-          };
-        }
-
-        let handler;
-        if (process.env.NODE_ENV !== "production") {
-        let handler;
-        if (process.env.NODE_ENV !== "production") {
-          // In dev, use Vite's ssrLoadModule for HMR
-          const vite = (app as any).vite;
-          if (vite) {
-            const module = await vite.ssrLoadModule(filePath);
-            handler = module.default;
-          }
-        } else {
-          // In production, we might need a different way if we aren't bundling API files.
-          // However, the instructions say to bundle server.ts.
-          // For simplicity in this bridge, we'll try to import directly or use a pre-bundled map.
-          // But since we are using esbuild for server.ts, we should probably just import it.
-          const module = await import(filePath);
-          handler = module.default;
-        }
-
-        if (typeof handler === "function") {
-          return await handler(req, resProxy);
-          return await handler(req, res);
-        } else {
-          return res.status(500).json({ error: `No default export found in ${relativeFilePath}` });
-        }
-      } catch (e: any) {
-        console.error(`[Server] API Error in ${apiPath}:`, e);
-        if (!res.headersSent) {
-          return res.status(500).json({ error: e.message, stack: e.stack });
-        }
-        return res.status(500).json({ error: e.message });
-      }
-    }
-    next();
-  });
+  app.all('/api/admin-ops', routeHandler(apiAdminOps));
+  app.all('/api/admin-rewards', routeHandler(apiAdminRewards));
+  app.all('/api/datahub-webhook', routeHandler(apiDatahubWebhook));
+  app.all('/api/paystack/initialize', routeHandler(apiPaystackInitialize));
+  app.all('/api/paystack-webhook', routeHandler(apiPaystackWebhook));
+  app.all('/api/purchase-data', routeHandler(apiPurchaseData));
+  app.all('/api/receipt', routeHandler(apiReceipt));
+  app.all('/api/system-status', routeHandler(apiSystemStatus));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -102,12 +86,6 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*any", (req, res) => {
-    (app as any).vite = vite;
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
@@ -124,9 +102,3 @@ console.log("🚀 Starting Datapapa Production Server...");
 startServer().catch((err) => {
   console.error("💥 CRITICAL STARTUP ERROR:", err);
 });
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer().catch(console.error);
