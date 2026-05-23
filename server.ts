@@ -57,6 +57,10 @@ async function startServer() {
     res.json({ status: "alive", timestamp: new Date().toISOString() });
   });
 
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "alive", timestamp: new Date().toISOString() });
+  });
+
   app.get("/ping", (req, res) => {
     res.send("pong");
   });
