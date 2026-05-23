@@ -150,7 +150,7 @@ export default function AdminDashboard() {
   const [appSettings, setAppSettings] = useState({
     app_name: "Datapapa",
     currency: "GHS",
-    support_email: "support@datapapa.com",
+    support_email: "support@datapapa.site",
     maintenance_mode: false,
   });
   const [secureSettings, setSecureSettings] = useState({
@@ -593,6 +593,24 @@ export default function AdminDashboard() {
           if (isMounted) {
             navigate("/admin/auth");
             setIsLoading(false);
+          }
+          return;
+        }
+
+        // 🛡️ Owner Email Fallback & Background Profile Auto-Repair
+        if (session.user.email === 'wrightossah@gmail.com') {
+          if (isMounted) {
+            setUser({ ...session.user, role: 'admin' });
+            fetchDashboardStats();
+            // Automatically ensure the database profile has role='admin'
+            supabase.from("profiles").upsert({
+              id: session.user.id,
+              email: session.user.email,
+              role: 'admin',
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' }).then(({ error }) => {
+              if (error) console.warn("Background profiles repair warning:", error);
+            });
           }
           return;
         }
@@ -1276,7 +1294,7 @@ export default function AdminDashboard() {
       return { 
         label: isStale ? 'Abandoned' : 'Initialized', 
         color: isStale ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-100 text-slate-700 border-slate-200', 
-        icon: <Clock size={10} className="mr-1" />
+        icon: <Clock size={10} className="mr-1" /> 
       };
     }
 
