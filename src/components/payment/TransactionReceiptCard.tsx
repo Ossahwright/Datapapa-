@@ -10,6 +10,7 @@ export interface TransactionReceiptProps {
   network?: string;
   bundle?: string;
   recipient: string;
+  payerPhone?: string;
   reference: string;
   paymentMethod?: string;
   date?: string;
@@ -25,6 +26,7 @@ export function TransactionReceiptCard({
   network,
   bundle,
   recipient,
+  payerPhone,
   reference,
   paymentMethod = 'Paystack',
   date = new Date().toLocaleString(),
@@ -151,6 +153,12 @@ export function TransactionReceiptCard({
                 <span className="uppercase text-[10px] font-bold text-slate-400">Recipient</span>
                 <span className="text-slate-900 font-bold text-sm tracking-tighter">{recipient}</span>
               </div>
+              {payerPhone && (
+                <div className="flex justify-between">
+                  <span className="uppercase text-[10px] font-bold text-slate-400">Payer No.</span>
+                  <span className="text-slate-900 font-bold text-sm tracking-tighter">{payerPhone}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="uppercase text-[10px] font-bold text-slate-400">Method</span>
                 <span className="text-slate-900 font-bold">{paymentMethod}</span>

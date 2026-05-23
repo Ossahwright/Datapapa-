@@ -346,11 +346,20 @@ export default function Receipt() {
               </div>
 
               <div className="flex justify-between items-center p-0.5">
-                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Number</span>
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Recipient No.</span>
                 <span className="text-slate-900 font-mono font-black text-xs tabular-nums bg-slate-100 px-2.5 py-0.5 rounded">
                   {transaction.recipient_phone || transaction.phone}
                 </span>
               </div>
+
+              {transaction.payer_phone_number && (
+                <div className="flex justify-between items-center p-0.5">
+                  <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Payer No.</span>
+                  <span className="text-slate-900 font-mono font-black text-xs tabular-nums bg-slate-100 px-2.5 py-0.5 rounded">
+                    {transaction.payer_phone_number}
+                  </span>
+                </div>
+              )}
 
               <div className="flex justify-between items-center p-0.5">
                 <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Ref</span>
@@ -380,7 +389,10 @@ export default function Receipt() {
               
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => openWhatsApp({ phone: adminWhatsApp, message: `Hi, I need help with transaction: ${displayReference}. For number: ${transaction.recipient_phone}` })}
+                  onClick={() => openWhatsApp({ 
+                    phone: adminWhatsApp, 
+                    message: `Hi, I need help with transaction: ${displayReference}.\nRecipient: ${transaction.recipient_phone}${transaction.payer_phone_number ? `\nPayer No: ${transaction.payer_phone_number}` : ''}` 
+                  })}
                   className="flex items-center justify-center gap-1.5 py-2.5 bg-white text-slate-600 border border-slate-100 rounded-xl font-bold text-[10px] hover:bg-slate-50 transition-all"
                 >
                   <MessageCircle size={12} className="text-emerald-500" />
