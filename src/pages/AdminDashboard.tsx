@@ -43,6 +43,7 @@ import {
   Unlock,
   BarChart3,
   ShieldAlert,
+  AlertTriangle,
   Trash2,
   XCircle,
   Eye,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
+import html2canvas from "html2canvas";
 import { calculateExecutionMetrics } from "../../lib/metrics";
 import { TransactionDetailsModal } from "../components/admin/TransactionDetailsModal";
 import { 
@@ -1241,7 +1243,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Delivered', 
         color: 'bg-emerald-50 text-emerald-700 border-emerald-100', 
-        icon: <CheckCircle2 size={10} className="mr-1" /> 
+        icon: <CheckCircle2 size={11} className="mr-1.5 shrink-0 text-emerald-600" /> 
       };
     }
     
@@ -1249,7 +1251,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Manual Override', 
         color: 'bg-purple-50 text-purple-700 border-purple-100', 
-        icon: <ShieldCheck size={10} className="mr-1" /> 
+        icon: <ShieldCheck size={11} className="mr-1.5 shrink-0 text-purple-600" /> 
       };
     }
 
@@ -1257,7 +1259,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Failed', 
         color: 'bg-rose-50 text-rose-700 border-rose-100', 
-        icon: <XCircle size={10} className="mr-1" />, 
+        icon: <AlertTriangle size={11} className="mr-1.5 shrink-0 text-rose-600" />, 
         retry: true 
       };
     }
@@ -1266,7 +1268,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Processing', 
         color: 'bg-amber-50 text-amber-700 border-amber-100 animate-pulse', 
-        icon: <RefreshCw size={10} className="animate-spin mr-1" />, 
+        icon: <RefreshCw size={11} className="animate-spin mr-1.5 shrink-0 text-amber-600" />, 
         reconcile: true 
       };
     }
@@ -1275,7 +1277,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Provider Accepted', 
         color: 'bg-indigo-50 text-indigo-700 border-indigo-100', 
-        icon: <Check size={10} className="mr-1" />, 
+        icon: <Check size={11} className="mr-1.5 shrink-0 text-indigo-600" />, 
         reconcile: true 
       };
     }
@@ -1284,7 +1286,7 @@ export default function AdminDashboard() {
       return { 
         label: 'Payment Verified', 
         color: 'bg-blue-50 text-blue-700 border-blue-100', 
-        icon: <ShieldCheck size={10} className="mr-1" />, 
+        icon: <ShieldCheck size={11} className="mr-1.5 shrink-0 text-blue-600" />, 
         retry: true 
       };
     }
@@ -1294,14 +1296,14 @@ export default function AdminDashboard() {
       return { 
         label: isStale ? 'Abandoned' : 'Initialized', 
         color: isStale ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-100 text-slate-700 border-slate-200', 
-        icon: <Clock size={10} className="mr-1" /> 
+        icon: <Clock size={11} className="mr-1.5 shrink-0 text-slate-500" /> 
       };
     }
 
     return { 
       label: vtu || tx.status || 'Pending', 
       color: 'bg-slate-50 text-slate-600 border-slate-100', 
-      icon: null 
+      icon: <Clock size={11} className="mr-1.5 shrink-0 text-slate-400" /> 
     };
   };
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
@@ -1325,6 +1327,108 @@ export default function AdminDashboard() {
   }, [dataHubSettings.api_key]);
 
   const [isDeletingTx, setIsDeletingTx] = useState(false);
+  const [capturingReceiptTx, setCapturingReceiptTx] = useState<any | null>(null);
+  const [isGeneratingReceipt, setIsGeneratingReceipt] = useState<string | null>(null);
+
+  const handleWhatsAppReceipt = async (tx: any) => {
+    const rawPhone = tx.recipient_phone || tx.payer_phone_number || tx.phone || "";
+    if (!rawPhone) {
+      toast.error("No phone number available for this transaction.");
+      return;
+    }
+
+    setIsGeneratingReceipt(tx.id);
+    setCapturingReceiptTx(tx);
+
+    // Wait for the render of offscreen component
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const element = document.getElementById(`receipt-capture-${tx.id}`);
+    if (!element) {
+      toast.error("Failed to find receipt element.");
+      setCapturingReceiptTx(null);
+      setIsGeneratingReceipt(null);
+      return;
+    }
+
+    try {
+      const canvas = await html2canvas(element, {
+        backgroundColor: "#f8fafc",
+        scale: 2,
+        logging: false,
+        useCORS: true,
+      });
+
+      const dataUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      
+      let identifier = "";
+      if (tx.recipient_phone) {
+        const normalized = String(tx.recipient_phone).replace(/[^a-zA-Z0-9]/g, "");
+        if (normalized) {
+          identifier = normalized;
+        }
+      }
+      if (!identifier) {
+        identifier = tx.reference || tx.paystack_receipt || tx.id.substring(0, 8);
+      }
+
+      link.download = `receipt-${identifier}.png`;
+      link.href = dataUrl;
+      link.click();
+
+      toast.success("Receipt downloaded! Opening WhatsApp chat...");
+    } catch (err) {
+      console.error("Screenshot generation failed", err);
+      toast.error("Screenshot failed, but opening WhatsApp chat.");
+    } finally {
+      setCapturingReceiptTx(null);
+      setIsGeneratingReceipt(null);
+    }
+
+    // Prepare WhatsApp message
+    const recipient_number = tx.recipient_phone || tx.payer_phone_number || tx.phone || "N/A";
+    const bundle_name = tx.capacity || tx.display_bundle || tx.bundle_name || tx.volume || "N/A";
+    const amount = Number(tx.amount || 0).toFixed(2);
+    const transaction_reference = tx.reference || tx.paystack_receipt || tx.id.substring(0, 8);
+
+    const formattedMsg = `🎉 DATAPAPA DELIVERY CONFIRMATION\n\n` +
+      `Your data bundle has been successfully delivered.\n\n` +
+      `📱 Recipient Number: ${recipient_number}\n` +
+      `📦 Bundle: ${bundle_name}\n` +
+      `💰 Amount Paid: GHS ${amount}\n` +
+      `🧾 Reference: ${transaction_reference}\n\n` +
+      `A copy of your transaction receipt has been generated for your records.\n\n` +
+      `Thank you for choosing Datapapa.\n\n` +
+      `Datapapa\n` +
+      `0244014207 | 0550143506`;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      
+      await axios.post(API_ROUTES.ADMIN_OPS, {
+        action: 'track_whatsapp',
+        transactionId: tx.id,
+        message: formattedMsg
+      }, { headers });
+
+      setTransactions(prev => prev.map(t => 
+        t.id === tx.id ? { 
+          ...t, 
+          whatsapp_sent: true,
+          whatsapp_sent_at: new Date().toISOString()
+        } : t
+      ));
+    } catch (err) {
+      console.warn("Failed to track WhatsApp message, but continuing:", err);
+    }
+
+    openWhatsApp({
+      phone: rawPhone,
+      message: formattedMsg
+    });
+  };
 
   const fetchProviderHealth = async () => {
     try {
@@ -2194,31 +2298,55 @@ export default function AdminDashboard() {
                               </td>
                               <td className="px-6 py-4 text-center">
                                 <span
-                                  className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${
                                     tx.delivery_status === "delivered" ||
                                     tx.vtu_status === "success" ||
                                     tx.vtu_status === "delivered"
-                                      ? "bg-emerald-100 text-emerald-700"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
                                       : tx.delivery_status === "failed" ||
                                           tx.vtu_status === "failed"
-                                        ? "bg-rose-100 text-rose-700"
+                                        ? "bg-rose-50 text-rose-700 border-rose-100"
                                         : tx.delivery_status === "delivering" ||
                                             tx.vtu_status === "processing"
-                                          ? "bg-amber-100 text-amber-700 animate-pulse"
-                                          : "bg-slate-100 text-slate-500"
+                                          ? "bg-amber-50 text-amber-700 border-amber-100 animate-pulse"
+                                          : "bg-slate-50 text-slate-500 border-slate-100"
                                   }`}
                                 >
-                                  {tx.delivery_status === "delivered" ||
-                                  tx.vtu_status === "delivered" ||
-                                  tx.vtu_status === "success"
-                                    ? "DELIVERED"
-                                    : tx.delivery_status === "failed" ||
-                                        tx.vtu_status === "failed"
-                                      ? "FAILED"
-                                      : tx.delivery_status === "delivering" ||
-                                          tx.vtu_status === "processing"
-                                        ? "PROCESSING"
-                                        : tx.vtu_status || "PENDING"}
+                                  {(() => {
+                                    const isDelivered = tx.delivery_status === "delivered" || tx.vtu_status === "delivered" || tx.vtu_status === "success";
+                                    const isFailed = tx.delivery_status === "failed" || tx.vtu_status === "failed";
+                                    const isProcessing = tx.delivery_status === "delivering" || tx.vtu_status === "processing";
+                                    
+                                    if (isDelivered) {
+                                      return (
+                                        <>
+                                          <CheckCircle2 size={11} className="shrink-0 text-emerald-600" />
+                                          <span>DELIVERED</span>
+                                        </>
+                                      );
+                                    } else if (isFailed) {
+                                      return (
+                                        <>
+                                          <AlertTriangle size={11} className="shrink-0 text-rose-600" />
+                                          <span>FAILED</span>
+                                        </>
+                                      );
+                                    } else if (isProcessing) {
+                                      return (
+                                        <>
+                                          <RefreshCw size={11} className="animate-spin shrink-0 text-amber-600" />
+                                          <span>PROCESSING</span>
+                                        </>
+                                      );
+                                    } else {
+                                      return (
+                                        <>
+                                          <Clock size={11} className="shrink-0 text-slate-400" />
+                                          <span>{tx.vtu_status || "PENDING"}</span>
+                                        </>
+                                      );
+                                    }
+                                  })()}
                                 </span>
                               </td>
                               <td className="px-6 py-4 text-right text-xs text-slate-400 font-mono">
@@ -2294,7 +2422,7 @@ export default function AdminDashboard() {
                                     title={tx.whatsapp_sent ? "Message Already Sent" : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") ? "Message Customer (WhatsApp)" : "Invalid phone number"}
                                   >
                                     <svg
-                                      xmlns="http://www.w3.org/2000/svg"
+                                      xmlns="http://www.w3.org/2500/svg"
                                       width="14"
                                       height="14"
                                       viewBox="0 0 24 24"
@@ -2306,6 +2434,24 @@ export default function AdminDashboard() {
                                     >
                                       <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                                     </svg>
+                                  </button>
+                                  <button
+                                    onClick={() => handleWhatsAppReceipt(tx)}
+                                    disabled={isGeneratingReceipt === tx.id || !isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                                    className={`p-1.5 rounded-lg transition-all shadow-sm ${
+                                      isGeneratingReceipt === tx.id 
+                                        ? "bg-slate-50 text-slate-300 animate-pulse cursor-not-allowed" 
+                                        : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") 
+                                          ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-500 hover:text-white border border-emerald-100" 
+                                          : "bg-slate-50 text-slate-300 cursor-not-allowed"
+                                    }`}
+                                    title="WhatsApp Receipt"
+                                  >
+                                    {isGeneratingReceipt === tx.id ? (
+                                      <RefreshCw size={14} className="animate-spin text-slate-400" />
+                                    ) : (
+                                      <MessageSquare size={14} />
+                                    )}
                                   </button>
                                 </div>
                               </td>
@@ -2713,22 +2859,59 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
                                   tx.payment_status === "success" || 
                                   ["success", "completed", "paid", "payment_success", "fulfilled"].includes(tx.status)
-                                    ? "bg-emerald-100 text-emerald-700"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-100"
                                     : (tx.status === "failed" && tx.payment_status !== "success")
-                                      ? "bg-rose-100 text-rose-700"
+                                      ? "bg-rose-50 text-rose-700 border-rose-100"
                                       : tx.status === "pending" || tx.status === "initialized" || tx.status === "fulfillment_processing"
-                                        ? "bg-amber-100 text-amber-700"
-                                        : "bg-slate-100 text-slate-700"
+                                        ? "bg-amber-50 text-amber-700 border-amber-100 animate-pulse"
+                                        : "bg-slate-50 text-slate-700 border-slate-100"
                                 }`}
                               >
-                                {tx.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(tx.status)
-                                  ? "Success"
-                                  : tx.status === "fulfillment_processing" 
-                                    ? "Processing"
-                                    : tx.status === "initialized" ? ((Date.now() - new Date(tx.created_at).getTime()) > 3600000 ? "Abandoned" : "Initialized") : tx.status || "N/A"}
+                                {(() => {
+                                  const isSuccess = tx.payment_status === "success" || ["success", "paid", "payment_success", "fulfilled"].includes(tx.status);
+                                  const isFailed = (tx.status === "failed" && tx.payment_status !== "success");
+                                  
+                                  if (isSuccess) {
+                                    return (
+                                      <>
+                                        <CheckCircle2 size={11} className="shrink-0 text-emerald-600" />
+                                        <span>Success</span>
+                                      </>
+                                    );
+                                  } else if (isFailed) {
+                                    return (
+                                      <>
+                                        <AlertTriangle size={11} className="shrink-0 text-rose-600" />
+                                        <span>Failed</span>
+                                      </>
+                                    );
+                                  } else if (tx.status === "fulfillment_processing") {
+                                    return (
+                                      <>
+                                        <RefreshCw size={11} className="animate-spin shrink-0 text-amber-600" />
+                                        <span>Processing</span>
+                                      </>
+                                    );
+                                  } else if (tx.status === "initialized") {
+                                    const isStale = (Date.now() - new Date(tx.created_at).getTime()) > 3600000;
+                                    return (
+                                      <>
+                                        <Clock size={11} className="shrink-0 text-slate-500" />
+                                        <span>{isStale ? "Abandoned" : "Initialized"}</span>
+                                      </>
+                                    );
+                                  } else {
+                                    return (
+                                      <>
+                                        <Clock size={11} className="shrink-0 text-slate-400" />
+                                        <span>{tx.status || "N/A"}</span>
+                                      </>
+                                    );
+                                  }
+                                })()}
                               </span>
                             </td>
                             <td className="px-6 py-4 text-center">
@@ -2828,14 +3011,29 @@ export default function AdminDashboard() {
                                       )}
 
                                       {isDelivered && (
-                                        <button
-                                          onClick={() => handleWhatsAppMessage(tx)}
-                                          disabled={tx.whatsapp_sent}
-                                          className={`p-2.5 rounded-xl transition-all group ${tx.whatsapp_sent ? 'text-slate-300 bg-slate-50 cursor-not-allowed' : 'text-emerald-500 hover:bg-emerald-50 border border-emerald-100'}`}
-                                          title={tx.whatsapp_sent ? "Message Already Sent" : "Send WhatsApp Receipt"}
-                                        >
-                                          <MessageCircle size={18} className={tx.whatsapp_sent ? "" : "group-hover:scale-110 transition-transform"} />
-                                        </button>
+                                        <>
+                                          <button
+                                            onClick={() => handleWhatsAppMessage(tx)}
+                                            disabled={tx.whatsapp_sent}
+                                            className={`p-2.5 rounded-xl transition-all group ${tx.whatsapp_sent ? 'text-slate-300 bg-slate-50 cursor-not-allowed' : 'text-emerald-500 hover:bg-emerald-50 border border-emerald-100'}`}
+                                            title={tx.whatsapp_sent ? "Message Already Sent" : "Send WhatsApp Receipt"}
+                                          >
+                                            <MessageCircle size={18} className={tx.whatsapp_sent ? "" : "group-hover:scale-110 transition-transform"} />
+                                          </button>
+
+                                          <button
+                                            onClick={() => handleWhatsAppReceipt(tx)}
+                                            disabled={isGeneratingReceipt === tx.id}
+                                            className={`p-2.5 rounded-xl transition-all border ${isGeneratingReceipt === tx.id ? 'bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed animate-pulse' : 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border-emerald-100'}`}
+                                            title="WhatsApp Receipt"
+                                          >
+                                            {isGeneratingReceipt === tx.id ? (
+                                              <RefreshCw size={18} className="animate-spin text-slate-400" />
+                                            ) : (
+                                              <MessageSquare size={18} className="group-hover:scale-110 transition-transform text-emerald-600" />
+                                            )}
+                                          </button>
+                                        </>
                                       )}
                                     </>
                                   );
@@ -3426,31 +3624,55 @@ export default function AdminDashboard() {
                             <div className="flex justify-between items-center pt-3 mt-3 border-t border-slate-50">
                               <div className="flex gap-2 items-center">
                                 <span
-                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
                                     tx.delivery_status === "delivered" ||
                                     tx.vtu_status === "success" ||
                                     tx.vtu_status === "completed"
-                                      ? "bg-green-100 text-green-700"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
                                       : tx.delivery_status === "failed" ||
                                           tx.vtu_status === "failed"
-                                        ? "bg-red-100 text-red-700"
+                                        ? "bg-rose-50 text-rose-700 border-rose-100"
                                         : tx.delivery_status === "delivering" ||
                                             tx.vtu_status === "processing"
-                                          ? "bg-blue-100 text-blue-700 animate-pulse"
-                                          : "bg-slate-100 text-slate-700"
+                                          ? "bg-blue-50 text-blue-700 border-blue-100 animate-pulse"
+                                          : "bg-slate-50 text-slate-700 border-slate-100"
                                   }`}
                                 >
-                                  {tx.delivery_status === "delivered" ||
-                                  tx.vtu_status === "delivered" ||
-                                  tx.vtu_status === "success"
-                                    ? "DELIVERED"
-                                    : tx.delivery_status === "failed" ||
-                                        tx.vtu_status === "failed"
-                                      ? "FAILED"
-                                      : tx.delivery_status === "delivering" ||
-                                          tx.vtu_status === "processing"
-                                        ? "PROCESSING"
-                                        : tx.vtu_status || "PENDING"}
+                                  {(() => {
+                                    const isDelivered = tx.delivery_status === "delivered" || tx.vtu_status === "success" || tx.vtu_status === "completed";
+                                    const isFailed = tx.delivery_status === "failed" || tx.vtu_status === "failed";
+                                    const isProcessing = tx.delivery_status === "delivering" || tx.vtu_status === "processing";
+                                    
+                                    if (isDelivered) {
+                                      return (
+                                        <>
+                                          <CheckCircle2 size={11} className="shrink-0 text-emerald-600" />
+                                          <span>DELIVERED</span>
+                                        </>
+                                      );
+                                    } else if (isFailed) {
+                                      return (
+                                        <>
+                                          <AlertTriangle size={11} className="shrink-0 text-rose-600" />
+                                          <span>FAILED</span>
+                                        </>
+                                      );
+                                    } else if (isProcessing) {
+                                      return (
+                                        <>
+                                          <RefreshCw size={11} className="animate-spin shrink-0 text-indigo-600" />
+                                          <span>PROCESSING</span>
+                                        </>
+                                      );
+                                    } else {
+                                      return (
+                                        <>
+                                          <Clock size={11} className="shrink-0 text-slate-400" />
+                                          <span>{tx.vtu_status || "PENDING"}</span>
+                                        </>
+                                      );
+                                    }
+                                  })()}
                                 </span>
                                 {stuck && (
                                   <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2">
@@ -3542,6 +3764,25 @@ export default function AdminDashboard() {
                                       >
                                         <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                                       </svg>
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleWhatsAppReceipt(tx)}
+                                      disabled={isGeneratingReceipt === tx.id || !isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                                      className={`p-1.5 rounded-lg transition-colors border ${
+                                        isGeneratingReceipt === tx.id 
+                                          ? "bg-slate-50 text-slate-300 cursor-not-allowed animate-pulse" 
+                                          : isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "") 
+                                            ? "bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100" 
+                                            : "bg-slate-50 text-slate-300 cursor-not-allowed"
+                                      }`}
+                                      title="WhatsApp Receipt"
+                                    >
+                                      {isGeneratingReceipt === tx.id ? (
+                                        <RefreshCw size={14} className="animate-spin text-slate-400" />
+                                      ) : (
+                                        <MessageSquare size={14} />
+                                      )}
                                     </button>
                                   </div>
                                 )}
@@ -4303,6 +4544,21 @@ export default function AdminDashboard() {
                                 <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 1 1-7.6-13.8 8.38 8.38 0 0 1 3.8.9L21 2z"></path>
                               </svg>
                             </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleWhatsAppReceipt(tx);
+                              }}
+                              disabled={isGeneratingReceipt === tx.id || !isValidPhoneNumber(tx.recipient_phone || tx.payer_phone_number || "")}
+                              className={`p-1 rounded transition-colors ${isGeneratingReceipt === tx.id ? 'text-slate-300 bg-slate-50 cursor-not-allowed animate-pulse' : 'text-emerald-600 hover:bg-emerald-50'}`}
+                              title="WhatsApp Receipt"
+                            >
+                              {isGeneratingReceipt === tx.id ? (
+                                <RefreshCw size={14} className="animate-spin text-slate-400" />
+                              ) : (
+                                <MessageSquare size={14} />
+                              )}
+                            </button>
                             <span
                               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                                 tx.status === "success" ||
@@ -4824,6 +5080,87 @@ export default function AdminDashboard() {
           </div>
         )}
       </AnimatePresence>
+
+      {capturingReceiptTx && (
+        <div 
+          id={`receipt-capture-${capturingReceiptTx.id}`}
+          className="absolute -top-[9999px] -left-[9999px] bg-slate-50 p-8 w-[400px] flex flex-col items-center"
+          style={{ fontFamily: 'monospace' }}
+        >
+          {/* Card Wrapper matching TransactionReceiptCard */}
+          <div className="bg-white rounded-[2rem] p-8 border border-slate-200 shadow-xl w-full flex flex-col items-center relative overflow-hidden">
+            {/* Gradient Top Bar */}
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
+            
+            {/* Header Content */}
+            <div className="flex flex-col items-center text-center mt-2 w-full">
+              <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4 border border-green-100">
+                <CheckCircle2 className="w-8 h-8 text-green-600" />
+              </div>
+              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">DATAPAPA REWARD RECEIPT</h2>
+              <p className="text-slate-400 text-xs mt-1 font-sans">Payment & Delivery Successful</p>
+              <span className="mt-3 bg-green-100 text-green-800 px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase">
+                SUCCESSFUL
+              </span>
+            </div>
+
+            {/* Receipt Details Box */}
+            <div className="w-full mt-6 bg-slate-50 rounded-2xl p-5 border border-slate-200 relative text-left">
+              {/* Cut-out circles */}
+              <div className="absolute top-1/2 -left-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
+              <div className="absolute top-1/2 -right-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
+
+              <div className="space-y-3.5 text-xs text-slate-600 font-mono">
+                <div className="flex justify-between items-center bg-slate-100 p-2 rounded-lg -mx-2 mb-2 font-bold text-slate-700">
+                  <span className="uppercase text-[9px] text-slate-400">Reference</span>
+                  <span className="text-slate-900 font-bold">{capturingReceiptTx.reference || capturingReceiptTx.paystack_receipt || capturingReceiptTx.id.substring(0, 8)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Recipient</span>
+                  <span className="text-slate-800 font-extrabold">{capturingReceiptTx.recipient_phone || capturingReceiptTx.phone || "N/A"}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Payer No.</span>
+                  <span className="text-slate-800 font-extrabold">{capturingReceiptTx.payer_phone_number || capturingReceiptTx.payer_phone || "N/A"}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Network</span>
+                  <span className="text-slate-800 font-extrabold uppercase">{String(capturingReceiptTx.network || "N/A").toUpperCase()}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Bundle</span>
+                  <span className="text-slate-800 font-extrabold truncate max-w-[170px]">{capturingReceiptTx.capacity || capturingReceiptTx.display_bundle || capturingReceiptTx.bundle_name || capturingReceiptTx.volume || "N/A"}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Method</span>
+                  <span className="text-slate-800 font-extrabold">Paystack / Mobile Money</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="uppercase text-[9px] font-semibold text-slate-400">Date</span>
+                  <span className="text-slate-800 font-extrabold">{new Date(capturingReceiptTx.created_at).toLocaleString()}</span>
+                </div>
+
+                <div className="pt-3 border-t border-dashed border-slate-300">
+                  <div className="flex justify-between items-center">
+                    <span className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider">Amount Paid</span>
+                    <span className="text-slate-900 font-black text-lg">GHS {Number(capturingReceiptTx.amount).toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 text-center">
+              <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest font-sans">Datapapa Secure Checkout</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
