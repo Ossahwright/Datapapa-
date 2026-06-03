@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { openWhatsApp } from '../../lib/whatsapp';
-import html2canvas from 'html2canvas';
+import { toJpeg } from 'html-to-image';
 import { API_ROUTES } from '../../../lib/constants';
 
 interface TransactionDetailsModalProps {
@@ -56,25 +56,56 @@ export const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = (
     setCapturingReceiptTx(transaction);
 
     // Wait for elements to register in the DOM
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    console.log("[Receipt Modal Capture] Preparing to capture receipt for transaction:", transaction.id);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise((resolve) => setTimeout(resolve, 150));
 
     const element = document.getElementById("receipt-modal-capture");
     if (!element) {
+      console.error("[Receipt Modal Capture] Failed to discover element with ID: receipt-modal-capture");
       toast.error("Failed to find receipt element.");
       setCapturingReceiptTx(null);
       setIsGeneratingReceipt(false);
       return;
     }
 
+    console.log("[Receipt Modal Capture] Element found, starting screenshot generation...", element.id);
+
+    // Temporarily detach CORS-violating stylesheets to avoid Chrome/Firefox security errors in html-to-image
+    const detachedSheets: { element: Element; parent: ParentNode | null; nextSibling: ChildNode | null }[] = [];
+    const linkPlusStyles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'));
+    
+    for (const sheetEl of linkPlusStyles) {
+      try {
+        const sheet = (sheetEl as any).sheet;
+        if (sheet) {
+          // Accessing memory to force a read which throws SecurityError if CORS-restricted
+          const _rules = sheet.cssRules || sheet.rules;
+        }
+      } catch (err) {
+        console.warn("[Receipt Modal Capture] Detaching cross-origin stylesheet before screenshot:", (sheetEl as any).href || "inline style tag");
+        detachedSheets.push({
+          element: sheetEl,
+          parent: sheetEl.parentNode,
+          nextSibling: sheetEl.nextSibling,
+        });
+        sheetEl.remove();
+      }
+    }
+
     try {
-      const canvas = await html2canvas(element, {
+      console.log("[Receipt Modal Capture] Running html-to-image toJpeg render stage...");
+      const dataUrl = await toJpeg(element, {
+        quality: 0.95,
         backgroundColor: "#f8fafc",
-        scale: 2,
-        logging: false,
-        useCORS: true,
+        style: {
+          transform: "scale(1)",
+          transformOrigin: "top left",
+        },
+        cacheBust: true,
       });
 
-      const dataUrl = canvas.toDataURL("image/png");
+      console.log("[Receipt Modal Capture] JPEG generation successful. Preparing file download...");
       const link = document.createElement("a");
       
       let identifier = "";
@@ -88,15 +119,27 @@ export const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = (
         identifier = transaction.reference || transaction.paystack_receipt || transaction.id.substring(0, 8);
       }
 
-      link.download = `receipt-${identifier}.png`;
+      link.download = `receipt-${identifier}.jpeg`;
       link.href = dataUrl;
       link.click();
 
+      console.log(`[Receipt Modal Capture] Screenshot successfully downloaded as receipt-${identifier}.jpeg`);
       toast.success("Receipt downloaded! Opening WhatsApp chat...");
     } catch (err) {
-      console.error("Screenshot generation failed", err);
-      toast.error("Screenshot failed, but opening WhatsApp chat.");
+      console.error("[Receipt Modal Capture] toJpeg fail error:", err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      toast.error(`Screenshot failed (${errorMessage}), but opening WhatsApp chat.`);
     } finally {
+      // Restore detached stylesheets
+      for (const { element: el, parent, nextSibling } of detachedSheets) {
+        if (parent) {
+          try {
+            parent.insertBefore(el, nextSibling);
+          } catch (restoreErr) {
+            console.error("[Receipt Modal Capture] Error while restoring stylesheet:", restoreErr);
+          }
+        }
+      }
       setCapturingReceiptTx(null);
       setIsGeneratingReceipt(false);
     }
@@ -608,81 +651,97 @@ export const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = (
       )}
 
       {capturingReceiptTx && (
-        <div 
-          id="receipt-modal-capture"
-          className="absolute -top-[9999px] -left-[9999px] bg-slate-50 p-8 w-[400px] flex flex-col items-center"
-          style={{ fontFamily: 'monospace' }}
+        <div
+          style={{
+            position: 'fixed',
+            top: '0px',
+            left: '0px',
+            width: '0px',
+            height: '0px',
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: -9999
+          }}
         >
-          {/* Card Wrapper matching TransactionReceiptCard */}
-          <div className="bg-white rounded-[2rem] p-8 border border-slate-200 shadow-xl w-full flex flex-col items-center relative overflow-hidden">
-            {/* Gradient Top Bar */}
-            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
-            
-            {/* Header Content */}
-            <div className="flex flex-col items-center text-center mt-2 w-full">
-              <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4 border border-green-100">
-                <CheckCircle2 className="w-8 h-8 text-green-600" />
+          <div 
+            id="receipt-modal-capture"
+            className="bg-slate-50 p-8 w-[400px] flex flex-col items-center"
+            style={{ 
+              fontFamily: 'monospace',
+              backgroundColor: '#f8fafc',
+            }}
+          >
+            {/* Card Wrapper matching TransactionReceiptCard */}
+            <div className="bg-white rounded-[2rem] p-8 border border-slate-200 shadow-xl w-full flex flex-col items-center relative overflow-hidden">
+              {/* Gradient Top Bar */}
+              <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-green-400 to-emerald-500" />
+              
+              {/* Header Content */}
+              <div className="flex flex-col items-center text-center mt-2 w-full">
+                <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center mb-4 border border-green-100">
+                  <CheckCircle2 className="w-8 h-8 text-green-600" />
+                </div>
+                <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">DATAPAPA TRANSACTION RECEIPT</h2>
+                <p className="text-slate-400 text-xs mt-1 font-sans">Payment & Delivery Successful</p>
+                <span className="mt-3 bg-green-100 text-green-800 px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase">
+                  SUCCESSFUL
+                </span>
               </div>
-              <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">DATAPAPA REWARD RECEIPT</h2>
-              <p className="text-slate-400 text-xs mt-1 font-sans">Payment & Delivery Successful</p>
-              <span className="mt-3 bg-green-100 text-green-800 px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase">
-                SUCCESSFUL
-              </span>
-            </div>
 
-            {/* Receipt Details Box */}
-            <div className="w-full mt-6 bg-slate-50 rounded-2xl p-5 border border-slate-200 relative text-left">
-              {/* Cut-out circles */}
-              <div className="absolute top-1/2 -left-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
-              <div className="absolute top-1/2 -right-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
+              {/* Receipt Details Box */}
+              <div className="w-full mt-6 bg-slate-50 rounded-2xl p-5 border border-slate-200 relative text-left">
+                {/* Cut-out circles */}
+                <div className="absolute top-1/2 -left-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
+                <div className="absolute top-1/2 -right-3 w-5 h-5 bg-white rounded-full border border-slate-200 -translate-y-1/2" />
 
-              <div className="space-y-3.5 text-xs text-slate-600 font-mono">
-                <div className="flex justify-between items-center bg-slate-100 p-2 rounded-lg -mx-2 mb-2 font-bold text-slate-700">
-                  <span className="uppercase text-[9px] text-slate-400">Reference</span>
-                  <span className="text-slate-900 font-bold">{capturingReceiptTx.reference || capturingReceiptTx.id.substring(0, 8)}</span>
-                </div>
+                <div className="space-y-3.5 text-xs text-slate-600 font-mono">
+                  <div className="flex justify-between items-center bg-slate-100 p-2 rounded-lg -mx-2 mb-2 font-bold text-slate-700">
+                    <span className="uppercase text-[9px] text-slate-400">Reference</span>
+                    <span className="text-slate-900 font-bold">{capturingReceiptTx.reference || capturingReceiptTx.id.substring(0, 8)}</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Recipient</span>
-                  <span className="text-slate-800 font-extrabold">{capturingReceiptTx.recipient_phone || capturingReceiptTx.phone || "N/A"}</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Recipient</span>
+                    <span className="text-slate-800 font-extrabold">{capturingReceiptTx.recipient_phone || capturingReceiptTx.phone || "N/A"}</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Payer No.</span>
-                  <span className="text-slate-800 font-extrabold">{capturingReceiptTx.payer_phone_number || capturingReceiptTx.payer_phone || "N/A"}</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Payer No.</span>
+                    <span className="text-slate-800 font-extrabold">{capturingReceiptTx.payer_phone_number || capturingReceiptTx.payer_phone || "N/A"}</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Network</span>
-                  <span className="text-slate-800 font-extrabold uppercase">{String(capturingReceiptTx.network || "N/A").toUpperCase()}</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Network</span>
+                    <span className="text-slate-800 font-extrabold uppercase">{String(capturingReceiptTx.network || "N/A").toUpperCase()}</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Bundle</span>
-                  <span className="text-slate-800 font-extrabold truncate max-w-[170px]">{capturingReceiptTx.display_bundle || capturingReceiptTx.capacity || "N/A"}</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Bundle</span>
+                    <span className="text-slate-800 font-extrabold truncate max-w-[170px]">{capturingReceiptTx.display_bundle || capturingReceiptTx.capacity || "N/A"}</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Method</span>
-                  <span className="text-slate-800 font-extrabold">Paystack / Mobile Money</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Method</span>
+                    <span className="text-slate-800 font-extrabold">Paystack / Mobile Money</span>
+                  </div>
 
-                <div className="flex justify-between">
-                  <span className="uppercase text-[9px] font-semibold text-slate-400">Date</span>
-                  <span className="text-slate-800 font-extrabold">{new Date(capturingReceiptTx.created_at).toLocaleString()}</span>
-                </div>
+                  <div className="flex justify-between">
+                    <span className="uppercase text-[9px] font-semibold text-slate-400">Date</span>
+                    <span className="text-slate-800 font-extrabold">{new Date(capturingReceiptTx.created_at).toLocaleString()}</span>
+                  </div>
 
-                <div className="pt-3 border-t border-dashed border-slate-300">
-                  <div className="flex justify-between items-center">
-                    <span className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider">Amount Paid</span>
-                    <span className="text-slate-900 font-black text-lg">GHS {Number(capturingReceiptTx.amount).toFixed(2)}</span>
+                  <div className="pt-3 border-t border-dashed border-slate-300">
+                    <div className="flex justify-between items-center">
+                      <span className="font-extrabold text-slate-400 uppercase text-[10px] tracking-wider">Amount Paid</span>
+                      <span className="text-slate-900 font-black text-lg">GHS {Number(capturingReceiptTx.amount).toFixed(2)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="mt-6 text-center">
-              <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest font-sans">Datapapa Secure Checkout</p>
+              <div className="mt-6 text-center">
+                <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest font-sans">Datapapa Secure Checkout</p>
+              </div>
             </div>
           </div>
         </div>
