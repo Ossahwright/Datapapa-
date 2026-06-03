@@ -292,6 +292,24 @@ export const AppreciationRewardsView = () => {
     }
   };
 
+  const handleWhatsAppContact = (customerPhone: string, rewardValue: string) => {
+    const bundleSize = rewardValue || "1 GB";
+    const message = `🎉 DATAPAPA GUARANTEED APPRECIATION REWARD 🎁\n\n` +
+      `Congratulations!\n\n` +
+      `You have received a FREE ${bundleSize} bundle from Datapapa for your continuous patronage and weekly activity ❤️\n\n` +
+      `📱 Recipient Number: ${customerPhone}\n` +
+      `🎁 Reward Bundle: ${bundleSize}\n\n` +
+      `Thank you for staying connected with Datapapa.\n\n` +
+      `Datapapa\n` +
+      `Your Trusted Data Partner\n` +
+      `0244014207 | 0550143506`;
+    
+    openWhatsApp({
+      phone: customerPhone,
+      message: message
+    });
+  };
+
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
       <div className="p-6 md:p-8 overflow-auto custom-scrollbar flex-1">
@@ -543,6 +561,13 @@ export const AppreciationRewardsView = () => {
                                  Delete
                             </button>
                             <button
+                              onClick={() => handleWhatsAppContact(r.customer_phone, r.reward_value)}
+                              className="p-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-100 rounded-xl transition-all group inline-flex items-center justify-center"
+                              title="Message via WhatsApp"
+                            >
+                              <MessageCircle size={14} className="group-hover:scale-110 transition-transform" />
+                            </button>
+                            <button
                               onClick={() => handleApproveReward(r.id, r.customer_phone, r.network)}
                               disabled={isApproving !== null}
                               className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 inline-flex"
@@ -563,7 +588,7 @@ export const AppreciationRewardsView = () => {
           {activeTab === "history" && (
             <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
                <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
+                 <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                   <tr>
                     <th className="px-6 py-4">Phone Number</th>
                     <th className="px-6 py-4">Network</th>
@@ -571,12 +596,13 @@ export const AppreciationRewardsView = () => {
                     <th className="px-6 py-4">Approved By</th>
                     <th className="px-6 py-4">Date</th>
                     <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {winnersHistory.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                      <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                         No rewards history found.
                       </td>
                     </tr>
@@ -599,6 +625,15 @@ export const AppreciationRewardsView = () => {
                            }`}>
                              {r.status}
                            </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handleWhatsAppContact(r.customer_phone, r.reward_value)}
+                            className="p-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-100 rounded-xl transition-all group inline-flex items-center justify-center"
+                            title="Message via WhatsApp"
+                          >
+                            <MessageCircle size={14} className="group-hover:scale-110 transition-transform" />
+                          </button>
                         </td>
                       </tr>
                     ))
