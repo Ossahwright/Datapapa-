@@ -185,14 +185,6 @@ export default function App() {
     return <MaintenanceScreen supportEmail={settings?.support_email} />;
   }
 
-  const isPreviewMode = typeof window !== 'undefined' && (
-    import.meta.env.DEV ||
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1' ||
-    window.location.hostname.includes('ais-dev-') ||
-    window.location.origin.includes('ais-dev')
-  );
-
   return (
     <Router>
       <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
@@ -203,11 +195,11 @@ export default function App() {
             <Route path="/receipt/:id" element={<Receipt />} />
             <Route 
               path="/admin" 
-              element={isPreviewMode ? <AdminDashboard /> : <Navigate to="/" replace />} 
+              element={<AdminDashboard />} 
             />
             <Route 
               path="/admin/auth" 
-              element={isPreviewMode ? <AdminAuth /> : <Navigate to="/" replace />} 
+              element={<AdminAuth />} 
             />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
