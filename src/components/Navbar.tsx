@@ -14,6 +14,14 @@ interface NavbarProps {
 export default function Navbar({ settings }: NavbarProps) {
   const appName = settings?.app_name || "Datapapa";
 
+  const isPreviewMode = typeof window !== 'undefined' && (
+    import.meta.env.DEV ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.includes('ais-dev-') ||
+    window.location.origin.includes('ais-dev')
+  );
+
   const scrollToForm = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (window.location.pathname === '/') {
       e.preventDefault();
@@ -34,6 +42,14 @@ export default function Navbar({ settings }: NavbarProps) {
           </Link>
           
           <div className="flex items-center gap-4">
+            {isPreviewMode && (
+              <Link 
+                to="/admin" 
+                className="px-3 py-2 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                Admin Dashboard
+              </Link>
+            )}
             <Link 
               to="/#buy-data" 
               onClick={scrollToForm}

@@ -89,16 +89,39 @@ export const TransactionIntelligence = ({
   };
 
   const getStatusBadge = (status: string) => {
-    const colorMap: any = {
-      success: "bg-emerald-50 text-emerald-700 border-emerald-100",
-      completed: "bg-emerald-50 text-emerald-700 border-emerald-100",
-      failed: "bg-red-50 text-red-700 border-red-100",
-      pending: "bg-amber-50 text-amber-700 border-amber-100",
-      processing: "bg-blue-50 text-blue-700 border-blue-100"
-    };
+    const s = status?.toLowerCase();
+    
+    if (s === "success" || s === "completed" || s === "delivered" || s === "fulfilled") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-100">
+          <CheckCircle2 size={11} className="shrink-0 text-emerald-600" />
+          <span>{status || 'Success'}</span>
+        </span>
+      );
+    }
+    
+    if (s === "failed" || s === "provider_rejected") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border bg-red-50 text-red-700 border-red-100">
+          <AlertCircle size={11} className="shrink-0 text-red-600" />
+          <span>{status || 'Failed'}</span>
+        </span>
+      );
+    }
+    
+    if (s === "processing" || s === "delivering" || s === "provider_execution_started") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border bg-blue-50 text-blue-700 border-blue-100 animate-pulse">
+          <Clock size={11} className="shrink-0 text-blue-600" />
+          <span>{status || 'Processing'}</span>
+        </span>
+      );
+    }
+    
     return (
-      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${colorMap[status?.toLowerCase()] || 'bg-slate-50 text-slate-700 border-slate-100'}`}>
-        {status || 'N/A'}
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border bg-amber-50 text-amber-700 border-amber-100">
+        <Clock size={11} className="shrink-0 text-amber-600" />
+        <span>{status || 'Pending'}</span>
       </span>
     );
   };

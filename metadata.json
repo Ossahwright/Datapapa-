@@ -3,5 +3,4 @@
   "description": "Premium internet data reselling platform for instant mobile data bundles.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-  "majorCapabilities": []
 }

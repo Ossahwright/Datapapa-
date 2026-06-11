@@ -8,7 +8,9 @@ import {
   Database, 
   BarChart3,
   RefreshCw,
-  Layers
+  Layers,
+  BookOpen,
+  Award
 } from "lucide-react";
 
 interface SummaryCardProps {
@@ -65,9 +67,28 @@ interface KPI {
   totalDataSold: number;
   avgOrderValue: number;
   retryCount: number;
+  airtimeRevenue?: number;
+  airtimeTransactions?: number;
+  hubtelRevenue?: number;
+  hubtelTransactions?: number;
+  beceRevenue?: number;
+  beceTransactions?: number;
+  wassceRevenue?: number;
+  wassceTransactions?: number;
 }
 
 export const SummaryCards = ({ kpi }: { kpi: KPI }) => {
+  const airtimeRev = kpi.airtimeRevenue || 0;
+  const airtimeTxs = kpi.airtimeTransactions || 0;
+  const hubtelRev = kpi.hubtelRevenue || 0;
+  const hubtelTxs = kpi.hubtelTransactions || 0;
+  const hubtelShare = kpi.totalRevenue > 0 ? (hubtelRev / kpi.totalRevenue) * 100 : 0;
+
+  const beceRev = kpi.beceRevenue || 0;
+  const beceTxs = kpi.beceTransactions || 0;
+  const wassceRev = kpi.wassceRevenue || 0;
+  const wassceTxs = kpi.wassceTransactions || 0;
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
       <SummaryCard 
@@ -126,6 +147,68 @@ export const SummaryCards = ({ kpi }: { kpi: KPI }) => {
         icon={RefreshCw}
         color="text-cyan-600"
         description="Automatic delivery retries"
+      />
+
+      {/* Hubtel and Airtime KPI metrics cards */}
+      <SummaryCard 
+        title="Airtime Revenue" 
+        value={`GHS ${airtimeRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+        icon={TrendingUp}
+        color="text-purple-600"
+        description="Total airtime sales revenue"
+      />
+      <SummaryCard 
+        title="Airtime Transactions" 
+        value={airtimeTxs.toLocaleString()}
+        icon={Layers}
+        color="text-violet-600"
+        description="Airtime recharge purchases count"
+      />
+      <SummaryCard 
+        title="Hubtel Airtime Rev" 
+        value={`GHS ${hubtelRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+        icon={TrendingUp}
+        color="text-sky-600"
+        description="Total Hubtel platform credit consumed"
+      />
+      <SummaryCard 
+        title="Hubtel Share (%)" 
+        value={`${hubtelShare.toFixed(1)}%`}
+        icon={BarChart3}
+        color="text-pink-600"
+        description="Hubtel revenue share of total portfolio"
+      />
+
+      {/* WASSCE scorecard metrics */}
+      <SummaryCard 
+        title="WASSCE Revenue" 
+        value={`GHS ${wassceRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+        icon={Award}
+        color="text-orange-600"
+        description="WASSCE voucher purchase earnings"
+      />
+      <SummaryCard 
+        title="WASSCE Vouchers Sold" 
+        value={wassceTxs.toLocaleString()}
+        icon={BookOpen}
+        color="text-amber-700"
+        description="Total WASSCE pins generated"
+      />
+
+      {/* BECE scorecard metrics */}
+      <SummaryCard 
+        title="BECE Revenue" 
+        value={`GHS ${beceRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+        icon={Award}
+        color="text-emerald-600"
+        description="BECE voucher purchase earnings"
+      />
+      <SummaryCard 
+        title="BECE Vouchers Sold" 
+        value={beceTxs.toLocaleString()}
+        icon={BookOpen}
+        color="text-teal-700"
+        description="Total BECE pins generated"
       />
     </div>
   );

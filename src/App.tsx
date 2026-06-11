@@ -13,6 +13,9 @@ interface AppSettings {
   currency: string;
   support_email: string;
   maintenance_mode: boolean;
+  bece_active?: boolean;
+  wassce_active?: boolean;
+  airtime_active?: boolean;
 }
 
 export default function App() {
@@ -45,7 +48,7 @@ export default function App() {
       setSettings({
         app_name: 'Datapapa',
         currency: 'GHS',
-        support_email: 'support@datapapa.com',
+        support_email: 'support@datapapa.site',
         maintenance_mode: false,
       });
     }
@@ -76,13 +79,6 @@ export default function App() {
             console.warn('Auth issue detected in App.tsx, signing out...');
             localStorage.removeItem('datapapa-auth-token');
             await supabase.auth.signOut().catch(() => {});
-            }
-          if (
-            error.message?.includes('Refresh Token Not Found') ||
-            error.message?.includes('Auth session missing')
-          ) {
-            console.warn('Auth issue detected in App.tsx, signing out...');
-            await supabase.auth.signOut();
             setUserRole(null);
             return;
           }
@@ -138,15 +134,24 @@ export default function App() {
   useEffect(() => {
     initializeApp();
 
+    const handleSettingsUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent<AppSettings>;
+      if (customEvent.detail) {
+        setSettings(customEvent.detail);
+      }
+    };
+    window.addEventListener('app-settings-updated', handleSettingsUpdated);
+
     // Set up real-time subscription for settings
     const settingsSubscription = supabase
       .channel('public:settings')
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'settings', filter: 'key=eq.general' },
+        { event: '*', schema: 'public', table: 'settings', filter: 'key=eq.general' },
         (payload) => {
-          if (payload.new && payload.new.value) {
-            setSettings(payload.new.value as AppSettings);
+          const newRow = payload.new as any;
+          if (newRow && newRow.value) {
+            setSettings(newRow.value as AppSettings);
           }
         }
       )
@@ -158,6 +163,7 @@ export default function App() {
     });
 
     return () => {
+      window.removeEventListener('app-settings-updated', handleSettingsUpdated);
       settingsSubscription.unsubscribe();
       authSub.unsubscribe();
     };
@@ -179,16 +185,30 @@ export default function App() {
     return <MaintenanceScreen supportEmail={settings?.support_email} />;
   }
 
+  const isPreviewMode = typeof window !== 'undefined' && (
+    import.meta.env.DEV ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.includes('ais-dev-') ||
+    window.location.origin.includes('ais-dev')
+  );
+
   return (
     <Router>
       <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
         <Navbar settings={settings} />
         <main>
           <Routes>
-            <Route path="/" element={<Home settings={settings} />} />
+            <Route path="/" element={<Home settings={settings} refreshSettings={fetchGlobalSettings} />} />
             <Route path="/receipt/:id" element={<Receipt />} />
-            <Route path="/admin" element={<AdminDashboard />} />
-            <Route path="/admin/auth" element={<AdminAuth />} />
+            <Route 
+              path="/admin" 
+              element={isPreviewMode ? <AdminDashboard /> : <Navigate to="/" replace />} 
+            />
+            <Route 
+              path="/admin/auth" 
+              element={isPreviewMode ? <AdminAuth /> : <Navigate to="/" replace />} 
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

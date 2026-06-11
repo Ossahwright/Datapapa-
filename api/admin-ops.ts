@@ -229,8 +229,11 @@ export default async function handler(req: any, res: any) {
           return res.json({ success: false, message: "Already delivered" });
         }
 
-        const hasProviderFootprint = !!tx.provider_reference || !!tx.external_reference || 
-          ["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "manual_review_required"].includes(tx.vtu_status);
+        const hasProviderFootprint = tx.vtu_status !== "provider_rejected" && (
+          !!tx.provider_reference || 
+          (!!tx.external_reference && tx.external_reference !== tx.id) || 
+          ["provider_accepted", "awaiting_provider_confirmation", "reconciliation_pending", "delayed_provider_processing", "manual_review_required"].includes(tx.vtu_status)
+        );
 
         if (hasProviderFootprint) {
           return res.status(200).json({ success: false, message: "Repurchase Denied: Provider footprint found. Use Sync.", divertedToReconciliation: true });

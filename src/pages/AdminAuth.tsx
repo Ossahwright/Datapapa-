@@ -24,6 +24,12 @@ export default function AdminAuth() {
         return;
       }
       if (session) {
+        // 🛡️ Owner Fallback
+        if (session.user.email === 'wrightossah@gmail.com') {
+          navigate('/admin');
+          return;
+        }
+
         // If session exists, try to verify role quickly
         const { data: profile } = await supabase
           .from('profiles')
@@ -81,6 +87,22 @@ export default function AdminAuth() {
 
         const user = data.user;
         if (!user) throw new Error("No user returned");
+
+        // 🛡️ Owner Fallback & Background Auto-Repair
+        if (user.email === 'wrightossah@gmail.com') {
+          try {
+            await supabase.from('profiles').upsert({
+              id: user.id,
+              email: user.email,
+              role: 'admin',
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (repairErr) {
+            console.warn("Background profile repair warning:", repairErr);
+          }
+          navigate('/admin');
+          return;
+        }
 
         // 🔥 FETCH ROLE FROM PROFILES TABLE (correct way)
         const { data: profile, error: profileError } = await supabase
@@ -197,7 +219,7 @@ export default function AdminAuth() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="block w-full pl-10 pr-3 py-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-transparent transition-all outline-none"
-                placeholder="admin@datapapa.com"
+                placeholder="admin@datapapa.site"
               />
             </div>
           </div>

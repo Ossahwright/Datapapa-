@@ -157,11 +157,14 @@ export default function Receipt() {
     const isFailed = tx.vtu_status === 'failed' || tx.delivery_status === 'failed' || tx.vtu_status === 'provider_rejected' || tx.status?.toLowerCase() === 'failed';
 
     if (isDelivered) {
+      const isAirtime = tx.service_type === 'AIRTIME';
       return {
         status: 'Delivered',
         title: 'PAYMENT SUCCESS',
-        message: 'Bundle Delivered!',
-        subMessage: 'Your transaction was successful and the data bundle has been credited to the recipient.',
+        message: isAirtime ? 'Airtime Delivered!' : 'Bundle Delivered!',
+        subMessage: isAirtime 
+          ? 'Your transaction was successful and the airtime has been credited to the recipient.'
+          : 'Your transaction was successful and the data bundle has been credited to the recipient.',
         color: 'emerald',
         icon: (
           <div className="relative flex items-center justify-center">
@@ -192,11 +195,14 @@ export default function Receipt() {
     const isStale = age > 3600000;
 
     if (isPaid) {
+      const isAirtime = tx.service_type === 'AIRTIME';
       return {
         status: 'Processing',
         title: 'PAYMENT SUCCESS',
         message: 'Order Processing',
-        subMessage: 'Successful payment! We are now sending the data to the recipient. This usually takes 10-30 seconds.',
+        subMessage: isAirtime 
+          ? 'Successful payment! We are now sending the airtime to the recipient. This usually takes 10-30 seconds.'
+          : 'Successful payment! We are now sending the data to the recipient. This usually takes 10-30 seconds.',
         color: 'indigo',
         icon: (
           <div className="relative flex items-center justify-center">
@@ -341,8 +347,12 @@ export default function Receipt() {
               </div>
 
               <div className="flex justify-between items-center p-0.5">
-                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">Plan</span>
-                <span className="text-slate-900 font-black text-xs">{transaction.display_bundle || transaction.capacity || 'Data Pack'}</span>
+                <span className="text-slate-400 font-bold uppercase text-[8px] tracking-widest">
+                  {transaction.service_type === 'AIRTIME' ? 'Service' : 'Plan'}
+                </span>
+                <span className="text-slate-900 font-black text-xs">
+                  {transaction.service_type === 'AIRTIME' ? 'Airtime Recharge' : (transaction.display_bundle || transaction.capacity || 'Data Pack')}
+                </span>
               </div>
 
               <div className="flex justify-between items-center p-0.5">

@@ -21,32 +21,86 @@ export default async function handler(req: any, res: any) {
       networkId, 
       userId,
       platform = 'web_v2',
-      reference: clientReference
+      reference: clientReference,
+      amount,
+      service_type = 'DATA'
     } = req.body;
 
     // 1. STERN VALIDATION
-    if (!bundleId || !phone || !networkId) {
-      console.error("❌ Missing required fields:", { bundleId, phone, networkId });
+    if (service_type !== 'AIRTIME' && !bundleId) {
+      console.error("❌ Missing bundleId for non-airtime initialization");
+      return res.status(400).json({ error: "Missing required fields for transaction initialization." });
+    }
+    if (!phone || !networkId) {
+      console.error("❌ Missing required fields:", { phone, networkId });
       return res.status(400).json({ error: "Missing required fields for transaction initialization." });
     }
 
-    // 2. AUTHORITATIVE BUNDLE PRICE CHECK
-    console.log(`🔎 Validating bundle: ${bundleId}`);
-    const { data: bundle, error: bundleError } = await supabase
-      .from('bundles')
-      .select('*')
-      .eq('id', bundleId)
-      .single();
+    let authoritativeAmount = 0;
+    let networkName = String(networkId).toUpperCase();
+    let networkKey = String(networkId).toLowerCase();
+    let providerNetworkKey = String(networkId).toUpperCase();
+    let capacityText = "";
+    let providerCapacity = "";
+    let costPrice = 0;
+    let internalBundleId: string | null = null;
+    const finalServiceType = service_type || 'DATA';
+    const finalProvider = finalServiceType === 'AIRTIME' ? 'HUBTEL' : 'DATAHUBGH';
 
-    if (bundleError || !bundle) {
-      console.error("❌ Bundle resolution failed:", bundleError);
-      return res.status(404).json({ error: "Bundle not found or inactive." });
-    }
+    if (finalServiceType === 'AIRTIME') {
+      authoritativeAmount = parseFloat(amount);
+      if (isNaN(authoritativeAmount) || authoritativeAmount <= 0) {
+        console.error("❌ Invalid airtime amount:", amount);
+        return res.status(400).json({ error: "Invalid airtime amount detected." });
+      }
 
-    const authoritativeAmount = parseFloat(bundle.selling_price);
-    if (!authoritativeAmount || authoritativeAmount <= 0) {
-      console.error("❌ Invalid authoritative amount:", authoritativeAmount);
-      return res.status(400).json({ error: "Invalid bundle price detected." });
+      // Standardize Network Parameters for Airtime
+      const normNetwork = networkName.trim().toUpperCase();
+      if (normNetwork === 'MTN') {
+        networkName = 'MTN';
+        networkKey = 'mtn';
+        providerNetworkKey = 'YELLO';
+      } else if (normNetwork === 'TELECEL' || normNetwork === 'VODAFONE' || normNetwork === 'VODA') {
+        networkName = 'TELECEL';
+        networkKey = 'telecel';
+        providerNetworkKey = 'TELECEL';
+      } else if (normNetwork === 'AT' || normNetwork === 'AIRTELTIGO') {
+        networkName = 'AT';
+        networkKey = 'at';
+        providerNetworkKey = 'AT_BIGTIME';
+      }
+
+      capacityText = `GHS ${authoritativeAmount} Airtime`;
+      providerCapacity = `GHS ${authoritativeAmount}`;
+      // For dynamic airtime, cost price is 97% of face value (3% standard dealer commission)
+      costPrice = authoritativeAmount * 0.97;
+    } else {
+      // 2. AUTHORITATIVE BUNDLE PRICE CHECK
+      console.log(`🔎 Validating bundle: ${bundleId}`);
+      const { data: bundle, error: bundleError } = await supabase
+        .from('bundles')
+        .select('*')
+        .eq('id', bundleId)
+        .single();
+
+      if (bundleError || !bundle) {
+        console.error("❌ Bundle resolution failed:", bundleError);
+        return res.status(404).json({ error: "Bundle not found or inactive." });
+      }
+
+      authoritativeAmount = parseFloat(bundle.selling_price);
+      if (!authoritativeAmount || authoritativeAmount <= 0) {
+        console.error("❌ Invalid authoritative amount:", authoritativeAmount);
+        return res.status(400).json({ error: "Invalid bundle price detected." });
+      }
+
+      networkName = bundle.network;
+      networkKey = bundle.network_key;
+      capacityText = bundle.capacity;
+      providerNetworkKey = bundle.datahub_network_key || bundle.network_key;
+      providerCapacity = bundle.datahub_capacity || bundle.volume || bundle.capacity;
+      costPrice = parseFloat(bundle.cost_price || '0');
+      internalBundleId = bundle.id;
     }
 
     // 3. GENERATE AUTHORITATIVE REFERENCE
@@ -62,19 +116,21 @@ export default async function handler(req: any, res: any) {
         amount: authoritativeAmount,
         recipient_phone: phone,
         payer_phone_number: payerPhone || phone,
-        network: bundle.network,
-        network_key: bundle.network_key,
-        capacity: bundle.capacity,
+        network: networkName,
+        network_key: networkKey,
+        capacity: capacityText,
         status: "initialized",
         payment_status: "initialized",
+        service_type: finalServiceType,
+        provider: finalProvider,
         
         // Storage of bundle metadata for fulfillment
-        display_bundle: bundle.capacity,
-        internal_bundle_id: bundle.id,
-        provider_network_key: bundle.datahub_network_key || bundle.network_key,
-        provider_capacity: bundle.datahub_capacity || bundle.volume || bundle.capacity,
+        display_bundle: capacityText,
+        internal_bundle_id: internalBundleId,
+        provider_network_key: providerNetworkKey,
+        provider_capacity: providerCapacity,
         
-        profit: Math.max(0, authoritativeAmount - (parseFloat(bundle.cost_price || '0') || 0)),
+        profit: Math.max(0, authoritativeAmount - costPrice),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
@@ -132,6 +188,101 @@ export default async function handler(req: any, res: any) {
     console.log("=== AUTHORITATIVE IDENTITY ESTABLISHED ===");
     console.log("📍 UUID (ID):", transaction.id);
     console.log("FINAL GENERATED EMAIL:", customerEmail);
+    console.log("=== PAYSTACK_INITIALIZE_START ===");
+
+    // ⚙️ FETCH PAYSTACK PUBLIC KEY & SECRET KEY FROM DB SETTINGS OR ENVIRONMENT
+    let dbPublicKey = "";
+    let dbSecretKey = "";
+
+    // 1. First fetch separate settings keys
+    try {
+      const { data: keysRow } = await supabase
+        .from('settings')
+        .select('*')
+        .in('key', ['paystack_public_key', 'paystack_secret_key']);
+      
+      if (keysRow) {
+        const pubRow = keysRow?.find(r => r.key === 'paystack_public_key');
+        const secRow = keysRow?.find(r => r.key === 'paystack_secret_key');
+        if (pubRow && pubRow.value) {
+          dbPublicKey = typeof pubRow.value === 'string' ? pubRow.value : JSON.stringify(pubRow.value).replace(/^"(.*)"$/, '$1');
+        }
+        if (secRow && secRow.value) {
+          dbSecretKey = typeof secRow.value === 'string' ? secRow.value : JSON.stringify(secRow.value).replace(/^"(.*)"$/, '$1');
+        }
+      }
+    } catch (dbErr) {
+      console.warn("Could not fetch Paystack keys from settings table:", dbErr);
+    }
+
+    // 2. Fetch/Fallback from centralized secure properties object
+    try {
+      const { data: secureRow } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('key', 'secure')
+        .maybeSingle();
+
+      if (secureRow && secureRow.value) {
+        const secureVal = typeof secureRow.value === 'string' ? JSON.parse(secureRow.value) : secureRow.value;
+        if (secureVal?.paystack_public_key && !dbPublicKey) {
+          dbPublicKey = secureVal.paystack_public_key;
+        }
+        if (secureVal?.paystack_secret_key && !dbSecretKey) {
+          dbSecretKey = secureVal.paystack_secret_key;
+        }
+      }
+    } catch (secErr) {
+      console.warn("Could not fetch Paystack keys from secure settings key:", secErr);
+    }
+
+    const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || dbSecretKey || "";
+    const PAYSTACK_PUBLIC_KEY = process.env.VITE_PAYSTACK_PUBLIC_KEY || process.env.PAYSTACK_PUBLIC_KEY || dbPublicKey || "";
+
+    console.log("=== PAYSTACK_INITIALIZE_SUCCESS ===");
+    console.log("📍 UUID (ID):", transaction.id);
+    console.log("🔑 Public Key Present:", !!PAYSTACK_PUBLIC_KEY);
+    console.log("🔑 Secret Key Present:", !!PAYSTACK_SECRET_KEY);
+
+    let paystackAuthorizationUrl = "";
+    if (PAYSTACK_SECRET_KEY && PAYSTACK_SECRET_KEY.trim() !== "" && !PAYSTACK_SECRET_KEY.includes("PAYSTACK_SECRET_KEY")) {
+      try {
+        console.log("🔗 Contacting Paystack API to generate standard checkout url...");
+        const pyRes = await fetch("https://api.paystack.co/transaction/initialize", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${PAYSTACK_SECRET_KEY.trim()}`
+          },
+          body: JSON.stringify({
+            email: customerEmail,
+            amount: Math.round(authoritativeAmount * 100),
+            reference: transaction.id,
+            callback_url: `${req.headers.origin || 'https://datapapa.site'}/receipt/${transaction.id}`,
+            metadata: {
+              transaction_id: transaction.id,
+              phone,
+              customer_payment_email: customerEmail,
+              payer_phone: normalizedPhone,
+              network: networkName,
+              bundle: capacityText,
+              platform
+            }
+          })
+        });
+
+        const pyData = await pyRes.json();
+        if (pyData && pyData.status && pyData.data) {
+          paystackAuthorizationUrl = pyData.data.authorization_url;
+          console.log("=== PAYSTACK_AUTHORIZATION_URL_RECEIVED ===");
+          console.log("✅ Paystack API Initialized successfully. URL:", paystackAuthorizationUrl);
+        } else {
+          console.warn("⚠️ Paystack API failed inside server initialize handler:", pyData);
+        }
+      } catch (pyErr) {
+        console.error("❌ Failed to communicate with Paystack API server:", pyErr);
+      }
+    }
 
     const initializePayload = {
       success: true,
@@ -140,13 +291,15 @@ export default async function handler(req: any, res: any) {
         amount: Math.round(authoritativeAmount * 100),
         email: customerEmail,
         transaction_id: transaction.id,
+        publicKey: PAYSTACK_PUBLIC_KEY,
+        authorizationUrl: paystackAuthorizationUrl,
         metadata: {
           transaction_id: transaction.id, // 🚀 METADATA SYNC
           phone,
           customer_payment_email: customerEmail, // Step 5: Metadata persistence
           payer_phone: normalizedPhone,
-          network: bundle.network,
-          bundle: bundle.capacity,
+          network: networkName,
+          bundle: capacityText,
           platform
         }
       }

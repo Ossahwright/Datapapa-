@@ -501,6 +501,26 @@ export const ReportPDFTemplate = ({
             </View>
           </View>
 
+          <Text style={styles.sectionTitle}>Service & Provider Breakdowns</Text>
+          <View style={styles.kpiGrid}>
+            <View style={styles.kpiCard}>
+              <Text style={styles.kpiLabel}>Airtime Sales Rev</Text>
+              <Text style={styles.kpiValue}>{formatMoney(kpi.airtimeRevenue || 0)}</Text>
+            </View>
+            <View style={styles.kpiCard}>
+              <Text style={styles.kpiLabel}>Airtime Orders</Text>
+              <Text style={styles.kpiValue}>{(kpi.airtimeTransactions || 0)} orders</Text>
+            </View>
+            <View style={styles.kpiCard}>
+              <Text style={styles.kpiLabel}>Hubtel Wallet Consumed</Text>
+              <Text style={styles.kpiValue}>{formatMoney(kpi.hubtelRevenue || 0)}</Text>
+            </View>
+            <View style={styles.kpiCard}>
+              <Text style={styles.kpiLabel}>Hubtel Share</Text>
+              <Text style={styles.kpiValue}>{(kpi.totalRevenue > 0 ? ((kpi.hubtelRevenue || 0) / kpi.totalRevenue) * 100 : 0).toFixed(1)}%</Text>
+            </View>
+          </View>
+
           <Text style={styles.sectionTitle}>Network Revenue Channel Share</Text>
           <View style={styles.intelRow}>
             <View style={{ flex: 1.5 }}>

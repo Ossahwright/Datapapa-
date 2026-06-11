@@ -48,6 +48,7 @@ import {
   XCircle,
   Eye,
   MessageCircle,
+  Power,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { openWhatsApp, isValidPhoneNumber } from "../lib/whatsapp";
@@ -108,7 +109,7 @@ export default function AdminDashboard() {
   const [editingBundle, setEditingBundle] = useState<any>(null);
   const [selectedBundle, setSelectedBundle] = useState<any>(null);
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<any>({
     network: "",
     network_key: "",
     datahub_network_key: "",
@@ -119,10 +120,12 @@ export default function AdminDashboard() {
     selling_price: "",
     cost_price: "",
     is_active: true,
+    service_type: "DATA",
+    provider: "DATAHUBGH",
   });
   const [bundleToDelete, setBundleToDelete] = useState<any>(null);
   const [isAddingBundle, setIsAddingBundle] = useState(false);
-  const [newBundle, setNewBundle] = useState({
+  const [newBundle, setNewBundle] = useState<any>({
     network: "MTN",
     network_key: "YELLO",
     datahub_network_key: "",
@@ -133,7 +136,10 @@ export default function AdminDashboard() {
     selling_price: "",
     cost_price: "",
     is_active: true,
+    service_type: "DATA",
+    provider: "DATAHUBGH",
   });
+  const [selectedServiceTab, setSelectedServiceTab] = useState<'DATA' | 'AIRTIME' | 'BECE' | 'WASSCE'>('DATA');
   const [customerToDelete, setCustomerToDelete] = useState<any>(null);
   const [viewingCustomerTransactions, setViewingCustomerTransactions] =
     useState<any>(null);
@@ -147,6 +153,8 @@ export default function AdminDashboard() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterDelivery, setFilterDelivery] = useState("");
   const [filterDate, setFilterDate] = useState("");
+  const [filterServiceType, setFilterServiceType] = useState("");
+  const [filterProvider, setFilterProvider] = useState("");
 
   // App Settings State
   const [appSettings, setAppSettings] = useState({
@@ -154,11 +162,16 @@ export default function AdminDashboard() {
     currency: "GHS",
     support_email: "support@datapapa.site",
     maintenance_mode: false,
+    bece_active: true,
+    wassce_active: true,
+    airtime_active: true,
   });
   const [secureSettings, setSecureSettings] = useState({
     datahub_api_key: "",
     telegram_bot_token: "",
     telegram_chat_id: "",
+    paystack_public_key: "",
+    paystack_secret_key: "",
   });
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -368,6 +381,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchProviderSettings();
+    fetchSettings();
     // Start with a sync
     syncWalletSilently();
 
@@ -778,6 +792,11 @@ export default function AdminDashboard() {
         throw new Error(`General settings: ${errorMsg}`);
       }
 
+      // Dispatch custom event for real-time app state synchronization across components
+      window.dispatchEvent(
+        new CustomEvent("app-settings-updated", { detail: appSettings })
+      );
+
       // Save secure settings
       const { error: secureError } = await supabase
         .from("settings")
@@ -895,7 +914,22 @@ export default function AdminDashboard() {
       return;
     }
 
-    setBundles(data || []);
+    // Map and resolve service_type & provider dynamically to bypass missing database columns
+    const enrichedData = (data || []).map((b: any) => {
+      const netKey = String(b.network_key || '').toUpperCase();
+      const dhNetKey = String(b.datahub_network_key || '').toUpperCase();
+      const isBECE = netKey === 'BECE' || dhNetKey === 'BECE';
+      const isWASSCE = netKey === 'WASSCE' || dhNetKey === 'WASSCE';
+      const isAirtime = netKey === 'AIRTIME' || dhNetKey === 'AIRTIME';
+
+      return {
+        ...b,
+        service_type: isBECE ? 'BECE' : isWASSCE ? 'WASSCE' : isAirtime ? 'AIRTIME' : (b.service_type || 'DATA'),
+        provider: isAirtime ? 'HUBTEL' : (b.provider || 'DATAHUBGH')
+      };
+    });
+
+    setBundles(enrichedData);
     setLastBundlesSync(new Date().toLocaleTimeString());
     setIsLoadingBundles(false);
   }, []);
@@ -918,6 +952,8 @@ export default function AdminDashboard() {
       cost_price: bundle.cost_price || "",
       selling_price: bundle.selling_price || "",
       is_active: bundle.is_active ?? true,
+      service_type: bundle.service_type || "DATA",
+      provider: bundle.provider || "DATAHUBGH",
     });
 
     setShowModal(true);
@@ -939,6 +975,8 @@ export default function AdminDashboard() {
       selling_price: form.selling_price === "" ? 0 : Number(form.selling_price),
       description: form.description,
       is_active: form.is_active,
+      service_type: form.service_type || "DATA",
+      provider: form.provider || "DATAHUBGH",
     };
 
     if (!bundleId) {
@@ -979,10 +1017,14 @@ export default function AdminDashboard() {
       setIsActionProcessing(true);
       console.log("📤 Updating bundle:", bundleId);
 
+      const cleanUpdates = { ...updates };
+      delete cleanUpdates.service_type;
+      delete cleanUpdates.provider;
+
       const { data, error } = await supabase
         .from("bundles")
         .update({
-          ...updates,
+          ...cleanUpdates,
           updated_at: new Date().toISOString(),
         })
         .eq("id", bundleId)
@@ -1066,6 +1108,39 @@ export default function AdminDashboard() {
     await handleUpdateBundle(bundleId, { is_active: !currentStatus });
   };
 
+  const handleToggleServiceStatus = async (serviceType: 'AIRTIME' | 'BECE' | 'WASSCE') => {
+    try {
+      const key = serviceType === 'BECE' ? 'bece_active' : serviceType === 'WASSCE' ? 'wassce_active' : 'airtime_active';
+      const currentVal = (appSettings as any)[key] !== false;
+      const updatedSettings = {
+        ...appSettings,
+        [key]: !currentVal
+      };
+      
+      setAppSettings(updatedSettings);
+
+      const { error } = await supabase
+        .from("settings")
+        .upsert({
+          key: "general",
+          value: updatedSettings,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "key" });
+
+      if (error) {
+        throw error;
+      }
+
+      // Dispatch custom event for real-time app state synchronization across components
+      window.dispatchEvent(
+        new CustomEvent("app-settings-updated", { detail: updatedSettings })
+      );
+    } catch (err: any) {
+      console.error(`Status toggle error:`, err);
+      alert(`Failed to save status: ${err.message || 'Unknown error'}`);
+    }
+  };
+
   const handleCreateBundle = async (e?: FormEvent) => {
     if (e) e.preventDefault();
     if (isActionProcessing) return;
@@ -1073,13 +1148,14 @@ export default function AdminDashboard() {
     // Check for duplicate capacity
     const isDuplicate = bundles.some(
       (b) =>
+        (b.service_type || "DATA") === (newBundle.service_type || "DATA") &&
         (b.network_key || "").toLowerCase() === (newBundle.network_key || "").toLowerCase() &&
         b.capacity?.toLowerCase() === newBundle.capacity.toLowerCase(),
     );
 
     if (isDuplicate) {
       alert(
-        `A bundle with capacity "${newBundle.capacity}" already exists for ${newBundle.network}.`,
+        `A bundle with capacity "${newBundle.capacity}" already exists for service "${newBundle.service_type}" and network ${newBundle.network}.`,
       );
       return;
     }
@@ -1140,6 +1216,8 @@ export default function AdminDashboard() {
         selling_price: "",
         cost_price: "",
         is_active: true,
+        service_type: "DATA",
+        provider: "DATAHUBGH",
       });
     } catch (err: any) {
       console.error("🔥 CREATE ERROR:", err);
@@ -1434,11 +1512,12 @@ export default function AdminDashboard() {
     const bundle_name = tx.capacity || tx.display_bundle || tx.bundle_name || tx.volume || "N/A";
     const amount = Number(tx.amount || 0).toFixed(2);
     const transaction_reference = tx.reference || tx.paystack_receipt || tx.id.substring(0, 8);
+    const isAirtime = tx.service_type === 'AIRTIME';
 
     const formattedMsg = `🎉 DATAPAPA DELIVERY CONFIRMATION\n\n` +
-      `Your data bundle has been successfully delivered.\n\n` +
+      `Your ${isAirtime ? "airtime recharge" : "data bundle"} has been successfully delivered.\n\n` +
       `📱 Recipient Number: ${recipient_number}\n` +
-      `📦 Bundle: ${bundle_name}\n` +
+      `${isAirtime ? `⚡ Service: Airtime Recharge` : `📦 Bundle: ${bundle_name}`}\n` +
       `💰 Amount Paid: GHS ${amount}\n` +
       `🧾 Reference: ${transaction_reference}\n\n` +
       `A copy of your transaction receipt has been generated for your records.\n\n` +
@@ -1745,6 +1824,14 @@ export default function AdminDashboard() {
         query = query.eq("network", filterNetwork);
       }
 
+      if (filterServiceType) {
+        query = query.eq("service_type", filterServiceType);
+      }
+
+      if (filterProvider) {
+        query = query.eq("provider", filterProvider);
+      }
+
       if (filterStatus) {
         if (filterStatus === "success") {
           query = query.in("status", ["success", "paid", "completed", "payment_verified"]);
@@ -1796,6 +1883,8 @@ export default function AdminDashboard() {
     filterStatus,
     filterDelivery,
     filterDate,
+    filterServiceType,
+    filterProvider,
   ]);
 
   // Handled by master realtime effect
@@ -2725,11 +2814,41 @@ export default function AdminDashboard() {
                   <option value="failed">Failed</option>
                 </select>
 
+                <select
+                  value={filterServiceType}
+                  onChange={(e) => {
+                    setFilterServiceType(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-violet-700"
+                >
+                  <option value="">All Services</option>
+                  <option value="DATA">DATA</option>
+                  <option value="AIRTIME">AIRTIME</option>
+                  <option value="BECE">BECE</option>
+                  <option value="WASSCE">WASSCE</option>
+                </select>
+
+                <select
+                  value={filterProvider}
+                  onChange={(e) => {
+                    setFilterProvider(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-emerald-700"
+                >
+                  <option value="">All Providers</option>
+                  <option value="DATAHUBGH">DATAHUBGH</option>
+                  <option value="HUBTEL">HUBTEL</option>
+                </select>
+
                 <button
                   onClick={() => {
                     setFilterNetwork("");
                     setFilterStatus("");
                     setFilterDelivery("");
+                    setFilterServiceType("");
+                    setFilterProvider("");
                     setSearchQuery("");
                     setFilterDate("");
                     setCurrentPage(1);
@@ -2785,6 +2904,8 @@ export default function AdminDashboard() {
                       </th>
                       <th className="px-6 py-4">Internal Ref</th>
                       <th className="px-6 py-4">Date & Time</th>
+                      <th className="px-6 py-4 font-bold text-violet-700">Service</th>
+                      <th className="px-6 py-4 font-bold text-emerald-700">Provider</th>
                       <th className="px-6 py-4">Provider Ref</th>
                       <th className="px-6 py-4">Network</th>
                       <th className="px-6 py-4">Capacity</th>
@@ -2802,7 +2923,7 @@ export default function AdminDashboard() {
                     {isLoadingTransactions ? (
                       <tr>
                         <td
-                          colSpan={14}
+                          colSpan={16}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Activity className="animate-spin text-indigo-500 h-8 w-8 mx-auto mb-3" />
@@ -2812,7 +2933,7 @@ export default function AdminDashboard() {
                     ) : transactions.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={14}
+                          colSpan={16}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
@@ -2843,6 +2964,23 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-6 py-4 text-slate-600">
                               {new Date(tx.created_at).toLocaleString()}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                                tx.service_type === 'AIRTIME' ? 'bg-purple-100 text-purple-800' :
+                                tx.service_type === 'BECE' ? 'bg-emerald-100 text-emerald-800' :
+                                tx.service_type === 'WASSCE' ? 'bg-orange-100 text-orange-800' :
+                                'bg-indigo-100 text-indigo-800'
+                              }`}>
+                                {tx.service_type || 'DATA'}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                tx.provider === 'HUBTEL' ? 'bg-sky-100 text-sky-800' : 'bg-pink-100 text-pink-800'
+                              }`}>
+                                {tx.provider || 'DATAHUBGH'}
+                              </span>
                             </td>
                             <td className="px-6 py-4 font-mono text-xs text-slate-500">
                               {tx.provider_reference || tx.external_reference || "N/A"}
@@ -3154,11 +3292,11 @@ export default function AdminDashboard() {
             <header className="mb-8 flex justify-between items-center">
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">
-                  Bundles Management
+                  Bundles & Services Management
                 </h1>
                 <div className="flex items-center gap-2 mt-1">
                   <p className="text-slate-500">
-                    Manage network data bundles, pricing, and availability.
+                    Manage networks, airtimes, exam vouchers, and pricing.
                   </p>
                   <span className="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded border border-slate-200 uppercase tracking-widest font-bold">
                     Real-time Active
@@ -3180,7 +3318,23 @@ export default function AdminDashboard() {
                   />
                 </button>
                 <button
-                  onClick={() => setIsAddingBundle(true)}
+                  onClick={() => {
+                    setNewBundle({
+                      network: selectedServiceTab === 'BECE' || selectedServiceTab === 'WASSCE' ? 'WAEC' : 'MTN',
+                      network_key: selectedServiceTab === 'BECE' || selectedServiceTab === 'WASSCE' ? 'WAEC' : 'YELLO',
+                      datahub_network_key: selectedServiceTab === 'BECE' ? 'BECE' : selectedServiceTab === 'WASSCE' ? 'WASSCE' : 'YELLO',
+                      datahub_capacity: "1",
+                      capacity: "1 Voucher",
+                      volume: "",
+                      description: selectedServiceTab === 'BECE' ? 'BECE Results Checker' : selectedServiceTab === 'WASSCE' ? 'WASSCE Results Checker' : '',
+                      selling_price: "",
+                      cost_price: "",
+                      is_active: true,
+                      service_type: selectedServiceTab,
+                      provider: selectedServiceTab === 'AIRTIME' ? 'HUBTEL' : 'DATAHUBGH',
+                    });
+                    setIsAddingBundle(true);
+                  }}
                   className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-semibold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center gap-2"
                 >
                   <div className="bg-white/20 p-1 rounded-lg">
@@ -3191,63 +3345,218 @@ export default function AdminDashboard() {
               </div>
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              {[
-                {
-                  name: "MTN",
-                  logo: "https://i.postimg.cc/BvS8nyGS/download.jpg",
-                  color: "border-yellow-100",
-                  bg: "bg-yellow-50",
-                },
-                {
-                  name: "Telecel",
-                  logo: "https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg",
-                  color: "border-red-100",
-                  bg: "bg-red-50",
-                },
-                {
-                  name: "AirtelTigo",
-                  logo: "https://i.postimg.cc/sfqT8kkW/images.jpg",
-                  color: "border-blue-100",
-                  bg: "bg-blue-50",
-                },
-              ].map((net) => {
-                const count = bundles.filter(
-                  (b) =>
-                    b.network?.toLowerCase() === net.name.toLowerCase() ||
-                    (net.name === "AirtelTigo" && (
-                      b.network?.toLowerCase() === "at" || 
-                      b.network?.toLowerCase().includes("airteltigo")
-                    )),
-                ).length;
+            {/* Service Tabs */}
+            <div className="flex border-b border-slate-100 mb-6 gap-2">
+              {(["DATA", "AIRTIME", "BECE", "WASSCE"] as const).map((tab) => {
+                const isActive = selectedServiceTab === tab;
+                const count = bundles.filter(b => (b.service_type || "DATA") === tab).length;
                 return (
-                  <div
-                    key={net.name}
-                    className={`flex items-center p-4 rounded-2xl border ${net.color} ${net.bg} shadow-sm`}
+                  <button
+                    key={tab}
+                    id={`bundle-tab-${tab.toLowerCase()}`}
+                    onClick={() => setSelectedServiceTab(tab)}
+                    type="button"
+                    className={`pb-3 px-4 font-bold text-sm border-b-2 transition-all flex items-center gap-2 ${
+                      isActive
+                        ? "border-indigo-600 text-indigo-600"
+                        : "border-transparent text-slate-500 hover:text-slate-800"
+                    }`}
                   >
-                    <img
-                      src={net.logo}
-                      alt={net.name}
-                      className="w-12 h-12 rounded-xl object-cover shadow-sm mr-4"
-                    />
-                    <div>
-                      <h4 className="font-bold text-slate-900">{net.name}</h4>
-                      <p className="text-sm text-slate-500">
-                        {count} Active Bundles
-                      </p>
-                    </div>
-                  </div>
+                    <span>
+                      {tab === "DATA" 
+                        ? "Data Bundles" 
+                        : tab === "AIRTIME" 
+                          ? "Airtime" 
+                          : tab === "BECE" 
+                            ? "BECE Vouchers" 
+                            : "WASSCE Vouchers"}
+                    </span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${isActive ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600"}`}>
+                      {count}
+                    </span>
+                  </button>
                 );
               })}
             </div>
+
+            {selectedServiceTab === "DATA" || selectedServiceTab === "AIRTIME" ? (
+              <div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  {[
+                    {
+                      name: "MTN",
+                      logo: "https://i.postimg.cc/BvS8nyGS/download.jpg",
+                      color: "border-yellow-100",
+                      bg: "bg-yellow-50",
+                    },
+                    {
+                      name: "Telecel",
+                      logo: "https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg",
+                      color: "border-red-100",
+                      bg: "bg-red-50",
+                    },
+                    {
+                      name: "AirtelTigo",
+                      logo: "https://i.postimg.cc/sfqT8kkW/images.jpg",
+                      color: "border-blue-100",
+                      bg: "bg-blue-50",
+                    },
+                  ].map((net) => {
+                    const count = bundles.filter(
+                      (b) =>
+                        (b.service_type || "DATA") === selectedServiceTab &&
+                        (b.network?.toLowerCase() === net.name.toLowerCase() ||
+                          (net.name === "AirtelTigo" && (
+                            b.network?.toLowerCase() === "at" || 
+                            b.network?.toLowerCase().includes("airteltigo")
+                          ))),
+                    ).length;
+                    return (
+                      <div
+                        key={net.name}
+                        className={`flex items-center p-4 rounded-2xl border ${net.color} ${net.bg} shadow-sm`}
+                      >
+                        <img
+                          src={net.logo}
+                          alt={net.name}
+                          className="w-12 h-12 rounded-xl object-cover shadow-sm mr-4"
+                        />
+                        <div>
+                          <h4 className="font-bold text-slate-900">{net.name}</h4>
+                          <p className="text-sm text-slate-500">
+                            {count} Active {selectedServiceTab === "DATA" ? "Bundles" : "Airtimes"}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {selectedServiceTab === "AIRTIME" && (
+                  <div className="max-w-md mb-8">
+                    <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                      appSettings.airtime_active !== false
+                        ? "border-emerald-100 bg-emerald-50/20"
+                        : "border-rose-100 bg-rose-50/20"
+                    } shadow-sm`}>
+                      <div className="flex items-center">
+                        <div className={`p-3 rounded-xl mr-3 ${
+                          appSettings.airtime_active !== false
+                            ? "bg-emerald-600/10 text-emerald-600"
+                            : "bg-rose-600/10 text-rose-600"
+                        }`}>
+                          <Power size={20} />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-slate-900">Homepage Status</h4>
+                          <p className="text-xs text-slate-500 font-medium">
+                            {appSettings.airtime_active !== false ? "Visible on Homepage" : "Hidden from Home"}
+                          </p>
+                        </div>
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleServiceStatus("AIRTIME")}
+                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            appSettings.airtime_active !== false
+                              ? "bg-indigo-600"
+                              : "bg-slate-200"
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                              appSettings.airtime_active !== false
+                                ? "translate-x-5"
+                                : "translate-x-0"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="flex items-center p-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 shadow-sm">
+                  <div className="bg-indigo-600/10 p-3 rounded-xl mr-4 text-indigo-600">
+                    <Database size={24} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900">
+                      {selectedServiceTab === "BECE" ? "BECE Results Checker" : "WASSCE Results Checker"}
+                    </h4>
+                    <p className="text-sm text-slate-500">
+                      {bundles.filter(b => b.service_type === selectedServiceTab).length} Pricing Plan(s) Configured
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center p-4 rounded-2xl border border-emerald-100 bg-emerald-50/55 shadow-sm">
+                  <div className="bg-emerald-600/10 p-3 rounded-xl mr-4 text-emerald-600">
+                    <Check size={24} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900">Consolidated Provider Mode</h4>
+                    <p className="text-sm text-slate-500">
+                      Uses unified DataHubGH API & Wallet balances
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Homepage status toggle section */}
+                <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                  (selectedServiceTab === "BECE" ? appSettings.bece_active : appSettings.wassce_active) !== false
+                    ? "border-emerald-100 bg-emerald-50/20"
+                    : "border-rose-100 bg-rose-50/20"
+                } shadow-sm`}>
+                  <div className="flex items-center">
+                    <div className={`p-3 rounded-xl mr-3 ${
+                      (selectedServiceTab === "BECE" ? appSettings.bece_active : appSettings.wassce_active) !== false
+                        ? "bg-emerald-600/10 text-emerald-600"
+                        : "bg-rose-600/10 text-rose-600"
+                    }`}>
+                      <Power size={20} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900">Homepage Status</h4>
+                      <p className="text-xs text-slate-500 font-medium">
+                        {(selectedServiceTab === "BECE" ? appSettings.bece_active : appSettings.wassce_active) !== false ? "Visible on Homepage" : "Hidden from Home"}
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleServiceStatus(selectedServiceTab === "BECE" ? "BECE" : "WASSCE")}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        (selectedServiceTab === "BECE" ? appSettings.bece_active : appSettings.wassce_active) !== false
+                          ? "bg-indigo-600"
+                          : "bg-slate-200"
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          (selectedServiceTab === "BECE" ? appSettings.bece_active : appSettings.wassce_active) !== false
+                            ? "translate-x-5"
+                            : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
               <SyncedHorizontalScroll>
                 <table className="w-full text-left text-sm whitespace-nowrap">
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
                     <tr>
-                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Network</th>
-                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Capacity</th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">
+                        {selectedServiceTab === 'BECE' || selectedServiceTab === 'WASSCE' ? 'Voucher' : 'Network'}
+                      </th>
+                      <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Capacity / Volume</th>
                       <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px]">Price Matrix (C)</th>
                       <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px] text-center">Status</th>
                       <th className="px-6 py-4 font-bold uppercase tracking-tight text-slate-900 text-[10px] text-center">Actions</th>
@@ -3264,18 +3573,20 @@ export default function AdminDashboard() {
                           <p>Loading bundles...</p>
                         </td>
                       </tr>
-                    ) : bundles.length === 0 ? (
+                    ) : bundles.filter(b => (b.service_type || 'DATA') === selectedServiceTab).length === 0 ? (
                       <tr>
                         <td
                           colSpan={5}
                           className="px-6 py-12 text-center text-slate-500"
                         >
                           <Database className="text-slate-300 h-8 w-8 mx-auto mb-3" />
-                          <p>No bundles found.</p>
+                          <p>No services or bundles found for {selectedServiceTab}.</p>
                         </td>
                       </tr>
                     ) : (
-                      bundles.map((bundle) => {
+                      bundles
+                        .filter(b => (b.service_type || 'DATA') === selectedServiceTab)
+                        .map((bundle) => {
                         const isEditing = editingBundle?.id === bundle.id;
                         const profit = Number(bundle.selling_price || 0) - Number(bundle.cost_price || 0);
 
@@ -3295,8 +3606,15 @@ export default function AdminDashboard() {
                                 {(bundle.network?.toLowerCase() === "airteltigo" || bundle.network?.toLowerCase() === "at") && (
                                   <img src="https://i.postimg.cc/sfqT8kkW/images.jpg" alt="AT" className="w-8 h-8 rounded-lg object-cover shadow-sm" />
                                 )}
+                                {(selectedServiceTab === "BECE" || selectedServiceTab === "WASSCE") && (
+                                  <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600 font-bold text-[10px] shadow-sm tracking-tighter">
+                                    {selectedServiceTab}
+                                  </div>
+                                )}
                                 <div className="flex flex-col">
-                                  <span className="font-bold text-slate-900 uppercase tracking-tight">{bundle.network}</span>
+                                  <span className="font-bold text-slate-900 uppercase tracking-tight">
+                                    {selectedServiceTab === "BECE" ? "BECE Voucher" : selectedServiceTab === "WASSCE" ? "WASSCE Voucher" : bundle.network}
+                                  </span>
                                   <span className="text-[10px] text-slate-400 font-mono">{bundle.description}</span>
                                 </div>
                               </div>
@@ -4056,6 +4374,58 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
+                  {/* Paystack Integration Section */}
+                  <div className="pt-8 border-t border-slate-100 animate-fade-in">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-2">
+                        <CreditCard className="text-indigo-600 animate-pulse" size={20} />
+                        <h3 className="font-bold text-slate-900">
+                          Paystack Secure Payment Gateway
+                        </h3>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-2">
+                          Paystack Public Key (Live / Test)
+                        </label>
+                        <input
+                          type="text"
+                          value={secureSettings.paystack_public_key || ""}
+                          onChange={(e) =>
+                            setSecureSettings({
+                              ...secureSettings,
+                              paystack_public_key: e.target.value.trim(),
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs text-slate-800"
+                          placeholder="e.g. pk_live_abc123... or pk_test_abc123..."
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-450 uppercase tracking-wider mb-2">
+                          Paystack Secret Key (Live / Test)
+                        </label>
+                        <input
+                          type="password"
+                          value={secureSettings.paystack_secret_key || ""}
+                          onChange={(e) =>
+                            setSecureSettings({
+                              ...secureSettings,
+                              paystack_secret_key: e.target.value.trim(),
+                            })
+                          }
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs text-slate-800"
+                          placeholder="e.g. sk_live_xyz789... or sk_test_xyz789..."
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-450 mt-2 italic leading-relaxed">
+                      Configure your Paystack API credentials. Datapapa utilizes high-reliability Hosted Checkout Redirects to bypass browser popup blockers, safari cookies and AI Studio preview iframe policies safely.
+                    </p>
+                  </div>
+
                   {/* Telegram Notifications Section */}
                   <div className="pt-8 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-6">
@@ -4683,7 +5053,7 @@ export default function AdminDashboard() {
               >
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                   <h3 className="text-lg font-bold text-slate-900">
-                    Add New Data Bundle
+                    Add New Service Plan
                   </h3>
                   <button
                     type="button"
@@ -4694,10 +5064,50 @@ export default function AdminDashboard() {
                   </button>
                 </div>
                 <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  {/* Service Type and Routed Provider */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-indigo-700 mb-1">
+                        Service Type
+                      </label>
+                      <select
+                        value={newBundle.service_type || "DATA"}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          const prov = val === "AIRTIME" ? "HUBTEL" : "DATAHUBGH";
+                          const isVoucher = val === "BECE" || val === "WASSCE";
+                          setNewBundle({
+                            ...newBundle,
+                            service_type: val,
+                            provider: prov,
+                            network: isVoucher ? "WAEC" : "MTN",
+                            network_key: isVoucher ? "WAEC" : "YELLO",
+                            datahub_network_key: val === "BECE" ? "BECE" : val === "WASSCE" ? "WASSCE" : "YELLO",
+                          });
+                        }}
+                        className="w-full px-4 py-2 bg-indigo-50/50 border border-indigo-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-900"
+                        required
+                      >
+                        <option value="DATA">DATA Bundle</option>
+                        <option value="AIRTIME">AIRTIME Top-up</option>
+                        <option value="BECE">BECE Voucher</option>
+                        <option value="WASSCE">WASSCE Voucher</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-500 mb-1">
+                        Routed Provider
+                      </label>
+                      <div className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-bold uppercase tracking-wider">
+                        {newBundle.provider || "DATAHUBGH"}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Network
+                        {newBundle.service_type === "BECE" || newBundle.service_type === "WASSCE" ? "Exam Body" : "Network"}
                       </label>
                       <select
                         value={newBundle.network || "MTN"}
@@ -4711,28 +5121,32 @@ export default function AdminDashboard() {
                             datahub_network_key: config?.networkKey || "YELLO",
                           });
                         }}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        disabled={newBundle.service_type === "BECE" || newBundle.service_type === "WASSCE"}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
                         required
                       >
-                        {NETWORKS.map(n => (
-                          <option key={n.id} value={n.label}>{n.label}</option>
-                        ))}
+                        {newBundle.service_type === "BECE" || newBundle.service_type === "WASSCE" ? (
+                          <option value="WAEC">WAEC</option>
+                        ) : (
+                          NETWORKS.map(n => (
+                            <option key={n.id} value={n.label}>{n.label}</option>
+                          ))
+                        )}
                       </select>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Display Cap (e.g. 1GB)
+                        {newBundle.service_type === "BECE" || newBundle.service_type === "WASSCE" ? "Voucher Code / Cap" : "Display Capacity (e.g. 1GB)"}
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. 1GB"
+                        placeholder="e.g. 1 Voucher"
                         value={newBundle.capacity || ""}
                         onChange={(e) => {
                           const cap = e.target.value;
                           setNewBundle({
                             ...newBundle,
                             capacity: cap,
-                            // Auto-set datahub fields but allow manual override in other fields
                           });
                         }}
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -4744,7 +5158,7 @@ export default function AdminDashboard() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        DataHub Network Key
+                        {newBundle.provider === "HUBTEL" ? "Hubtel Keyword" : "DataHub Network Key"}
                       </label>
                       <input
                         type="text"
@@ -4762,7 +5176,7 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        DataHub Capacity (MB)
+                        {newBundle.service_type === "BECE" || newBundle.service_type === "WASSCE" ? "Provider Index" : "DataHub Capacity (MB)"}
                       </label>
                       <input
                         type="text"
@@ -4869,8 +5283,7 @@ export default function AdminDashboard() {
                     Cancel
                   </button>
                   <button
-                    type="button"
-                    onClick={handleCreateBundle}
+                    type="submit"
                     disabled={isActionProcessing}
                     className="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
                   >
@@ -4906,7 +5319,7 @@ export default function AdminDashboard() {
               >
                 <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                   <h3 className="text-lg font-bold text-slate-900">
-                    Edit Data Bundle
+                    Edit Service Plan
                   </h3>
                   <button
                     type="button"
@@ -4917,10 +5330,50 @@ export default function AdminDashboard() {
                   </button>
                 </div>
                 <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  {/* Service Type and Routed Provider */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-indigo-700 mb-1">
+                        Service Type
+                      </label>
+                      <select
+                        value={form.service_type || "DATA"}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          const prov = val === "AIRTIME" ? "HUBTEL" : "DATAHUBGH";
+                          const isVoucher = val === "BECE" || val === "WASSCE";
+                          setForm({
+                            ...form,
+                            service_type: val,
+                            provider: prov,
+                            network: isVoucher ? "WAEC" : "MTN",
+                            network_key: isVoucher ? "WAEC" : "YELLO",
+                            datahub_network_key: val === "BECE" ? "BECE" : val === "WASSCE" ? "WASSCE" : "YELLO",
+                          });
+                        }}
+                        className="w-full px-4 py-2 bg-indigo-50/50 border border-indigo-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-900"
+                        required
+                      >
+                        <option value="DATA">DATA Bundle</option>
+                        <option value="AIRTIME">AIRTIME Top-up</option>
+                        <option value="BECE">BECE Voucher</option>
+                        <option value="WASSCE">WASSCE Voucher</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-500 mb-1">
+                        Routed Provider
+                      </label>
+                      <div className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-bold uppercase tracking-wider">
+                        {form.provider || "DATAHUBGH"}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Network
+                        {form.service_type === "BECE" || form.service_type === "WASSCE" ? "Exam Body" : "Network"}
                       </label>
                       <select
                         value={form.network || "MTN"}
@@ -4934,21 +5387,26 @@ export default function AdminDashboard() {
                             datahub_network_key: config?.networkKey || "YELLO" as any
                           });
                         }}
-                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        disabled={form.service_type === "BECE" || form.service_type === "WASSCE"}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
                         required
                       >
-                        {NETWORKS.map(n => (
-                          <option key={n.id} value={n.label}>{n.label}</option>
-                        ))}
+                        {form.service_type === "BECE" || form.service_type === "WASSCE" ? (
+                          <option value="WAEC">WAEC</option>
+                        ) : (
+                          NETWORKS.map(n => (
+                            <option key={n.id} value={n.label}>{n.label}</option>
+                          ))
+                        )}
                       </select>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Display Cap (e.g. 1GB)
+                        {form.service_type === "BECE" || form.service_type === "WASSCE" ? "Voucher Code / Cap" : "Display capacity (e.g. 1GB)"}
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g. 1GB"
+                        placeholder="e.g. 1 Voucher"
                         value={form.capacity || ""}
                         onChange={(e) =>
                           setForm({ ...form, capacity: e.target.value })
@@ -4962,7 +5420,7 @@ export default function AdminDashboard() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        DataHub Network Key
+                        {form.provider === "HUBTEL" ? "Hubtel Keyword" : "DataHub Network Key"}
                       </label>
                       <input
                         type="text"
@@ -4977,7 +5435,7 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        DataHub Capacity (MB)
+                        {form.service_type === "BECE" || form.service_type === "WASSCE" ? "Provider Index" : "DataHub Capacity (MB)"}
                       </label>
                       <input
                         type="text"

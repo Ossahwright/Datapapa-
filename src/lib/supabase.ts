@@ -13,6 +13,57 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+// Monkey-patch Supabase Auth getSession and getUser to handle navigator locks and Web Locks API 'steal' issues gracefully
+const originalGetSession = supabase.auth.getSession.bind(supabase.auth);
+const originalGetUser = supabase.auth.getUser.bind(supabase.auth);
+
+supabase.auth.getSession = async function getSessionWithRetry(retryCount = 0): Promise<any> {
+  try {
+    const result = await originalGetSession();
+    if (result.error) {
+      const errMsg = (result.error.message || '').toLowerCase();
+      if (
+        errMsg.includes('refresh token') ||
+        errMsg.includes('session missing') ||
+        errMsg.includes('invalid_grant') ||
+        result.error.status === 400 ||
+        result.error.status === 401
+      ) {
+        console.warn('Stale session detected, signing out...');
+        localStorage.removeItem('datapapa-auth-token');
+        supabase.auth.signOut().catch(() => {});
+        return { data: { session: null }, error: null };
+      }
+    }
+    return result;
+  } catch (err: any) {
+    const errMsg = (err.message || '').toLowerCase();
+    if ((errMsg.includes('lock') || errMsg.includes('steal')) && retryCount < 5) {
+      console.warn(`⚠️ Supabase session lock conflict, retrying getSession (${retryCount + 1}/5)...`);
+      await new Promise(resolve => setTimeout(resolve, 300 * (retryCount + 1)));
+      return getSessionWithRetry(retryCount + 1);
+    }
+    console.warn('Session retrieval encountered a permanent exception/lock conflict:', err);
+    return { data: { session: null }, error: err };
+  }
+};
+
+supabase.auth.getUser = async function getUserWithRetry(jwt?: string, retryCount = 0): Promise<any> {
+  try {
+    const result = await originalGetUser(jwt);
+    return result;
+  } catch (err: any) {
+    const errMsg = (err.message || '').toLowerCase();
+    if ((errMsg.includes('lock') || errMsg.includes('steal')) && retryCount < 5) {
+      console.warn(`⚠️ Supabase getUser lock conflict, retrying getUser (${retryCount + 1}/5)...`);
+      await new Promise(resolve => setTimeout(resolve, 300 * (retryCount + 1)));
+      return getUserWithRetry(jwt, retryCount + 1);
+    }
+    console.warn('User retrieval encountered a permanent exception/lock conflict:', err);
+    return { data: { user: null }, error: err };
+  }
+};
+
 /**
  * Safely gets the session and handles the common "Refresh Token Not Found" error
  * which happens when the local storage session is stale or invalid.
@@ -34,10 +85,8 @@ export const getSafeSession = async () => {
         await supabase.auth.signOut().catch(() => {});
         return { session: null, error: null };
       }
-
       return { session: null, error };
     }
-     
     return { session: data?.session || null, error: null };
   } catch (err) {
     console.error('Session retrieval failed:', err);

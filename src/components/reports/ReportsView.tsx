@@ -200,7 +200,15 @@ export function ReportsView() {
       retryCount: 0,
       mtnTransactions: 0,
       airtelTigoTransactions: 0,
-      telecelTransactions: 0
+      telecelTransactions: 0,
+      airtimeRevenue: 0,
+      airtimeTransactions: 0,
+      hubtelRevenue: 0,
+      hubtelTransactions: 0,
+      beceRevenue: 0,
+      beceTransactions: 0,
+      wassceRevenue: 0,
+      wassceTransactions: 0,
     };
 
     const revenueByDay: Record<string, number> = {};
@@ -277,6 +285,36 @@ export function ReportsView() {
       }
 
       kpi.retryCount += (tx.retry_count || 0);
+
+      const isAirtime = tx.service_type === 'AIRTIME';
+      const isHubtel = tx.provider === 'HUBTEL' || isAirtime;
+      if (isAirtime) {
+        kpi.airtimeTransactions++;
+        if (isSuccess) {
+          kpi.airtimeRevenue += amount;
+        }
+      }
+      if (isHubtel) {
+        kpi.hubtelTransactions++;
+        if (isSuccess) {
+          kpi.hubtelRevenue += amount;
+        }
+      }
+
+      const isBECE = tx.service_type === 'BECE';
+      const isWASSCE = tx.service_type === 'WASSCE';
+      if (isBECE) {
+        kpi.beceTransactions++;
+        if (isSuccess) {
+          kpi.beceRevenue += amount;
+        }
+      }
+      if (isWASSCE) {
+        kpi.wassceTransactions++;
+        if (isSuccess) {
+          kpi.wassceRevenue += amount;
+        }
+      }
     });
 
     const completionCount = kpi.successCount;
