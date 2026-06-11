@@ -914,20 +914,43 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Map and resolve service_type & provider dynamically to bypass missing database columns
+    // Map and resolve service_type & provider dynamically to support historical and new database columns safely
     const enrichedData = (data || []).map((b: any) => {
       const netKey = String(b.network_key || '').toUpperCase();
       const dhNetKey = String(b.datahub_network_key || '').toUpperCase();
-      const isBECE = netKey === 'BECE' || dhNetKey === 'BECE';
-      const isWASSCE = netKey === 'WASSCE' || dhNetKey === 'WASSCE';
-      const isAirtime = netKey === 'AIRTIME' || dhNetKey === 'AIRTIME';
+      const bNetwork = String(b.network || '').toUpperCase();
+      const bDesc = String(b.description || '').toUpperCase();
+      const dbServiceType = String(b.service_type || '').toUpperCase();
+
+      let resolvedServiceType = dbServiceType || 'DATA';
+      if (resolvedServiceType === 'DATA') {
+        if (netKey === 'WAEC' || netKey === 'WASSCE' || dhNetKey === 'WASSCE' || bNetwork.includes('WASSCE') || bDesc.includes('WASSCE') || bNetwork.includes('WAEC')) {
+          resolvedServiceType = 'WASSCE';
+        } else if (netKey === 'BECE' || dhNetKey === 'BECE' || bNetwork.includes('BECE') || bDesc.includes('BECE')) {
+          resolvedServiceType = 'BECE';
+        } else if (netKey === 'AIRTIME' || dhNetKey === 'AIRTIME' || bNetwork.includes('AIRTIME') || bDesc.includes('AIRTIME')) {
+          resolvedServiceType = 'AIRTIME';
+        }
+      }
+
+      const resolvedProvider = resolvedServiceType === 'AIRTIME' ? 'HUBTEL' : 'DATAHUBGH';
 
       return {
         ...b,
-        service_type: isBECE ? 'BECE' : isWASSCE ? 'WASSCE' : isAirtime ? 'AIRTIME' : (b.service_type || 'DATA'),
-        provider: isAirtime ? 'HUBTEL' : (b.provider || 'DATAHUBGH')
+        service_type: resolvedServiceType,
+        provider: resolvedProvider
       };
     });
+
+    const wassceCount = enrichedData.filter(b => b.service_type === 'WASSCE').length;
+    const beceCount = enrichedData.filter(b => b.service_type === 'BECE').length;
+    const airtimeCount = enrichedData.filter(b => b.service_type === 'AIRTIME').length;
+
+    console.log("=== SERVICE_TYPE_RESOLUTION ===");
+    console.log(`WASSCE_COUNT: ${wassceCount}`);
+    console.log(`BECE_COUNT: ${beceCount}`);
+    console.log(`AIRTIME_COUNT: ${airtimeCount}`);
+    console.log("===============================");
 
     setBundles(enrichedData);
     setLastBundlesSync(new Date().toLocaleTimeString());
@@ -979,6 +1002,26 @@ export default function AdminDashboard() {
       provider: form.provider || "DATAHUBGH",
     };
 
+    // Auto-resolve / preserve correct service_type and provider to prevent accidental DATA overrides
+    const dbBundle = bundles.find((b) => b.id === bundleId);
+    let finalServiceType = updates.service_type || dbBundle?.service_type || "DATA";
+    const lookupNetKey = String(updates.network_key || dbBundle?.network_key || "").toUpperCase();
+    const lookupDhNetKey = String(updates.datahub_network_key || dbBundle?.datahub_network_key || "").toUpperCase();
+    const lookupNetwork = String(updates.network || dbBundle?.network || "").toUpperCase();
+    const lookupDesc = String(updates.description || dbBundle?.description || "").toUpperCase();
+
+    if (finalServiceType === "DATA") {
+      if (lookupNetKey === 'WAEC' || lookupNetKey === 'WASSCE' || lookupDhNetKey === 'WASSCE' || lookupNetwork.includes('WASSCE') || lookupDesc.includes('WASSCE') || lookupNetwork.includes('WAEC')) {
+        finalServiceType = 'WASSCE';
+      } else if (lookupNetKey === 'BECE' || lookupDhNetKey === 'BECE' || lookupNetwork.includes('BECE') || lookupDesc.includes('BECE')) {
+        finalServiceType = 'BECE';
+      } else if (lookupNetKey === 'AIRTIME' || lookupDhNetKey === 'AIRTIME' || lookupNetwork.includes('AIRTIME') || lookupDesc.includes('AIRTIME')) {
+        finalServiceType = 'AIRTIME';
+      }
+    }
+    updates.service_type = finalServiceType;
+    updates.provider = finalServiceType === 'AIRTIME' ? 'HUBTEL' : 'DATAHUBGH';
+
     if (!bundleId) {
       console.error("❌ No bundle selected");
       return;
@@ -1018,8 +1061,6 @@ export default function AdminDashboard() {
       console.log("📤 Updating bundle:", bundleId);
 
       const cleanUpdates = { ...updates };
-      delete cleanUpdates.service_type;
-      delete cleanUpdates.provider;
 
       const { data, error } = await supabase
         .from("bundles")
@@ -1174,6 +1215,24 @@ export default function AdminDashboard() {
         return;
       }
 
+      let resolvedServiceType = newBundle.service_type || "DATA";
+      const netKey = String(newBundle.network_key || "").toUpperCase();
+      const dhNetKey = String(newBundle.datahub_network_key || "").toUpperCase();
+      const bNetwork = String(newBundle.network || "").toUpperCase();
+      const bDesc = String(newBundle.description || "").toUpperCase();
+
+      if (resolvedServiceType === "DATA") {
+        if (netKey === 'WAEC' || netKey === 'WASSCE' || dhNetKey === 'WASSCE' || bNetwork.includes('WASSCE') || bDesc.includes('WASSCE') || bNetwork.includes('WAEC')) {
+          resolvedServiceType = 'WASSCE';
+        } else if (netKey === 'BECE' || dhNetKey === 'BECE' || bNetwork.includes('BECE') || bDesc.includes('BECE')) {
+          resolvedServiceType = 'BECE';
+        } else if (netKey === 'AIRTIME' || dhNetKey === 'AIRTIME' || bNetwork.includes('AIRTIME') || bDesc.includes('AIRTIME')) {
+          resolvedServiceType = 'AIRTIME';
+        }
+      }
+
+      const resolvedProvider = resolvedServiceType === 'AIRTIME' ? 'HUBTEL' : 'DATAHUBGH';
+
       const { error } = await supabase.from("bundles").insert({
         network: newBundle.network,
         network_key: newBundle.network_key,
@@ -1185,6 +1244,8 @@ export default function AdminDashboard() {
         selling_price: sellingPriceVal,
         description: newBundle.description,
         is_active: true,
+        service_type: resolvedServiceType,
+        provider: resolvedProvider,
       });
 
       if (error) {
