@@ -24,6 +24,7 @@ interface BuyDataFormProps {
     bece_active?: boolean;
     wassce_active?: boolean;
     airtime_active?: boolean;
+    data_active?: boolean;
   } | null;
   activeService?: 'DATA' | 'AIRTIME' | 'WASSCE' | 'BECE';
   setActiveService?: (service: 'DATA' | 'AIRTIME' | 'WASSCE' | 'BECE') => void;
@@ -104,12 +105,20 @@ export default function BuyDataForm({ settings, activeService: propsActiveServic
   };
 
   useEffect(() => {
-    if (activeService === 'BECE' && settings?.bece_active === false) {
-      setActiveService('DATA');
+    if (activeService === 'DATA' && settings?.data_active === false) {
+      if (settings?.airtime_active !== false) {
+        setActiveService('AIRTIME');
+      } else if (settings?.wassce_active !== false) {
+        setActiveService('WASSCE');
+      } else if (settings?.bece_active !== false) {
+        setActiveService('BECE');
+      }
+    } else if (activeService === 'BECE' && settings?.bece_active === false) {
+      setActiveService(settings?.data_active !== false ? 'DATA' : 'AIRTIME');
     } else if (activeService === 'WASSCE' && settings?.wassce_active === false) {
-      setActiveService('DATA');
+      setActiveService(settings?.data_active !== false ? 'DATA' : 'AIRTIME');
     } else if (activeService === 'AIRTIME' && settings?.airtime_active === false) {
-      setActiveService('DATA');
+      setActiveService(settings?.data_active !== false ? 'DATA' : 'WASSCE');
     }
   }, [activeService, settings, setActiveService]);
 
@@ -248,21 +257,44 @@ export default function BuyDataForm({ settings, activeService: propsActiveServic
 
   const networksToRender = useMemo(() => {
     if (activeService === 'AIRTIME') {
-      return [
-        { id: 'MTN', label: 'MTN', logoUrl: 'https://i.postimg.cc/BvS8nyGS/download.jpg' },
-        { id: 'AIRTELTIGO', label: 'AirtelTigo', logoUrl: 'https://i.postimg.cc/sfqT8kkW/images.jpg' },
-        { id: 'TELECEL', label: 'Telecel', logoUrl: 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg' }
+      const allAirtime = [
+        { id: 'MTN', label: 'MTN', logoUrl: 'https://i.postimg.cc/BvS8nyGS/download.jpg', activeKey: 'network_mtn_active' },
+        { id: 'AIRTELTIGO', label: 'AirtelTigo', logoUrl: 'https://i.postimg.cc/sfqT8kkW/images.jpg', activeKey: 'network_airteltigo_premium_active' },
+        { id: 'TELECEL', label: 'Telecel', logoUrl: 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg', activeKey: 'network_telecel_active' }
       ];
+      return allAirtime.filter(net => {
+        const isMtnActive = (settings as any)?.network_mtn_active !== false;
+        const isTelecelActive = (settings as any)?.network_telecel_active !== false;
+        const isAirtelTigoActive = (settings as any)?.network_airteltigo_premium_active !== false || (settings as any)?.network_airteltigo_bigtime_active !== false;
+        
+        if (net.id === 'MTN') return isMtnActive;
+        if (net.id === 'TELECEL') return isTelecelActive;
+        if (net.id === 'AIRTELTIGO') return isAirtelTigoActive;
+        return true;
+      });
     }
-    // Standard DATA selector returning 4 networks from config
-    return NETWORKS.map(net => ({
+    // Standard DATA selector returning active networks from config
+    return NETWORKS.filter(net => {
+      const activeKey = `network_${net.id.toLowerCase()}_active`;
+      return (settings as any)?.[activeKey] !== false;
+    }).map(net => ({
       id: net.id,
       label: net.label,
       logoUrl: net.id === 'MTN' ? 'https://i.postimg.cc/BvS8nyGS/download.jpg' :
               net.id === 'TELECEL' ? 'https://i.postimg.cc/NMVk3XP3/IMG-1960.jpg' :
               'https://i.postimg.cc/sfqT8kkW/images.jpg'
     }));
-  }, [activeService]);
+  }, [activeService, settings]);
+
+  useEffect(() => {
+    if (network) {
+      const isAvailable = networksToRender.some(net => net.id === network);
+      if (!isAvailable) {
+        setNetwork('');
+        setBundle('');
+      }
+    }
+  }, [networksToRender, network]);
 
   const selectedBundleObj = activeServiceOptions.find((b: any) => String(b.id) === String(bundle));
 
@@ -409,7 +441,7 @@ export default function BuyDataForm({ settings, activeService: propsActiveServic
         {/* Service Type Tab Bar */}
         <div className="flex bg-slate-100 p-1.5 rounded-2xl mb-8 border border-slate-200/50 max-w-lg mx-auto">
           {[
-            { id: 'DATA', label: 'Data', icon: '📱' },
+            { id: 'DATA', label: 'Data', icon: '📱', disabled: settings?.data_active === false },
             { id: 'AIRTIME', label: 'Airtime', icon: '📞', disabled: settings?.airtime_active === false },
             { id: 'WASSCE', label: 'WASSCE', icon: '🎓', disabled: settings?.wassce_active === false },
             { id: 'BECE', label: 'BECE', icon: '📝', disabled: settings?.bece_active === false },

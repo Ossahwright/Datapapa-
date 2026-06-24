@@ -16,6 +16,7 @@ interface AppSettings {
   bece_active?: boolean;
   wassce_active?: boolean;
   airtime_active?: boolean;
+  data_active?: boolean;
 }
 
 export default function App() {
@@ -50,6 +51,7 @@ export default function App() {
         currency: 'GHS',
         support_email: 'support@datapapa.site',
         maintenance_mode: false,
+        data_active: true,
       });
     }
   }, []);
@@ -73,6 +75,7 @@ export default function App() {
             errMsg.includes('refresh token') ||
             errMsg.includes('session missing') ||
             errMsg.includes('invalid_grant') ||
+            errMsg.includes('not found') ||
             error.status === 400 ||
             error.status === 401
           ) {
@@ -82,7 +85,9 @@ export default function App() {
             setUserRole(null);
             return;
           }
-          throw error;
+          console.warn('Non-fatal error checking user session, treating as guest:', error);
+          setUserRole(null);
+          return;
         }
         
         user = data?.user;
@@ -95,7 +100,11 @@ export default function App() {
           .eq('id', user.id)
           .single();
 
-        if (error) throw error;
+        if (error) {
+          console.warn('Could not load profile role, falling back to guest:', error);
+          setUserRole('user');
+          return;
+        }
         setUserRole(data?.role || 'user');
       } else {
         setUserRole(null);
@@ -108,7 +117,7 @@ export default function App() {
         setTimeout(() => fetchUserRole(existingUser, retryCount + 1), 500);
         return;
       } else {
-        console.error('Error fetching user role:', err);
+        console.warn('Error fetching user role:', err);
         setUserRole(null);
       }
     } finally {

@@ -22,6 +22,7 @@ interface HomeProps {
     bece_active?: boolean;
     wassce_active?: boolean;
     airtime_active?: boolean;
+    data_active?: boolean;
   } | null;
   refreshSettings?: () => void;
 }
@@ -43,6 +44,18 @@ export default function Home({ settings, refreshSettings }: HomeProps) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (activeService === 'DATA' && settings?.data_active === false) {
+      if (settings?.airtime_active !== false) {
+        setActiveService('AIRTIME');
+      } else if (settings?.wassce_active !== false) {
+        setActiveService('WASSCE');
+      } else if (settings?.bece_active !== false) {
+        setActiveService('BECE');
+      }
+    }
+  }, [activeService, settings]);
 
   const appName = settings?.app_name || "Datapapa";
 
@@ -110,7 +123,7 @@ export default function Home({ settings, refreshSettings }: HomeProps) {
             <div className="mt-10 flex flex-wrap justify-center items-center gap-x-4 gap-y-3 text-sm">
                <span className="text-slate-700 font-black uppercase tracking-wider text-sm sm:text-base mr-1">Our Professional Services:</span>
               {[
-                { id: 'DATA', label: '📱 Mobile Data', formId: 'buy-data' },
+                { id: 'DATA', label: '📱 Mobile Data', formId: 'buy-data', disabled: settings?.data_active === false },
                 { id: 'AIRTIME', label: '📞 Mobile Airtime', formId: 'buy-data', disabled: settings?.airtime_active === false },
                 { id: 'WASSCE', label: '🎓 WASSCE PIN', formId: 'buy-data', disabled: settings?.wassce_active === false },
                 { id: 'BECE', label: '📝 BECE Voucher', formId: 'buy-data', disabled: settings?.bece_active === false },
@@ -155,10 +168,17 @@ export default function Home({ settings, refreshSettings }: HomeProps) {
       {/* Networks Supported */}
       <section className="py-10 bg-slate-50 border-y border-slate-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-center text-sm font-semibold uppercase tracking-wider text-slate-500 mb-6">
-            Supported Networks
-          </p>
-          <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-75 grayscale hover:grayscale-0 transition-all duration-300">
+          <div className="flex flex-col items-center justify-center mb-6">
+            <p className="text-center text-sm font-semibold uppercase tracking-wider text-slate-500">
+              Supported Networks
+            </p>
+            {settings?.data_active === false && (
+              <span className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-rose-100 text-rose-800 animate-pulse uppercase tracking-wider border border-rose-200">
+                ⚠️ Data Networks Temporarily Offline
+              </span>
+            )}
+          </div>
+          <div className={`flex flex-wrap justify-center gap-8 md:gap-16 transition-all duration-300 ${settings?.data_active === false ? 'opacity-30 grayscale cursor-not-allowed pointer-events-none' : 'opacity-75 grayscale hover:grayscale-0'}`}>
             <div className="flex items-center gap-3 font-bold text-xl md:text-2xl text-yellow-500">
               <img src="https://i.postimg.cc/BvS8nyGS/download.jpg" alt="MTN" className="w-10 h-10 rounded-lg object-cover" />
               MTN

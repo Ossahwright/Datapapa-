@@ -17,6 +17,7 @@ interface ServicePurchaseModalProps {
     bece_active?: boolean;
     wassce_active?: boolean;
     airtime_active?: boolean;
+    data_active?: boolean;
   } | null;
 }
 

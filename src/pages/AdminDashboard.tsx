@@ -165,6 +165,11 @@ export default function AdminDashboard() {
     bece_active: true,
     wassce_active: true,
     airtime_active: true,
+    data_active: true,
+    network_mtn_active: true,
+    network_airteltigo_premium_active: true,
+    network_airteltigo_bigtime_active: true,
+    network_telecel_active: true,
   });
   const [secureSettings, setSecureSettings] = useState({
     datahub_api_key: "",
@@ -380,6 +385,8 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     fetchProviderSettings();
     fetchSettings();
     // Start with a sync
@@ -394,11 +401,12 @@ export default function AdminDashboard() {
     }, 30000); // every 30s for real-time feel
 
     return () => clearInterval(interval);
-  }, []);
+  }, [isLoading, user]);
 
   // 🔄 AUTO-RECONCILIATION LOOP
   // Proactively fixes "Delayed Processing" transactions every 10 minutes
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
     if (currentView !== "transactions") return;
     
     console.log("⏰ Setting up auto-reconciliation loop (10m)");
@@ -410,7 +418,7 @@ export default function AdminDashboard() {
     }, 10 * 1000 * 60); 
 
     return () => clearInterval(reconInterval);
-  }, [currentView]);
+  }, [isLoading, user, currentView]);
 
   const loadHealth = async () => {
     try {
@@ -435,6 +443,8 @@ export default function AdminDashboard() {
 
   // Health check effect
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     fetchProviderHealth();
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -442,12 +452,14 @@ export default function AdminDashboard() {
       }
     }, 60000); // 🚀 STEP 12 — AUTO-REFRESH EVERY 60s
     return () => clearInterval(t);
-  }, []);
+  }, [isLoading, user]);
 
   const [providerMetrics, setProviderMetrics] = useState({ success: 0, failed: 0, blocked: 0 });
 
   // 🚀 MASTER REALTIME & KPI ORCHESTRATOR
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     console.log("=== 🔄 INITIALIZING MASTER ADMIN SYNC ===");
     
     // Use refs logic for callbacks to prevent re-subscriptions on state change
@@ -553,7 +565,7 @@ export default function AdminDashboard() {
       clearInterval(interval);
       window.removeEventListener('refetch-transactions', handleManualRefetch);
     };
-  }, [dashboardPage, currentView]); // Minimal dependencies
+  }, [isLoading, user, dashboardPage, currentView]); // Minimal dependencies
 
 
   const successRate = kpi.total
@@ -576,6 +588,8 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     const checkServer = async () => {
       try {
         const { session } = await getSafeSession();
@@ -588,7 +602,7 @@ export default function AdminDashboard() {
       }
     };
     checkServer();
-  }, []);
+  }, [isLoading, user]);
 
   const [dashboardStats, setDashboardStats] = useState({
     sales: 0,
@@ -697,6 +711,8 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     let delayDebounceFn: NodeJS.Timeout;
     
     if (currentView === "transactions") {
@@ -712,7 +728,7 @@ export default function AdminDashboard() {
     return () => {
       if (delayDebounceFn) clearTimeout(delayDebounceFn);
     };
-  }, [currentView, searchQuery, currentPage]);
+  }, [isLoading, user, currentView, searchQuery, currentPage]);
 
   const fetchSettings = async () => {
     setIsLoadingSettings(true);
@@ -896,10 +912,11 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
     if (selectedCustomerPhone && selectedCustomerPhone !== "NONE") {
       viewCustomer(selectedCustomerPhone, customerPage);
     }
-  }, [selectedCustomerPhone, customerPage]);
+  }, [isLoading, user, selectedCustomerPhone, customerPage]);
 
   const fetchBundles = useCallback(async () => {
     setIsLoadingBundles(true);
@@ -958,8 +975,9 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
     fetchBundles();
-  }, [fetchBundles]);
+  }, [isLoading, user, fetchBundles]);
 
   const handleEditClick = (bundle: any) => {
     setSelectedBundle(bundle);
@@ -1149,9 +1167,9 @@ export default function AdminDashboard() {
     await handleUpdateBundle(bundleId, { is_active: !currentStatus });
   };
 
-  const handleToggleServiceStatus = async (serviceType: 'AIRTIME' | 'BECE' | 'WASSCE') => {
+  const handleToggleServiceStatus = async (serviceType: 'DATA' | 'AIRTIME' | 'BECE' | 'WASSCE') => {
     try {
-      const key = serviceType === 'BECE' ? 'bece_active' : serviceType === 'WASSCE' ? 'wassce_active' : 'airtime_active';
+      const key = serviceType === 'BECE' ? 'bece_active' : serviceType === 'WASSCE' ? 'wassce_active' : serviceType === 'AIRTIME' ? 'airtime_active' : 'data_active';
       const currentVal = (appSettings as any)[key] !== false;
       const updatedSettings = {
         ...appSettings,
@@ -1179,6 +1197,42 @@ export default function AdminDashboard() {
     } catch (err: any) {
       console.error(`Status toggle error:`, err);
       alert(`Failed to save status: ${err.message || 'Unknown error'}`);
+    }
+  };
+
+  const handleToggleNetworkStatus = async (networkId: string) => {
+    try {
+      const key = `network_${networkId.toLowerCase()}_active`;
+      const currentVal = (appSettings as any)[key] !== false;
+      const updatedSettings = {
+        ...appSettings,
+        [key]: !currentVal,
+      };
+      
+      setAppSettings(updatedSettings);
+
+      const { error } = await supabase
+        .from("settings")
+        .upsert(
+          {
+            key: "general",
+            value: updatedSettings,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" },
+        );
+
+      if (error) throw error;
+
+      // Dispatch custom event for real-time app state synchronization across components
+      window.dispatchEvent(
+        new CustomEvent("app-settings-updated", { detail: updatedSettings })
+      );
+
+      toast.success(`${networkId.replace('_', ' ')} status updated successfully.`);
+    } catch (err: any) {
+      console.error(`Network status toggle error:`, err);
+      toast.error(err.message || "Could not update network status.");
     }
   };
 
@@ -1455,6 +1509,8 @@ export default function AdminDashboard() {
 
   const [txToDelete, setTxToDelete] = useState<any>(null);
   useEffect(() => {
+    if (isLoading || !user || user.role !== 'admin') return;
+
     // 💓 Heartbeat to keep DataHub status fresh
     const heartbeat = setInterval(() => {
       if (document.visibilityState === 'visible' && dataHubSettings.api_key) {
@@ -1463,7 +1519,7 @@ export default function AdminDashboard() {
     }, 60000 * 5); // Every 5 minutes
 
     return () => clearInterval(heartbeat);
-  }, [dataHubSettings.api_key]);
+  }, [isLoading, user, dataHubSettings.api_key]);
 
   const [isDeletingTx, setIsDeletingTx] = useState(false);
   const [capturingReceiptTx, setCapturingReceiptTx] = useState<any | null>(null);
@@ -3492,6 +3548,67 @@ export default function AdminDashboard() {
                     );
                   })}
                 </div>
+
+                {selectedServiceTab === "DATA" && (
+                  <div className="mb-8">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
+                      Data Networks Operational Toggles
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {[
+                        { id: "MTN", label: "MTN", key: "network_mtn_active" },
+                        { id: "AIRTELTIGO_PREMIUM", label: "AirtelTigo-iShare", key: "network_airteltigo_premium_active" },
+                        { id: "AIRTELTIGO_BIGTIME", label: "AirtelTigo-Bigtime", key: "network_airteltigo_bigtime_active" },
+                        { id: "TELECEL", label: "Telecel", key: "network_telecel_active" },
+                      ].map((net) => {
+                        const isActive = (appSettings as any)[net.key] !== false;
+                        return (
+                          <div
+                            key={net.id}
+                            className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                              isActive
+                                ? "border-emerald-100 bg-emerald-50/20"
+                                : "border-rose-100 bg-rose-50/20"
+                            } shadow-sm`}
+                          >
+                            <div className="flex items-center">
+                              <div
+                                className={`p-2.5 rounded-xl mr-3 ${
+                                  isActive
+                                    ? "bg-emerald-600/10 text-emerald-600"
+                                    : "bg-rose-600/10 text-rose-600"
+                                }`}
+                              >
+                                <Power size={18} />
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900">{net.label}</h4>
+                                <p className="text-[10px] text-slate-500 font-medium">
+                                  {isActive ? "Active on Homepage" : "Offline / Hidden"}
+                                </p>
+                              </div>
+                            </div>
+                            <div>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleNetworkStatus(net.id)}
+                                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                  isActive ? "bg-indigo-600" : "bg-slate-200"
+                                }`}
+                              >
+                                <span
+                                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                    isActive ? "translate-x-5" : "translate-x-0"
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {selectedServiceTab === "AIRTIME" && (
                   <div className="max-w-md mb-8">

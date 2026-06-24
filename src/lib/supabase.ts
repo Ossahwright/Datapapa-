@@ -17,27 +17,47 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 const originalGetSession = supabase.auth.getSession.bind(supabase.auth);
 const originalGetUser = supabase.auth.getUser.bind(supabase.auth);
 
+// Helper to check if error indicates a stale session/refresh token issue
+const isStaleSessionError = (message: string, status?: number) => {
+  const normMsg = (message || '').toLowerCase();
+  return (
+    normMsg.includes('refresh token') ||
+    normMsg.includes('refresh_token') ||
+    normMsg.includes('session missing') ||
+    normMsg.includes('invalid_grant') ||
+    normMsg.includes('not found') ||
+    status === 400 ||
+    status === 401
+  );
+};
+
+// Helper to purge local session state
+const purgeLocalSession = () => {
+  console.warn('⚡ Stale or invalid session detected, cleaning up auth storage...');
+  localStorage.removeItem('datapapa-auth-token');
+  supabase.auth.signOut().catch(() => {});
+};
+
 supabase.auth.getSession = async function getSessionWithRetry(retryCount = 0): Promise<any> {
   try {
     const result = await originalGetSession();
     if (result.error) {
-      const errMsg = (result.error.message || '').toLowerCase();
-      if (
-        errMsg.includes('refresh token') ||
-        errMsg.includes('session missing') ||
-        errMsg.includes('invalid_grant') ||
-        result.error.status === 400 ||
-        result.error.status === 401
-      ) {
-        console.warn('Stale session detected, signing out...');
-        localStorage.removeItem('datapapa-auth-token');
-        supabase.auth.signOut().catch(() => {});
+      if (isStaleSessionError(result.error.message, result.error.status)) {
+        purgeLocalSession();
         return { data: { session: null }, error: null };
       }
+    }
+    // Safeguard to ensure data is never null so destructuring { data: { session } } won't throw a TypeError
+    if (!result || !result.data) {
+      return { data: { session: null }, error: result?.error || null };
     }
     return result;
   } catch (err: any) {
     const errMsg = (err.message || '').toLowerCase();
+    if (isStaleSessionError(err.message, err.status)) {
+      purgeLocalSession();
+      return { data: { session: null }, error: null };
+    }
     if ((errMsg.includes('lock') || errMsg.includes('steal')) && retryCount < 5) {
       console.warn(`⚠️ Supabase session lock conflict, retrying getSession (${retryCount + 1}/5)...`);
       await new Promise(resolve => setTimeout(resolve, 300 * (retryCount + 1)));
@@ -51,9 +71,23 @@ supabase.auth.getSession = async function getSessionWithRetry(retryCount = 0): P
 supabase.auth.getUser = async function getUserWithRetry(jwt?: string, retryCount = 0): Promise<any> {
   try {
     const result = await originalGetUser(jwt);
+    if (result.error) {
+      if (isStaleSessionError(result.error.message, result.error.status)) {
+        purgeLocalSession();
+        return { data: { user: null }, error: null };
+      }
+    }
+    // Safeguard to ensure data is never null so destructuring { data: { user } } won't throw a TypeError
+    if (!result || !result.data) {
+      return { data: { user: null }, error: result?.error || null };
+    }
     return result;
   } catch (err: any) {
     const errMsg = (err.message || '').toLowerCase();
+    if (isStaleSessionError(err.message, err.status)) {
+      purgeLocalSession();
+      return { data: { user: null }, error: null };
+    }
     if ((errMsg.includes('lock') || errMsg.includes('steal')) && retryCount < 5) {
       console.warn(`⚠️ Supabase getUser lock conflict, retrying getUser (${retryCount + 1}/5)...`);
       await new Promise(resolve => setTimeout(resolve, 300 * (retryCount + 1)));
